@@ -9,6 +9,7 @@ proposed to the ClickHouse team.
 ## Contents
 
 - [Module map](#module-map)
+- [docs/CLIENT_V2_HTTP_REFERENCE.md](docs/CLIENT_V2_HTTP_REFERENCE.md) — full HTTP wire-protocol audit (compression, auth, headers, errors, TLS, retries)
 - [Phase 0 — client-v2 execution-path finding](#phase-0--client-v2-execution-path-finding)
 - [Phase 1 — Transport spike](#phase-1--transport-spike)
 - [Phase 2 — Core protocol + testkit contract tests](#phase-2--core-protocol--testkit-contract-tests)
@@ -151,6 +152,19 @@ This satisfies the "verified execution-path analysis" the ClickHouse maintainers
 first contribution — worth writing up as a follow-up comment on
 [the discussion](https://github.com/ClickHouse/ClickHouse/discussions/113638) once Phase 1 confirms
 the bridge works end to end.
+
+### HTTP protocol surface: what client-v2 actually sends on the wire
+
+Separate from the transport/decoding question above: a full audit of everything
+`HttpAPIClientHelper` does — compression (two independent layers, LZ4 is the real default, not
+gzip), authentication modes, every header/query-param it sets, error-response semantics (the
+`X-ClickHouse-Exception-Code` header is the real success/failure signal, not just HTTP status),
+the mid-stream-error caveat's actual mechanics (`wait_end_of_query`), TLS, pooling/timeouts, and
+retry classification — is written up in
+[docs/CLIENT_V2_HTTP_REFERENCE.md](docs/CLIENT_V2_HTTP_REFERENCE.md), with file:line citations and
+a mapping of what each concern means for Phase 1 through Phase 3. Read it before building anything
+in `transport-http`/`core` beyond the Phase 1 spike so nothing gets silently skipped — this is the
+answer to "we can't skip anything" for the HTTP surface specifically.
 
 ## Phase 1 — Transport spike
 

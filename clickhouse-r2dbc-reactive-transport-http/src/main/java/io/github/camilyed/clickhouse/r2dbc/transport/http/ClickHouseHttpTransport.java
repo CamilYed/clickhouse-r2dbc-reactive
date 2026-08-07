@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import reactor.netty.ByteBufFlux;
 import reactor.netty.http.client.HttpClient;
 
+/** Non-blocking HTTP transport for ClickHouse queries, built on Reactor Netty's {@link HttpClient}. */
 public final class ClickHouseHttpTransport {
 
     private final HttpClient httpClient;
