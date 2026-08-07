@@ -147,6 +147,9 @@ committed API.
 
 ## Roadmap
 
+See [ROADMAP.md](ROADMAP.md) for the detailed, gated working plan (execution-path analysis,
+transport spike, contract tests, connector, "fully reactive" sign-off, performance testing).
+
 Near-term:
 
 - Publish verified execution-path analysis of the existing ClickHouse Java client

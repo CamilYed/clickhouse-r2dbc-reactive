@@ -1,0 +1,217 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 0.1.0
+        required: true
+        type: string
+      publishing_type:
+        description: Central Portal publishing mode
+        required: true
+        default: USER_MANAGED
+        type: choice
+        options:
+          - USER_MANAGED
+          - AUTOMATIC
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build, sign, and upload release
+    runs-on: ubuntu-latest
+
+    env:
+      CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+      CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+      SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+      SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      PUBLISHING_TYPE: ${{ inputs.publishing_type }}
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Java
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Validate release inputs
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$RELEASE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'; then
+            echo "Invalid release version: $RELEASE_VERSION"
+            exit 1
+          fi
+
+          if printf '%s' "$RELEASE_VERSION" | grep -qi 'SNAPSHOT'; then
+            echo "Release version must not contain SNAPSHOT: $RELEASE_VERSION"
+            exit 1
+          fi
+
+          if ! printf '%s' "$PUBLISHING_TYPE" | grep -Eq '^(USER_MANAGED|AUTOMATIC)$'; then
+            echo "Invalid publishing type: $PUBLISHING_TYPE"
+            exit 1
+          fi
+
+          echo "Release version: $RELEASE_VERSION"
+          echo "Central Portal publishing type: $PUBLISHING_TYPE"
+
+      - name: Verify root project
+        run: ./gradlew spotlessCheck clean build jacocoTestReport "-PreleaseVersion=$RELEASE_VERSION" --stacktrace
+
+      - name: Publish signed artifacts to local staging repository
+        run: ./gradlew publishAllPublicationsToLocalBuildRepository "-PreleaseVersion=$RELEASE_VERSION" --stacktrace
+
+      - name: Create Central Portal bundle
+        run: |
+          set -euo pipefail
+
+          cd build/staging-deploy
+          find io -type f | LC_ALL=C sort | zip -@ "../central-bundle-$RELEASE_VERSION.zip"
+
+      - name: Verify Central Portal bundle
+        run: |
+          set -euo pipefail
+
+          BUNDLE="build/central-bundle-$RELEASE_VERSION.zip"
+          test -f "$BUNDLE"
+
+          echo "Bundle entries:"
+          unzip -Z1 "$BUNDLE" | sort | head -100
+
+          if unzip -Z1 "$BUNDLE" | grep -Eq '(^\./?$|/$)'; then
+            echo "Bundle contains directory entries or root ./ entry."
+            exit 1
+          fi
+
+          if unzip -Z1 "$BUNDLE" | grep -v '^io/github/camilyed/' | grep -q .; then
+            echo "Bundle contains entries outside io/github/camilyed."
+            unzip -Z1 "$BUNDLE" | grep -v '^io/github/camilyed/'
+            exit 1
+          fi
+
+          if unzip -Z1 "$BUNDLE" | grep -q 'SNAPSHOT'; then
+            echo "Snapshot artifacts found in release bundle."
+            exit 1
+          fi
+
+          echo "Release bundle:"
+          ls -lh "$BUNDLE"
+
+          echo "Staged artifacts:"
+          find build/staging-deploy -type f | sort
+
+          ASC_COUNT="$(find build/staging-deploy -name "*.asc" -type f | wc -l | tr -d ' ')"
+          POM_COUNT="$(find build/staging-deploy -name "*.pom" -type f | wc -l | tr -d ' ')"
+          JAR_COUNT="$(find build/staging-deploy -name "*.jar" -type f | wc -l | tr -d ' ')"
+
+          echo "POM files: $POM_COUNT"
+          echo "JAR files: $JAR_COUNT"
+          echo "ASC signatures: $ASC_COUNT"
+
+          if [ "$POM_COUNT" -lt 4 ]; then
+            echo "Expected at least 4 POM files."
+            exit 1
+          fi
+
+          if [ "$JAR_COUNT" -eq 0 ]; then
+            echo "No JAR files found."
+            exit 1
+          fi
+
+          if [ "$ASC_COUNT" -eq 0 ]; then
+            echo "No signature files found."
+            exit 1
+          fi
+
+      - name: Upload Central Portal bundle artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: central-bundle-${{ env.RELEASE_VERSION }}
+          path: build/central-bundle-${{ env.RELEASE_VERSION }}.zip
+
+      - name: Upload bundle to Central Portal
+        id: central-upload
+        run: |
+          set -euo pipefail
+
+          TOKEN="$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 | tr -d '\n')"
+
+          DEPLOYMENT_ID="$(
+            curl --silent --show-error --fail-with-body \
+              --request POST \
+              --header "Authorization: Bearer $TOKEN" \
+              --form "bundle=@build/central-bundle-$RELEASE_VERSION.zip;type=application/octet-stream" \
+              "https://central.sonatype.com/api/v1/publisher/upload?name=clickhouse-r2dbc-reactive-$RELEASE_VERSION&publishingType=$PUBLISHING_TYPE" \
+              | tr -d '\r\n'
+          )"
+
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "Central Portal did not return a deployment ID."
+            exit 1
+          fi
+
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "Central Portal deployment ID: $DEPLOYMENT_ID"
+
+      - name: Wait for Central Portal validation or publication
+        env:
+          DEPLOYMENT_ID: ${{ steps.central-upload.outputs.deployment_id }}
+        run: |
+          set -euo pipefail
+
+          TOKEN="$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 | tr -d '\n')"
+
+          for attempt in $(seq 1 120); do
+            RESPONSE="$(
+              curl --silent --show-error --fail-with-body \
+                --request POST \
+                --header "Authorization: Bearer $TOKEN" \
+                "https://central.sonatype.com/api/v1/publisher/status?id=$DEPLOYMENT_ID"
+            )"
+
+            echo "$RESPONSE"
+
+            STATE="$(
+              printf '%s' "$RESPONSE" \
+                | python3 -c 'import json, sys; print(json.load(sys.stdin).get("deploymentState", "UNKNOWN"))'
+            )"
+
+            echo "Central Portal deployment state: $STATE"
+
+            if [ "$STATE" = "FAILED" ]; then
+              echo "Central Portal deployment failed."
+              exit 1
+            fi
+
+            if [ "$STATE" = "VALIDATED" ] && [ "$PUBLISHING_TYPE" = "USER_MANAGED" ]; then
+              echo "Central Portal deployment is validated and waiting for manual Publish."
+              echo "Open Central Portal, inspect the deployment, and click Publish when ready."
+              exit 0
+            fi
+
+            if [ "$STATE" = "PUBLISHED" ]; then
+              echo "Central Portal deployment is published."
+              exit 0
+            fi
+
+            echo "Waiting for Central Portal. Attempt $attempt/120."
+            sleep 15
+          done
+
+          echo "Timed out waiting for Central Portal deployment."
+          exit 1
