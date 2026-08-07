@@ -1,4 +1,4 @@
-package io.github.camilyed.clickhouse.r2dbc.testkit;
+package io.github.camilyed.clickhouse.r2dbc.testkit.fakes;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;

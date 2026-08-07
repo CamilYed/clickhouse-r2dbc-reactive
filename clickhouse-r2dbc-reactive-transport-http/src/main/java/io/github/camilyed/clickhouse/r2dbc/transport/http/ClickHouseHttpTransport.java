@@ -15,6 +15,13 @@ public final class ClickHouseHttpTransport {
         this.httpClient = HttpClient.create().baseUrl(baseUrl).responseTimeout(Duration.ofSeconds(2));
     }
 
+    /**
+     * Sends {@code sql} to ClickHouse and returns the response body as a stream of chunks.
+     *
+     * <p>Nothing is sent over the network until the returned {@link ByteBufFlux} is subscribed to.
+     * Chunks are emitted as they arrive, never aggregated into a single buffer; cancelling the
+     * subscription closes the underlying connection.
+     */
     public ByteBufFlux query(final String sql) {
         return httpClient.post().uri("/?query=" + encode(sql)).responseContent();
     }

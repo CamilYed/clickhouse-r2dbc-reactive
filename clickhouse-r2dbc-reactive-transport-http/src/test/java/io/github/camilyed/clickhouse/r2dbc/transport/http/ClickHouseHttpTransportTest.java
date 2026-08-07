@@ -4,19 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
-import io.github.camilyed.clickhouse.r2dbc.testkit.ClickHouseWireFixtures;
-import io.github.camilyed.clickhouse.r2dbc.testkit.ControlledClickHouseServer;
-
+import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.ToByteArrayAbility;
+import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
+import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-
-import io.netty.buffer.ByteBuf;
 import org.junit.jupiter.api.Test;
 import reactor.test.StepVerifier;
 
-class ClickHouseHttpTransportTest {
+class ClickHouseHttpTransportTest implements ToByteArrayAbility {
 
     @Test
     void shouldReturnTheConfiguredResponseBody() {
@@ -68,7 +66,7 @@ class ClickHouseHttpTransportTest {
             final var transport = new ClickHouseHttpTransport(server.baseUrl());
 
             receivedChunks = transport.query("SELECT 1")
-                    .map(ClickHouseHttpTransportTest::toByteArray)
+                    .map(this::toByteArray)
                     .collectList()
                     .block(Duration.ofSeconds(5));
         }
@@ -145,7 +143,7 @@ class ClickHouseHttpTransportTest {
             final var transport = new ClickHouseHttpTransport(server.baseUrl());
 
             // then
-            StepVerifier.create(transport.query("SELECT 1").map(ClickHouseHttpTransportTest::toByteArray), 0)
+            StepVerifier.create(transport.query("SELECT 1").map(this::toByteArray), 0)
                     .expectSubscription()
                     .thenRequest(1)
                     .assertNext(chunk -> assertThat(chunk).isEqualTo(firstChunk))
@@ -187,11 +185,5 @@ class ClickHouseHttpTransportTest {
             // then
             assertThat(thrown).isNotNull();
         }
-    }
-
-    private static byte[] toByteArray(final ByteBuf byteBuf) {
-        final byte[] bytes = new byte[byteBuf.readableBytes()];
-        byteBuf.readBytes(bytes);
-        return bytes;
     }
 }

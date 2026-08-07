@@ -50,6 +50,11 @@ the PR checklist.
   it should probably be split or renamed instead.
 - No `null` as a silent default — use `Optional`, sealed types, or explicit "not present" domain
   objects instead, especially at module boundaries (connector ↔ core ↔ transport).
+- **No `Utils`/`Helper` grab-bag classes.** A class named `XyzUtils` with a pile of unrelated
+  static methods is leaking logic that belongs somewhere with a name and a contract — a method on
+  the type it operates on, a small dedicated class, or (in tests) an Ability. If you're reaching
+  for `Utils`, stop and ask what the method is actually the logic *of*, and name the home after
+  that instead.
 
 ## Architecture
 
@@ -246,6 +251,23 @@ class QueryCancellationTest extends BaseUnitTest implements QueryRepositoryAbili
 
 `BaseUnitTest` (per module, where needed) owns the shared in-memory fakes and clears them in
 `@BeforeEach`, so `given`, `when`, and `then` all operate on the same single source of truth.
+
+### Package layout for test support code
+
+Test Data Builders, Abilities, custom assertions, and fakes each get their own sub-package —
+`builders`, `abilities`, `assertions`, `fakes` — instead of sitting loose next to the tests that
+use them. Two levels this applies at:
+
+- **Shared across modules** (e.g. `ControlledClickHouseServer`, `ClickHouseWireFixtures`): lives in
+  `testkit`, under `io.github.camilyed.clickhouse.r2dbc.testkit.fakes` /
+  `...testkit.abilities` / etc.
+- **Local to one module's own tests**: the same four sub-packages under that module's own test
+  package, e.g. `io.github.camilyed.clickhouse.r2dbc.connector.builders`.
+
+Example: `ToByteArrayAbility` (`testkit.abilities`) turns "read a Netty `ByteBuf` into a plain
+`byte[]`" into a one-line default method a test class implements, instead of a private static
+helper duplicated per test class — which is also just the `Utils`-class smell above, scoped to one
+file instead of a whole package.
 
 ## Test types and tools
 
