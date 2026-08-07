@@ -229,6 +229,18 @@ Steps 2–5 are deliberately small enough to each be a single focused session. R
 build the general case (arbitrary SQL, arbitrary result shapes, settings, `query_id`) before
 `SELECT 1` works end to end through a real non-blocking path — that's Phase 2, not Phase 1.
 
+**Deliberate reordering:** rather than a shallow pass through steps 3–6 first and looping back for
+edge cases in step 7, `transport-http`'s full contract-test matrix is being built out immediately
+after step 3's happy path — still strictly TDD, one scenario at a time, but front-loaded because
+these are transport-only concerns (`testkit`'s fake server, no `core`/decode involved) and hardening
+the transport boundary before building on top of it catches problems earlier. `core`'s bridge
+(step 4) waits until this matrix is green. The scenario list — request not sent before subscription,
+streamed not aggregated, cancellation tears down the connection, delayed headers, delayed body,
+fragmented chunks, slow subscriber/backpressure, no response/timeout, connection reset mid-response,
+cancellation before/while-queued/during-receive, pool saturation, pending-acquire timeout — is the
+same one already named in [README's testing strategy](README.md#testing-strategy); nothing new, just
+sequenced earlier for this one module.
+
 ### Decision: HTTP now, native TCP not now (revisit only after benchmarks)
 
 Read ClickHouse's [Native Protocol specification](https://clickhouse.com/docs/interfaces/specs/NativeProtocol)
