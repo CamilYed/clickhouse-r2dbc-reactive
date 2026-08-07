@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import reactor.netty.ByteBufFlux;
 import reactor.netty.http.client.HttpClient;
 
@@ -11,7 +12,7 @@ public final class ClickHouseHttpTransport {
     private final HttpClient httpClient;
 
     public ClickHouseHttpTransport(final String baseUrl) {
-        this.httpClient = HttpClient.create().baseUrl(baseUrl);
+        this.httpClient = HttpClient.create().baseUrl(baseUrl).responseTimeout(Duration.ofSeconds(2));
     }
 
     public ByteBufFlux query(final String sql) {

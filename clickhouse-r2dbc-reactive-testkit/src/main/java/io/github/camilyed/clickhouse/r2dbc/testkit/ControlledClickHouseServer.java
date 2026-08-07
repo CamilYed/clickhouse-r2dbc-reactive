@@ -1,48 +1,114 @@
 package io.github.camilyed.clickhouse.r2dbc.testkit;
 
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
 
-/**
- * A minimal, controlled stand-in for a ClickHouse HTTP endpoint, for transport contract tests.
- *
- * <p>Starts a real, non-blocking Reactor Netty {@link HttpServer} on a loopback port and answers
- * every {@code POST} with a fixed, pre-encoded response body — no ClickHouse instance required.
- *
- * <p>This first version only proves the shape end to end (headers, body bytes, deterministic
- * shutdown). Delayed headers/body, fragmented rows, slow-subscriber, pool-saturation, and
- * cancellation scenarios are added incrementally as the transport spike needs them (see
- * ROADMAP.md, Phase 1, step 7).
- */
 public final class ControlledClickHouseServer implements AutoCloseable {
 
     private final DisposableServer server;
     private final AtomicBoolean requestReceived;
+    private final AtomicBoolean connectionClosed;
 
-    private ControlledClickHouseServer(final DisposableServer server, final AtomicBoolean requestReceived) {
+    private ControlledClickHouseServer(
+            final DisposableServer server, final AtomicBoolean requestReceived, final AtomicBoolean connectionClosed) {
         this.server = server;
         this.requestReceived = requestReceived;
+        this.connectionClosed = connectionClosed;
     }
 
     public static ControlledClickHouseServer startRespondingToSelectOneWith(final byte[] responseBody) {
+        return startRespondingWith(Flux.just(responseBody));
+    }
+
+    public static ControlledClickHouseServer startRespondingToSelectOneWithChunks(final byte[]... chunks) {
+        return startRespondingWith(Flux.fromArray(chunks).delayElements(Duration.ofMillis(50)));
+    }
+
+    public static ControlledClickHouseServer startRespondingWithFirstChunkThenHanging(final byte[] firstChunk) {
+        return startRespondingWith(Flux.concat(Flux.just(firstChunk), Flux.never()));
+    }
+
+    public static ControlledClickHouseServer startRespondingToSelectOneWithDelay(final byte[] body, final Duration delay) {
+        return startRespondingWith(Flux.just(body).delaySubscription(delay));
+    }
+
+    public static ControlledClickHouseServer startRespondingToSelectOneWithBodyDelay(final byte[] body, final Duration delay) {
         final AtomicBoolean requestReceived = new AtomicBoolean(false);
+        final AtomicBoolean connectionClosed = new AtomicBoolean(false);
         final DisposableServer started = HttpServer.create()
                 .port(0)
                 .route(routes -> routes.post("/", (request, response) -> {
                     requestReceived.set(true);
+                    response.withConnection(conn -> conn.onDispose(() -> connectionClosed.set(true)));
                     return response.header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
                             .header("Content-Type", "application/octet-stream")
-                            .sendByteArray(Mono.just(responseBody));
+                            .sendHeaders()
+                            .sendByteArray(Mono.just(body).delayElement(delay));
                 }))
                 .bindNow();
-        return new ControlledClickHouseServer(started, requestReceived);
+        return new ControlledClickHouseServer(started, requestReceived, connectionClosed);
     }
 
-    /** Whether this server has received at least one request since it started. */
+    private static ControlledClickHouseServer startRespondingWith(final Flux<byte[]> body) {
+        final AtomicBoolean requestReceived = new AtomicBoolean(false);
+        final AtomicBoolean connectionClosed = new AtomicBoolean(false);
+        final DisposableServer started = HttpServer.create()
+                .port(0)
+                .route(routes -> routes.post("/", (request, response) -> {
+                    requestReceived.set(true);
+                    response.withConnection(conn -> conn.onDispose(() -> connectionClosed.set(true)));
+                    return response.header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
+                            .header("Content-Type", "application/octet-stream")
+                            .sendByteArray(body);
+                }))
+                .bindNow();
+        return new ControlledClickHouseServer(started, requestReceived, connectionClosed);
+    }
+
+    public static ControlledClickHouseServer startAcceptingButNeverResponding() {
+        final AtomicBoolean requestReceived = new AtomicBoolean(false);
+        final AtomicBoolean connectionClosed = new AtomicBoolean(false);
+        final DisposableServer started = HttpServer.create()
+                .port(0)
+                .route(routes -> routes.post("/", (request, response) -> {
+                    requestReceived.set(true);
+                    response.withConnection(conn -> conn.onDispose(() -> connectionClosed.set(true)));
+                    return Mono.never();
+                }))
+                .bindNow();
+        return new ControlledClickHouseServer(started, requestReceived, connectionClosed);
+    }
+
+    public static ControlledClickHouseServer startRespondingThenResettingConnection(
+            final byte[] firstChunk, final Duration beforeReset) {
+        final AtomicBoolean requestReceived = new AtomicBoolean(false);
+        final AtomicBoolean connectionClosed = new AtomicBoolean(false);
+        final DisposableServer started = HttpServer.create()
+                .port(0)
+                .route(routes -> routes.post("/", (request, response) -> {
+                    requestReceived.set(true);
+                    response.withConnection(conn -> {
+                        conn.onDispose(() -> connectionClosed.set(true));
+                        Mono.delay(beforeReset).subscribe(ignored -> conn.channel().close());
+                    });
+                    return response.header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
+                            .header("Content-Type", "application/octet-stream")
+                            .sendByteArray(Flux.concat(Flux.just(firstChunk), Flux.never()));
+                }))
+                .bindNow();
+        return new ControlledClickHouseServer(started, requestReceived, connectionClosed);
+    }
+
     public boolean hasReceivedRequest() {
         return requestReceived.get();
+    }
+
+    public boolean hasClosedConnection() {
+        return connectionClosed.get();
     }
 
     public int port() {
