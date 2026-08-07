@@ -9,6 +9,7 @@ dependencies {
     api(platform(libs.junit.bom))
     api(libs.junit.jupiter)
     api(libs.assertj.core)
+    testRuntimeOnly(libs.junit.platform.launcher)
 
     // Real-ClickHouse Testcontainers support (BaseClickHouseIntegrationTest, data-setup/cleanup
     // Ability DSL) lives here so every consumer of testkit gets it for free — see
