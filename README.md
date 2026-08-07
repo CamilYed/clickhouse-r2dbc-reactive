@@ -6,9 +6,14 @@
 [![Reactor](https://img.shields.io/badge/Reactor-Mono%20%7C%20Flux-blueviolet.svg)](https://projectreactor.io/)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-Client%20V2-FFCC01.svg)](https://github.com/ClickHouse/clickhouse-java)
 
-A fully reactive R2DBC driver for ClickHouse, built as a thin connector on top of the
-[ClickHouse Java Client V2](https://github.com/ClickHouse/clickhouse-java), with a small,
-explicit, non-blocking transport boundary.
+A fully reactive R2DBC driver for ClickHouse. It reuses
+[ClickHouse Java Client V2](https://github.com/ClickHouse/clickhouse-java)'s public row-decoding
+classes only — its HTTP transport is confirmed blocking (classic Apache HttpClient5 I/O, verified
+by reading the source) and is **never used**. Everything that touches the network — connection
+handling, request/response streaming, cancellation — is this project's own, small, explicit,
+non-blocking transport boundary. See
+[ROADMAP.md's Phase 0 finding](ROADMAP.md#phase-0--client-v2-execution-path-finding) for the
+verified evidence.
 
 This project exists because implementing the R2DBC interfaces is not, by itself, enough to make
 the complete execution path reactive. The goal here is an R2DBC driver where deferred execution,
@@ -78,14 +83,26 @@ reactive end to end only if it satisfies all of the following:
 
 ## Architecture direction
 
-```text
-R2DBC SPI
-  -> thin ClickHouse R2DBC connector
-       -> reusable query/protocol components (ClickHouse Java Client V2)
-            -> small transport boundary
-                 -> non-blocking HTTP adapter (Reactor Netty candidate)
-                 -> possible future native TCP adapter
+```mermaid
+flowchart TD
+    RSPI[R2DBC SPI] --> CONN["connector<br/>R2DBC SPI adapter"]
+    CONN --> CORE["core<br/>query / settings / query_id<br/>owns the Transport port"]
+    CORE -. public decoder classes only .-> V2DEC[("client-v2<br/>RowBinary decoders")]
+    CORE --> PORT{{"Transport port<br/>(interface owned by core)"}}
+    PORT --> HTTP["transport-http<br/>Reactor Netty, non-blocking"]
+    HTTP --> CH[("ClickHouse<br/>HTTP interface")]
 ```
+
+Only the dashed edge touches `client-v2`, and only for its public row-decoding classes
+(`RowBinaryWithNamesAndTypesFormatReader` and friends). `client-v2`'s own HTTP client
+(`internal.HttpAPIClientHelper`, classic Apache HttpClient5 I/O) is confirmed blocking by reading
+its source and is **never called anywhere in this project** — `transport-http` owns its own
+Reactor Netty client, from the socket up, independent of `client-v2` entirely. Full evidence in
+[ROADMAP.md's Phase 0 finding](ROADMAP.md#phase-0--client-v2-execution-path-finding); a complete
+audit of what `client-v2` actually sends on the wire (compression, auth, headers, error semantics)
+is in [docs/CLIENT_V2_HTTP_REFERENCE.md](docs/CLIENT_V2_HTTP_REFERENCE.md) — useful background even
+though none of that code is reused, since `transport-http` has to solve the same wire-protocol
+problems independently.
 
 Responsibility boundaries:
 
@@ -94,24 +111,30 @@ Responsibility boundaries:
   mapping, cancellation propagation, explicit unsupported-transaction-semantics handling. No
   dependency on Spring.
 - **Core** — query request representation, ClickHouse settings and `query_id`, protocol encoding,
-  response metadata and row decoding, cancellation state, transport-independent lifecycle rules.
-  Reuses stable Client V2 components where they fit; this is not a second general-purpose client.
+  response metadata and row decoding, cancellation state, transport-independent lifecycle rules,
+  and the `Transport` port interface that `transport-http` implements. Reuses `client-v2`'s public
+  row-decoding classes only — never its transport; this is not a second general-purpose client.
 - **Transport** — non-blocking connection acquisition, active/pending-request limits, connect/
   acquire/response/idle timeouts, streaming response chunks, aborting active requests, connection
-  reuse, metrics. The chosen HTTP library (Reactor Netty is the current candidate) stays an
-  implementation detail and must not leak into the public API.
+  reuse, metrics. Built on Reactor Netty, entirely independent of `client-v2`.
 
 A particular networking library is a swappable adapter behind the transport boundary, not a
 public architectural dependency.
 
 ## Planned modules
 
+Five modules exist now; two more are named but deliberately not built yet. Full responsibilities
+and the reasoning behind each boundary live in
+[ROADMAP.md's module map](ROADMAP.md#module-map) — treat that as authoritative and this table as
+a quick summary only, to avoid the two drifting apart.
+
 | Module | Purpose |
 | --- | --- |
-| `clickhouse-r2dbc-reactive-core` | Transport-independent query/protocol core, reused where possible from Client V2. |
-| `clickhouse-r2dbc-reactive-transport-http` | Non-blocking HTTP transport adapter (Reactor Netty candidate). |
+| `clickhouse-r2dbc-reactive-core` | Transport-independent domain: queries/settings/`query_id`, the `Transport` port, row decoding (`client-v2`'s public decoder classes only — never its HTTP client). |
+| `clickhouse-r2dbc-reactive-transport-http` | Non-blocking HTTP adapter (Reactor Netty), implementing `core`'s `Transport` port. No `client-v2` code. |
 | `clickhouse-r2dbc-reactive-connector` | The R2DBC SPI implementation (`ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata). |
-| `clickhouse-r2dbc-reactive-testkit` | Controlled local server and contract tests for transport behaviour (delayed headers/body, fragmented rows, slow subscriber, pool saturation, cancellation at every stage). |
+| `clickhouse-r2dbc-reactive-testkit` | Shared test infrastructure: a fake wire-level server for deterministic transport contract tests, plus a real-ClickHouse Testcontainers DSL. |
+| `clickhouse-r2dbc-reactive-integration-tests` | Whole-driver, black-box tests through the public R2DBC SPI only, against real ClickHouse. |
 
 Module boundaries may change before the first release; this table reflects current intent, not a
 committed API.
@@ -122,7 +145,7 @@ committed API.
 | --- | --- |
 | JDK | 21 |
 | Reactive Streams | via Project Reactor |
-| ClickHouse Java Client | `client-v2` (reused components, not forked) |
+| ClickHouse Java Client | `client-v2`, its public row-decoding classes only — its transport is confirmed blocking and is not used (see [Architecture direction](#architecture-direction)) |
 | Verified database | ClickHouse (local Testcontainers instance for integration tests) |
 
 ## Testing strategy
@@ -169,7 +192,8 @@ Later:
 ## What this project is not
 
 - Not a fork of `ClickHouse/clickhouse-java` or a replacement for its JDBC/Client V2 artifacts.
-- Not a second general-purpose ClickHouse client — it reuses Client V2 core components.
+- Not a second general-purpose ClickHouse client — it reuses Client V2's public row-decoding
+  classes only, not its transport (confirmed blocking, never used).
 - Not a claim that reactive I/O alone fixes inefficient query patterns; application-level read
   model design is a separate concern from transport architecture.
 - Not committed to Reactor Netty as a permanent dependency — it is the first transport candidate,
@@ -178,9 +202,11 @@ Later:
 ## Relationship to ClickHouse/clickhouse-java
 
 This is an independent project, not a fork. It depends on `com.clickhouse:client-v2` as a regular
-Maven dependency and reuses its stable components instead of duplicating them. If the design
-direction proves useful, parts of it may later be proposed back to `ClickHouse/clickhouse-java`
-as a module or connector, following up on
+Maven dependency, reusing its public row-decoding classes only — its HTTP transport is confirmed
+blocking (classic Apache HttpClient5 I/O) and is not used; this project owns its own non-blocking
+transport instead. See [ROADMAP.md's Phase 0 finding](ROADMAP.md#phase-0--client-v2-execution-path-finding)
+for the verified evidence. If the design direction proves useful, parts of it may later be
+proposed back to `ClickHouse/clickhouse-java` as a module or connector, following up on
 [ClickHouse/ClickHouse#113638](https://github.com/ClickHouse/ClickHouse/discussions/113638).
 
 ## Contributing
