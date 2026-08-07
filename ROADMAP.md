@@ -8,13 +8,79 @@ proposed to the ClickHouse team.
 
 ## Contents
 
+- [Module map](#module-map)
 - [Phase 0 — client-v2 execution-path finding](#phase-0--client-v2-execution-path-finding)
 - [Phase 1 — Transport spike](#phase-1--transport-spike)
 - [Phase 2 — Core protocol + testkit contract tests](#phase-2--core-protocol--testkit-contract-tests)
 - [Phase 3 — Connector (R2DBC SPI surface)](#phase-3--connector-r2dbc-spi-surface)
 - [Phase 4 — "Fully reactive" sign-off](#phase-4--fully-reactive-sign-off)
 - [Phase 5 (later) — Load and performance testing](#phase-5-later--load-and-performance-testing)
+- [Phase 6 (later) — Spring WebFlux interop demo](#phase-6-later--spring-webflux-interop-demo)
 - [Working with Claude / IntelliJ](#working-with-claude--intellij)
+
+## Module map
+
+Revised after a direct question ("czy nasz podział na moduły jest ok?"). Five modules exist now,
+two are named but deliberately not built yet — same "no scope before its phase" discipline as the
+rest of this roadmap.
+
+| Module | Depends on | Responsible for | Published |
+| --- | --- | --- | --- |
+| `core` | client-v2 (decoders only) | Transport-independent domain: query/settings/`query_id`, the `Transport` port interface, the `Flux<ByteBuffer>`→`InputStream` bridge, row decoding via client-v2's public readers. No Netty, no HTTP, no R2DBC types. | Yes |
+| `transport-http` | `core` | The **adapter** that implements `core`'s `Transport` port over Reactor Netty. Owns the socket. Nothing here knows what a "row" is. | Yes |
+| `connector` | `core`, `transport-http` | The **adapter** that implements the R2DBC SPI (`ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, ...) on top of `core`. Thin — R2DBC-shape translation only, no protocol logic of its own. | Yes |
+| `testkit` | `core` | Shared test infrastructure, used by every other module's tests: (a) `ControlledClickHouseServer` + `ClickHouseWireFixtures` — a fake HTTP endpoint for deterministic wire-level scenarios; (b) `BaseClickHouseIntegrationTest` + an Ability-pattern DSL for real ClickHouse via Testcontainers (create data, clean up between tests). | Yes (it's a test-support *library*, other people writing ClickHouse R2DBC code could depend on it too — same reason JUnit/AssertJ/Testcontainers themselves are ordinary published artifacts) |
+| `integration-tests` | `connector`, `testkit` | Whole-driver, black-box tests: real ClickHouse via Testcontainers, exercised **only** through the public R2DBC SPI (`ConnectionFactory.create(...)` and onward) — never through `core`/`transport-http` internals. This is "one module where we run the whole thing and test it," as its own module so its (slow, Docker-backed) suite doesn't sit inside `connector`'s fast build loop. Test-only: no `src/main`. | No |
+| `benchmarks` *(not built yet — Phase 5)* | `connector` | JMH/Gatling-style throughput and latency measurement against real ClickHouse. Named here so the eventual module boundary is decided in advance; not scaffolded until Phase 5 actually starts, per [CLAUDE.md](CLAUDE.md#performance-testing). | No |
+| `examples/spring-boot-webflux-demo` *(not built yet — Phase 6)* | `connector` | A runnable Spring Boot + WebFlux app proving the driver works end to end through Spring's R2DBC integration, mirroring [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)'s demo. Not scaffolded until Phase 3 (R2DBC SPI) is far enough along to have something to demo. | No |
+
+Why `integration-tests` is its own module and not just more tests inside `connector`: two
+different things were both called "integration tests" before, and conflating them was the actual
+confusion. `connector`'s own `src/test` still gets small, targeted tests for its own classes
+(parameter binding, exception mapping) — some of those may use a real ClickHouse too. But the
+suite that proves "the whole driver, used exactly the way a consumer would use it, against a real
+server" belongs in its own module: it can only ever import `connector`'s public API (never an
+internal class from `core`, because it's not even a dependency), it makes the slow Docker-backed
+suite easy to run/skip independently (`./gradlew :clickhouse-r2dbc-reactive-integration-tests:test`),
+and it's the natural home for the data-setup/cleanup Ability DSL requested below, since that DSL is
+about ClickHouse-the-database, not about any one module's internals.
+
+Why `testkit` keeps its name despite the expanded scope: the fake `ControlledClickHouseServer`
+and the real-ClickHouse Testcontainers DSL are still one thing — "the shared support code so no
+other module's tests need Mockito or ad-hoc infrastructure of their own" — which is exactly what
+"testkit" means in other ecosystems (`kotlinx-coroutines-test`, `spring-kafka-test`). Note this is
+a different concept from Gradle's built-in `java-test-fixtures` plugin feature (a source-set
+convention for sharing test code *within* one module) — we don't need that here, a whole module is
+the right unit because multiple *other* modules (`connector`, `integration-tests`) consume it.
+
+### Why both a fake server and real ClickHouse — not one or the other
+
+This was the confusing part of `ClickHouseWireFixtures`, worth spelling out plainly: it hand-builds
+*bytes on the wire*, not because real ClickHouse can't be trusted, but because a fake server can
+force conditions a real one won't reliably give you on demand — a response that stalls mid-header,
+a body that arrives in three fragments instead of one, a connection that resets after N bytes, a
+slow subscriber that must apply backpressure. Those are the Phase 1 acceptance criteria (bounded
+concurrency, cancellation, backpressure) and they need to be deterministic and fast in CI, which
+means simulated, not "hope a container behaves badly today." Real ClickHouse (via Testcontainers)
+answers a different question: does the driver decode what an actual server actually sends, with
+real SQL types, real errors, real `query_id` semantics? Both questions are real; neither fake
+server nor real ClickHouse alone answers both. That's `testkit`'s two halves.
+
+### Ports & adapters, made concrete
+
+Answering directly: yes, it's needed, and here's the exact shape (not just a label) —
+
+- `core` owns a `Transport` port: a small interface describing "send this query, get back a
+  stream of chunks" with no Netty/HTTP types in its signature — the actual contract to be nailed
+  down in Phase 1 step 3 once there's a concrete request/response shape to model.
+- `transport-http` is the one adapter implementing that port today (over Reactor Netty). If a
+  native-TCP adapter is ever built (deferred, see below), it implements the same port — `core`
+  doesn't change.
+- `connector` adapts the R2DBC SPI (owned by the R2DBC spec, not by us) to `core`. `core` has no
+  idea R2DBC exists.
+- This is the whole justification: two real seams (transport, R2DBC) where an alternative
+  implementation is plausible enough to design for, not hexagonal ceremony applied to code that
+  will only ever have one implementation.
 
 ## Phase 0 — client-v2 execution-path finding
 
@@ -194,8 +260,16 @@ that would fail if the property regressed.
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
   parameter binding, R2DBC exception mapping, explicit unsupported-transaction-semantics handling.
-- Integration tests against real ClickHouse via Testcontainers (`clickhouse-r2dbc-reactive-connector`
-  test scope already depends on `testcontainers-clickhouse`).
+- `testkit`: add `BaseClickHouseIntegrationTest` (a singleton Testcontainers `ClickHouseContainer`,
+  started once per test JVM — the standard Testcontainers pattern, no explicit stop, Ryuk cleans up)
+  plus an Ability-pattern DSL for creating tables/rows and cleaning them up between tests
+  (`@BeforeEach`, same isolation rule as [CLAUDE.md](CLAUDE.md#hard-rules) requires everywhere
+  else). TDD, same as everything else: the first `connector` test that needs real ClickHouse data
+  drives the first Ability method into existence — don't design the whole DSL up front.
+- `connector`'s own `src/test`: small, targeted tests for its own classes, extending
+  `BaseClickHouseIntegrationTest` where real ClickHouse is the simplest way to prove behavior.
+- `integration-tests`: whole-driver black-box suite through the public R2DBC SPI only — see the
+  [module map](#module-map) for why this is separate from `connector`'s own tests.
 - R2DBC TCK-style behavioral tests where applicable; ClickHouse-specific gaps documented instead of
   silently unsupported.
 
@@ -226,6 +300,26 @@ signed off. When it starts:
 - Comparison against the existing `ClickHouse/clickhouse-java` R2DBC driver as a baseline.
 - Tooling choice (JMH for micro-benchmarks, Gatling/similar for load scenarios) decided at that
   point — nothing added to the build now.
+
+## Phase 6 (later) — Spring WebFlux interop demo
+
+Explicitly deferred until Phase 3 has a working R2DBC SPI to demo. Goal: prove the driver works
+unmodified through Spring's own R2DBC integration (`DatabaseClient`/`R2dbcEntityTemplate`/
+`ReactiveTransactionManager`) under a current Spring Boot/Spring Framework line (Boot 4 / Framework
+7 at the time of writing — reconfirm the exact version when this phase actually starts, since it's
+a moving target). Spring discovers our driver purely via the standard R2DBC
+`ConnectionFactoryProvider` SPI (`META-INF/services`), the same mechanism every other R2DBC driver
+uses — no Spring dependency belongs in `core`/`transport-http`/`connector` themselves.
+
+- New module, `examples/spring-boot-webflux-demo` (not published, not part of the driver's public
+  surface) — same role as
+  [`spring-reactive-transaction-boundary`'s demo module](https://github.com/CamilYed/spring-reactive-transaction-boundary/tree/main/examples/spring-boot-webflux-r2dbc-ddd-demo).
+- Proves: connection pooling via `R2dbcPoolAutoConfiguration`-style setup, transaction-manager
+  wiring (documenting explicitly where ClickHouse's own transaction semantics diverge from a
+  typical RDBMS — this is exactly the kind of gap Phase 3 already commits to documenting rather
+  than silently glossing over), and a real WebFlux endpoint streaming query results end to end.
+- Not a substitute for Phase 4's sign-off — this is a demo/consumer-proof, not where "fully
+  reactive" gets verified.
 
 ## Working with Claude / IntelliJ
 

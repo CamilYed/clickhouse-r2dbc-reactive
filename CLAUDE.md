@@ -14,6 +14,7 @@ the PR checklist.
 - [Testing philosophy](#testing-philosophy)
 - [Test building blocks](#test-building-blocks)
 - [Test types and tools](#test-types-and-tools)
+- [Coverage](#coverage)
 - [Formatting and CI gates](#formatting-and-ci-gates)
 - [Performance testing](#performance-testing)
 
@@ -40,7 +41,12 @@ the PR checklist.
 - Transport (`clickhouse-r2dbc-reactive-transport-http`) and the R2DBC SPI implementation
   (`clickhouse-r2dbc-reactive-connector`) are **adapters** in the Ports & Adapters (Hexagonal
   Architecture) sense — they plug into the core through small, explicit interfaces owned by the
-  core, not the other way around.
+  core, not the other way around. Concretely: `core` owns a `Transport` port ("send this query,
+  get back a stream of chunks", no Netty/HTTP types in the signature); `transport-http` is the
+  adapter implementing it today. `connector` adapts the R2DBC SPI (owned by the R2DBC spec, not by
+  us) to `core`; `core` has no idea R2DBC exists. Two real seams, two adapters — that's the whole
+  justification, not hexagonal ceremony applied where only one implementation will ever exist. See
+  [ROADMAP.md's module map](ROADMAP.md#module-map) for the full module-by-module breakdown.
 - Use DDD tactical patterns (value objects, aggregates, domain events, ubiquitous language) where
   the domain complexity actually warrants it. Don't force DDD ceremony onto what is fundamentally
   a thin protocol/decoding layer — apply it where there is real domain logic to protect (e.g.
@@ -224,12 +230,41 @@ class QueryCancellationTest extends BaseUnitTest implements QueryRepositoryAbili
 | Level | Where | Tooling |
 | --- | --- | --- |
 | Unit tests | every module, `src/test/java` | JUnit 5 + AssertJ + in-memory fakes. No Spring, no containers, no Mockito. |
-| Transport contract tests | `clickhouse-r2dbc-reactive-transport-http`, using `clickhouse-r2dbc-reactive-testkit` | Controlled local server from `testkit`: delayed headers/body, fragmented rows, slow subscriber, pool saturation, cancellation at every stage (see README's testing strategy). |
-| Integration tests | `clickhouse-r2dbc-reactive-connector` | Testcontainers with a real ClickHouse instance. No mocking of ClickHouse itself. |
+| Transport contract tests | `clickhouse-r2dbc-reactive-transport-http`, using `clickhouse-r2dbc-reactive-testkit`'s `ControlledClickHouseServer` | Deterministic, fast, hermetic wire-level scenarios a real server won't reliably give you on demand: delayed headers/body, fragmented rows, slow subscriber, pool saturation, cancellation at every stage (see README's testing strategy). |
+| Real-ClickHouse integration tests | `clickhouse-r2dbc-reactive-connector` (own classes) and `clickhouse-r2dbc-reactive-integration-tests` (whole driver, black-box via public R2DBC SPI only) | `clickhouse-r2dbc-reactive-testkit`'s `BaseClickHouseIntegrationTest` + Ability-pattern DSL over Testcontainers `ClickHouseContainer`: create data, clean up between tests (`@BeforeEach`), no mocking of ClickHouse itself. |
 
-`clickhouse-r2dbc-reactive-testkit` exists specifically so transport/connector contract tests
-don't need Mockito or ad-hoc test servers duplicated per module — it is the one place that owns
-the controlled local server and shared test infrastructure.
+`clickhouse-r2dbc-reactive-testkit` exists specifically so no other module's tests need Mockito or
+ad-hoc test infrastructure of their own — it owns both halves: the controlled fake server (for
+conditions only a fake can force deterministically) and the real-ClickHouse Testcontainers DSL
+(for proving the driver decodes what an actual server actually sends). See
+[ROADMAP.md's module map](ROADMAP.md#module-map) for why both exist side by side, and why
+whole-driver black-box tests live in their own `integration-tests` module instead of inside
+`connector`.
+
+## Coverage
+
+JaCoCo runs after every test task and feeds SonarCloud (see below). The target is **not** a blind
+100% line-coverage gate. Rationale, stated plainly since it cuts against the letter of "100%
+coverage" while trying to honor the actual intent (confidence that the driver works):
+
+- Chasing 100% forces tests onto code with no behavior to protect — a private constructor throwing
+  `AssertionError`, a `record`'s generated `equals`/`hashCode`, `package-info.java`. Writing a test
+  for those doesn't catch bugs; it just moves the number, and it directly contradicts Hard Rule
+  black-box-over-white-box above ("a test should tell you what the system does").
+- A number can be gamed (call methods without asserting outcomes) while real bugs — wrong branch,
+  wrong field — slip through. Coverage measures *what ran*, not *what was checked*.
+- What we actually want is already stated as this project's real gate:
+  [ROADMAP.md Phase 4](ROADMAP.md#phase-4--fully-reactive-sign-off) — every property in the "fully
+  reactive" table has a named test that would fail if that property regressed. That's a stronger,
+  more honest bar than a percentage.
+
+What we do instead: enable SonarCloud's default **new-code coverage gate** (≥ 80% on changed lines,
+Sonar's standard "Sonar way" quality profile) so regressions get caught on every PR, keep the
+JaCoCo HTML report as a routine "did I miss an obvious branch" check during development, and treat
+any module sitting far below its neighbors as a signal to go look — not as an automatic build
+failure. If a specific class genuinely needs a hard 100% bar (e.g. the wire-format decoding path,
+where a missed branch means silent data corruption), call that out explicitly in that class's test
+suite rather than mandating it globally.
 
 ## Formatting and CI gates
 

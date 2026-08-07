@@ -25,20 +25,33 @@ allprojects {
         .get()
 }
 
+// Modules that exist purely to hold tests (no public API of their own) never get published to
+// Maven Central. They still get jacoco/spotless/toolchain like every other module — just not
+// maven-publish/signing. Keep this list in sync with settings.gradle.kts.
+val nonPublishedModules = setOf(
+    "clickhouse-r2dbc-reactive-integration-tests"
+)
+
 subprojects {
     pluginManager.withPlugin("java-library") {
         pluginManager.apply("jacoco")
-        pluginManager.apply("maven-publish")
-        pluginManager.apply("signing")
         pluginManager.apply("com.diffplug.spotless")
+
+        val isPublished = project.name !in nonPublishedModules
+        if (isPublished) {
+            pluginManager.apply("maven-publish")
+            pluginManager.apply("signing")
+        }
 
         extensions.configure<JavaPluginExtension> {
             toolchain {
                 languageVersion.set(JavaLanguageVersion.of(21))
             }
 
-            withSourcesJar()
-            withJavadocJar()
+            if (isPublished) {
+                withSourcesJar()
+                withJavadocJar()
+            }
         }
 
         extensions.configure<JacocoPluginExtension> {
@@ -67,89 +80,91 @@ subprojects {
             }
         }
 
-        extensions.configure<PublishingExtension> {
-            publications {
-                create<MavenPublication>("mavenJava") {
-                    from(components["java"])
+        if (isPublished) {
+            extensions.configure<PublishingExtension> {
+                publications {
+                    create<MavenPublication>("mavenJava") {
+                        from(components["java"])
 
-                    pom {
-                        name.set(project.name)
-                        description.set(projectDescription(project.name))
-                        url.set("https://github.com/CamilYed/clickhouse-r2dbc-reactive")
-                        inceptionYear.set("2026")
-
-                        licenses {
-                            license {
-                                name.set("The Apache License, Version 2.0")
-                                url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
-                                distribution.set("repo")
-                            }
-                        }
-
-                        developers {
-                            developer {
-                                id.set("CamilYed")
-                                name.set("CamilYed")
-                                url.set("https://github.com/CamilYed")
-                            }
-                        }
-
-                        scm {
+                        pom {
+                            name.set(project.name)
+                            description.set(projectDescription(project.name))
                             url.set("https://github.com/CamilYed/clickhouse-r2dbc-reactive")
-                            connection.set(
-                                "scm:git:git://github.com/CamilYed/clickhouse-r2dbc-reactive.git"
-                            )
-                            developerConnection.set(
-                                "scm:git:ssh://git@github.com:CamilYed/clickhouse-r2dbc-reactive.git"
-                            )
+                            inceptionYear.set("2026")
+
+                            licenses {
+                                license {
+                                    name.set("The Apache License, Version 2.0")
+                                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                                    distribution.set("repo")
+                                }
+                            }
+
+                            developers {
+                                developer {
+                                    id.set("CamilYed")
+                                    name.set("CamilYed")
+                                    url.set("https://github.com/CamilYed")
+                                }
+                            }
+
+                            scm {
+                                url.set("https://github.com/CamilYed/clickhouse-r2dbc-reactive")
+                                connection.set(
+                                    "scm:git:git://github.com/CamilYed/clickhouse-r2dbc-reactive.git"
+                                )
+                                developerConnection.set(
+                                    "scm:git:ssh://git@github.com:CamilYed/clickhouse-r2dbc-reactive.git"
+                                )
+                            }
+                        }
+                    }
+                }
+
+                repositories {
+                    maven {
+                        name = "localBuild"
+                        url = rootProject.layout.buildDirectory.dir("staging-deploy").get().asFile.toURI()
+                    }
+
+                    maven {
+                        name = "centralSnapshots"
+                        url = uri("https://central.sonatype.com/repository/maven-snapshots/")
+
+                        mavenContent {
+                            snapshotsOnly()
+                        }
+
+                        credentials {
+                            username = providers.gradleProperty("centralUsername")
+                                .orElse(providers.environmentVariable("CENTRAL_USERNAME"))
+                                .orNull
+                            password = providers.gradleProperty("centralPassword")
+                                .orElse(providers.environmentVariable("CENTRAL_PASSWORD"))
+                                .orNull
                         }
                     }
                 }
             }
 
-            repositories {
-                maven {
-                    name = "localBuild"
-                    url = rootProject.layout.buildDirectory.dir("staging-deploy").get().asFile.toURI()
+            val publishing = extensions.getByType(PublishingExtension::class.java)
+
+            extensions.configure<SigningExtension> {
+                val signingKey = providers.gradleProperty("signingKey")
+                    .orElse(providers.environmentVariable("SIGNING_KEY"))
+                    .orNull
+                val signingPassword = providers.gradleProperty("signingPassword")
+                    .orElse(providers.environmentVariable("SIGNING_PASSWORD"))
+                    .orNull
+
+                isRequired = isRemotePublishingRequested()
+
+                if (!signingKey.isNullOrBlank()) {
+                    useInMemoryPgpKeys(signingKey, signingPassword)
                 }
 
-                maven {
-                    name = "centralSnapshots"
-                    url = uri("https://central.sonatype.com/repository/maven-snapshots/")
-
-                    mavenContent {
-                        snapshotsOnly()
-                    }
-
-                    credentials {
-                        username = providers.gradleProperty("centralUsername")
-                            .orElse(providers.environmentVariable("CENTRAL_USERNAME"))
-                            .orNull
-                        password = providers.gradleProperty("centralPassword")
-                            .orElse(providers.environmentVariable("CENTRAL_PASSWORD"))
-                            .orNull
-                    }
-                }
+                sign(publishing.publications)
             }
-        }
-
-        val publishing = extensions.getByType(PublishingExtension::class.java)
-
-        extensions.configure<SigningExtension> {
-            val signingKey = providers.gradleProperty("signingKey")
-                .orElse(providers.environmentVariable("SIGNING_KEY"))
-                .orNull
-            val signingPassword = providers.gradleProperty("signingPassword")
-                .orElse(providers.environmentVariable("SIGNING_PASSWORD"))
-                .orNull
-
-            isRequired = isRemotePublishingRequested()
-
-            if (!signingKey.isNullOrBlank()) {
-                useInMemoryPgpKeys(signingKey, signingPassword)
-            }
-
-            sign(publishing.publications)
         }
     }
 
@@ -222,7 +237,8 @@ sonar {
                 "clickhouse-r2dbc-reactive-core/build/reports/jacoco/test/jacocoTestReport.xml",
                 "clickhouse-r2dbc-reactive-transport-http/build/reports/jacoco/test/jacocoTestReport.xml",
                 "clickhouse-r2dbc-reactive-connector/build/reports/jacoco/test/jacocoTestReport.xml",
-                "clickhouse-r2dbc-reactive-testkit/build/reports/jacoco/test/jacocoTestReport.xml"
+                "clickhouse-r2dbc-reactive-testkit/build/reports/jacoco/test/jacocoTestReport.xml",
+                "clickhouse-r2dbc-reactive-integration-tests/build/reports/jacoco/test/jacocoTestReport.xml"
             ).joinToString(",")
         )
     }
@@ -237,7 +253,9 @@ fun projectDescription(projectName: String): String =
         "clickhouse-r2dbc-reactive-connector" ->
             "Thin R2DBC SPI connector for ClickHouse, built on the reactive core and transport modules."
         "clickhouse-r2dbc-reactive-testkit" ->
-            "Controlled local server and contract-test support for the reactive ClickHouse R2DBC driver."
+            "Shared test infrastructure for the reactive ClickHouse R2DBC driver: a controlled " +
+                "local server for transport contract tests, and a real-ClickHouse Testcontainers " +
+                "DSL for integration tests."
         else ->
             "Reactive R2DBC driver for ClickHouse."
     }

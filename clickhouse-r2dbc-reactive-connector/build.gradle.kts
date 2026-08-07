@@ -14,9 +14,7 @@ dependencies {
     testImplementation(libs.assertj.core)
     testImplementation(libs.reactor.test)
 
+    // Brings AssertJ/JUnit plus the real-ClickHouse Testcontainers DSL
+    // (BaseClickHouseIntegrationTest and friends) transitively — see ROADMAP.md's module map.
     testImplementation(project(":clickhouse-r2dbc-reactive-testkit"))
-
-    testImplementation(platform(libs.testcontainers.bom))
-    testImplementation(libs.testcontainers.junit.jupiter)
-    testImplementation(libs.testcontainers.clickhouse)
 }
