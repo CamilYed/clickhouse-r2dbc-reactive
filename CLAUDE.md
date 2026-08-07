@@ -24,8 +24,26 @@ the PR checklist.
   Mutability must be an explicit, deliberate choice, not a default. If something needs to
   change after construction, that's a signal to reconsider the design (builder, new value,
   immutable update) before reaching for a mutable field.
-- Prefer immutable value types (records where appropriate) for anything that crosses a module
-  boundary (query requests, settings, decoded rows, R2DBC options).
+- **Prefer records for immutable data, sealed interfaces/classes for closed sets of variants.**
+  Records are the default shape for anything that just holds immutable data crossing a module
+  boundary (query requests, settings, decoded rows, R2DBC options) — reach for a regular class
+  only when a record genuinely doesn't fit (e.g. needs identity, not just a value). Sealed
+  interfaces/classes are the default shape for a closed, exhaustively-known set of states or
+  outcomes (e.g. a decode result that's either a row or an error, a connection lifecycle state,
+  cancellation state) — an exhaustive `switch` over a sealed type gives a compiler error when a
+  new variant is added and a branch is missing, which a plain `enum` + `if`-chain doesn't.
+- **Default to package-private visibility.** A class, interface, method, or field is `public`
+  only when it's genuinely part of a module's public API — the surface another module (or an
+  external consumer) is meant to depend on. Everything else stays package-private. This isn't
+  just style: it's what makes the Architecture rule below ("a module should not reach into
+  another module's internals") enforceable by the compiler instead of by convention.
+- **Every public class, interface, and method gets a Javadoc comment** describing its contract —
+  what it does for a caller, not how it's implemented. This is a different concern from the Clean
+  Code rule just below about implementation comments: Javadoc documents the public API boundary
+  that another module or an external consumer relies on; a comment inside a method explaining
+  *what* that method does internally is still a smell meaning split-or-rename. Package-private
+  code doesn't need Javadoc, though a short summary is welcome if the class's role isn't obvious
+  from its name.
 - Clean Code basics apply throughout: small methods, one level of abstraction per method,
   intention-revealing names, no boolean/flag parameters that silently change behavior, no dead
   code, no commented-out code left behind. If a method needs a comment to explain *what* it does,

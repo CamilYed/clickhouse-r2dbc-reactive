@@ -12,4 +12,6 @@ dependencies {
 
     testImplementation(libs.assertj.core)
     testImplementation(libs.reactor.test)
+
+    testImplementation(project(":clickhouse-r2dbc-reactive-testkit"))
 }
