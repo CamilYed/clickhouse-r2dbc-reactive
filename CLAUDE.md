@@ -76,10 +76,8 @@ the PR checklist.
 
 This project follows the black-box, no-Mockito testing style described in:
 
-- [Testy, które nie kłamią cz. 1: Czytelność i DSL](https://camilyed.github.io/pl/testy-ktore-nie-klamia/)
-  ([EN: Tests That Don't Lie, Part 1](https://camilyed.github.io/en/tests-that-dont-lie/))
-- [Testy, które nie kłamią cz. 2: Pułapka Mockito i implementacje In-Memory](https://camilyed.github.io/pl/testy-ktore-nie-klamia-cz2/)
-  ([EN: Tests That Don't Lie, Part 2](https://camilyed.github.io/en/tests-that-dont-lie-part-2/))
+- [Tests That Don't Lie, Part 1: Readability and DSL](https://camilyed.github.io/en/tests-that-dont-lie/)
+- [Tests That Don't Lie, Part 2: The Mockito Trap and In-Memory Implementations](https://camilyed.github.io/en/tests-that-dont-lie-part-2/)
 - [Make your tests readable by example (Allegro Tech Blog)](https://blog.allegro.tech/2022/02/readable-tests-by-example.html)
 
 The short version: a test should tell you *what* the system does, not *how* it does it
