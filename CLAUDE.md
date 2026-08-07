@@ -62,6 +62,24 @@ The short version: a test should tell you *what* the system does, not *how* it d
 internally, and it should fail only when actual behavior changes — never because of a harmless
 refactor.
 
+### Development workflow: TDD
+
+We write code test-first, red-green-refactor:
+
+1. **Red.** Write one failing test that expresses the behavior you're about to add, in the
+   black-box style below. Run it and confirm it fails for the right reason (compile error or
+   assertion failure), not for an unrelated one.
+2. **Green.** Write the smallest amount of production code that makes it pass. Resist adding
+   behavior the test doesn't demand yet — that's the next test's job.
+3. **Refactor.** With the test green, clean up (naming, duplication, extracting a builder/ability/
+   custom assertion) without changing behavior. Re-run the test after every refactor step.
+
+This applies at every level: a new class in `core`, a new contract-test scenario in `testkit`, a
+new R2DBC SPI method in `connector`. If you catch yourself writing production code with no failing
+test driving it, stop and write the test first. Skeleton/plumbing code with no behavior yet
+(module `build.gradle.kts`, `package-info.java`) is the explicit exception — there's nothing to
+red-green there.
+
 ### Hard rules
 
 1. **No Mockito. Ever.** Do not add it to the version catalog, do not add it to any module's
