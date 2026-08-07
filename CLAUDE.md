@@ -135,6 +135,12 @@ red-green there.
 8. **Isolation is mandatory.** Every test starts from a clean, known state. In-memory fakes get
    cleared before each test (`@BeforeEach`). No test may depend on execution order or leftover
    state from another test.
+9. **No `Thread.sleep` in tests. Use Awaitility.** A fixed sleep is either too short (flaky under
+   load) or too long (slow for no reason), and it doesn't express *what* the test is waiting for.
+   Use `org.awaitility.Awaitility.await()` and say the condition out loud: `await().atMost(...)
+   .until(...)` for "eventually true", `await().during(...).atMost(...).until(...)` for "stays
+   true/false for this whole window" — the second form is the one that actually proves a negative
+   (e.g. "the request was not sent"), not a single check after a delay.
 
 ## Test building blocks
 

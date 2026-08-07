@@ -9,6 +9,7 @@ dependencies {
     api(platform(libs.junit.bom))
     api(libs.junit.jupiter)
     api(libs.assertj.core)
+    api(libs.awaitility)
     testRuntimeOnly(libs.junit.platform.launcher)
 
     // Real-ClickHouse Testcontainers support (BaseClickHouseIntegrationTest, data-setup/cleanup

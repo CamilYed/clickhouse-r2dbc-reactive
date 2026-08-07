@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import io.github.camilyed.clickhouse.r2dbc.testkit.ClickHouseWireFixtures;
 import io.github.camilyed.clickhouse.r2dbc.testkit.ControlledClickHouseServer;
@@ -27,5 +28,23 @@ class ClickHouseHttpTransportTest {
 
         // then
         assertThat(receivedBody).isEqualTo(configuredBody);
+    }
+
+    @Test
+    void shouldNotSendTheRequestBeforeSubscription() {
+        // given
+        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+            // when
+            transport.query("SELECT 1");
+
+            // then
+            await().during(Duration.ofMillis(200))
+                    .atMost(Duration.ofMillis(500))
+                    .untilAsserted(() -> assertThat(server.hasReceivedRequest()).isFalse());
+        }
     }
 }

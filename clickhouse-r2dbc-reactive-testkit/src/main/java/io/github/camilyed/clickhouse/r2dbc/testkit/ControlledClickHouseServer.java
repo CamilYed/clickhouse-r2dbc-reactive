@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.testkit;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
@@ -18,20 +19,30 @@ import reactor.netty.http.server.HttpServer;
 public final class ControlledClickHouseServer implements AutoCloseable {
 
     private final DisposableServer server;
+    private final AtomicBoolean requestReceived;
 
-    private ControlledClickHouseServer(final DisposableServer server) {
+    private ControlledClickHouseServer(final DisposableServer server, final AtomicBoolean requestReceived) {
         this.server = server;
+        this.requestReceived = requestReceived;
     }
 
     public static ControlledClickHouseServer startRespondingToSelectOneWith(final byte[] responseBody) {
+        final AtomicBoolean requestReceived = new AtomicBoolean(false);
         final DisposableServer started = HttpServer.create()
                 .port(0)
-                .route(routes -> routes.post("/", (request, response) -> response.header(
-                                "X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
-                        .header("Content-Type", "application/octet-stream")
-                        .sendByteArray(Mono.just(responseBody))))
+                .route(routes -> routes.post("/", (request, response) -> {
+                    requestReceived.set(true);
+                    return response.header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
+                            .header("Content-Type", "application/octet-stream")
+                            .sendByteArray(Mono.just(responseBody));
+                }))
                 .bindNow();
-        return new ControlledClickHouseServer(started);
+        return new ControlledClickHouseServer(started, requestReceived);
+    }
+
+    /** Whether this server has received at least one request since it started. */
+    public boolean hasReceivedRequest() {
+        return requestReceived.get();
     }
 
     public int port() {
