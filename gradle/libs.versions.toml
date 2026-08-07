@@ -30,5 +30,5 @@ r2dbc-spi = { module = "io.r2dbc:r2dbc-spi", version.ref = "r2dbc-spi" }
 clickhouse-client-v2 = { module = "com.clickhouse:client-v2", version.ref = "clickhouse-client-v2" }
 
 testcontainers-bom = { group = "org.testcontainers", name = "testcontainers-bom", version.ref = "testcontainers" }
-testcontainers-junit-jupiter = { group = "org.testcontainers", name = "junit-jupiter" }
-testcontainers-clickhouse = { group = "org.testcontainers", name = "clickhouse" }
+testcontainers-junit-jupiter = { group = "org.testcontainers", name = "testcontainers-junit-jupiter" }
+testcontainers-clickhouse = { group = "org.testcontainers", name = "testcontainers-clickhouse" }
