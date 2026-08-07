@@ -1,0 +1,34 @@
+[versions]
+junit = "6.1.0"
+assertj = "3.27.7"
+reactor = "3.7.9"
+reactor-netty = "1.2.6"
+r2dbc-spi = "1.0.0.RELEASE"
+clickhouse-client-v2 = "0.9.0"
+spotless = "8.7.0"
+jacoco = "0.8.15"
+sonarqube = "7.3.1.8318"
+testcontainers = "2.0.5"
+
+[plugins]
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+sonarqube = { id = "org.sonarqube", version.ref = "sonarqube" }
+
+[libraries]
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+
+reactor-core = { module = "io.projectreactor:reactor-core", version.ref = "reactor" }
+reactor-test = { module = "io.projectreactor:reactor-test", version.ref = "reactor" }
+reactor-netty-http = { module = "io.projectreactor.netty:reactor-netty-http", version.ref = "reactor-netty" }
+
+r2dbc-spi = { module = "io.r2dbc:r2dbc-spi", version.ref = "r2dbc-spi" }
+
+clickhouse-client-v2 = { module = "com.clickhouse:client-v2", version.ref = "clickhouse-client-v2" }
+
+testcontainers-bom = { group = "org.testcontainers", name = "testcontainers-bom", version.ref = "testcontainers" }
+testcontainers-junit-jupiter = { group = "org.testcontainers", name = "junit-jupiter" }
+testcontainers-clickhouse = { group = "org.testcontainers", name = "clickhouse" }
