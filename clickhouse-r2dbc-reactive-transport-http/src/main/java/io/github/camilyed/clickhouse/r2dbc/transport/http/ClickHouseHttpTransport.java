@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import reactor.netty.ByteBufFlux;
 import reactor.netty.http.client.HttpClient;
+import reactor.netty.resources.ConnectionProvider;
 
 /** Non-blocking HTTP transport for ClickHouse queries, built on Reactor Netty's {@link HttpClient}. */
 public final class ClickHouseHttpTransport {
@@ -12,7 +13,15 @@ public final class ClickHouseHttpTransport {
     private final HttpClient httpClient;
 
     public ClickHouseHttpTransport(final String baseUrl) {
-        this.httpClient = HttpClient.create().baseUrl(baseUrl).responseTimeout(Duration.ofSeconds(2));
+        this(baseUrl, ConnectionProvider.create("clickhouse-http-transport"));
+    }
+
+    public ClickHouseHttpTransport(final String baseUrl, final int maxConnections) {
+        this(baseUrl, ConnectionProvider.create("clickhouse-http-transport", maxConnections));
+    }
+
+    private ClickHouseHttpTransport(final String baseUrl, final ConnectionProvider connectionProvider) {
+        this.httpClient = HttpClient.create(connectionProvider).baseUrl(baseUrl).responseTimeout(Duration.ofSeconds(2));
     }
 
     /**

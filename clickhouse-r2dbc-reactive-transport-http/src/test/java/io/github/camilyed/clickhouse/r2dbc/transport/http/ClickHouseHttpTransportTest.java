@@ -186,4 +186,65 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
             assertThat(thrown).isNotNull();
         }
     }
+
+    @Test
+    void shouldNotStartASecondRequestUntilAConnectionIsFree() {
+        // given
+        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+        // when
+        try (final var server = ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+            final var transport = new ClickHouseHttpTransport(server.baseUrl(), 1);
+
+            transport.query("SELECT 1").subscribe();
+            await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
+
+            transport.query("SELECT 1").subscribe();
+
+            // then
+            await().during(Duration.ofMillis(300))
+                    .atMost(Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(server.activeConnectionCount()).isEqualTo(1));
+        }
+    }
+
+    @Test
+    void shouldNotReachTheServerWhenAQueuedRequestIsCancelledBeforeAConnectionIsAcquired() {
+        // given
+        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+        // when
+        try (final var server = ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+            final var transport = new ClickHouseHttpTransport(server.baseUrl(), 1);
+
+            transport.query("SELECT 1").subscribe();
+            await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
+
+            final var queuedSubscription = transport.query("SELECT 1").subscribe();
+            queuedSubscription.dispose();
+
+            // then
+            await().during(Duration.ofMillis(300))
+                    .atMost(Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(server.activeConnectionCount()).isEqualTo(1));
+        }
+    }
+
+    @Test
+    void shouldNotReachTheServerWhenCancelledImmediatelyAfterSubscribing() {
+        // given
+        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+        // when
+        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+            transport.query("SELECT 1").subscribe().dispose();
+
+            // then
+            await().during(Duration.ofMillis(200))
+                    .atMost(Duration.ofMillis(500))
+                    .untilAsserted(() -> assertThat(server.hasReceivedRequest()).isFalse());
+        }
+    }
 }
