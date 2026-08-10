@@ -293,6 +293,26 @@ Once the transport spike proves the transport contract, fill in:
 Every property in `README.md`'s "What 'fully reactive' means here" table needs at least one test
 that would fail if the property regressed.
 
+**Reads only through Phase 1; writes are explicitly future scope, not forgotten.** Everything
+built so far (`ClickHouseHttpTransport.query`, `RowBinaryDecoder`) is shaped for `SELECT`-style
+read queries — the SQL goes in the URL, the response is a decoded row stream. A reactive `INSERT`
+path is a real, separate piece of work (request body instead of/alongside a URL query string, no
+row-decoding on the way back, its own acceptance criteria — e.g. does a large reactive insert
+stream need the same backpressure treatment as reads do) that hasn't been scoped yet. Named here so
+Phase 2/3 planning doesn't quietly assume read-only is the whole driver.
+
+**The driver decodes wire types; it doesn't reimplement ClickHouse SQL.** Functions, aggregates,
+materialized views, and similar server-side SQL features need zero special handling from us — the
+driver just sends SQL text and decodes whatever `RowBinaryWithNamesAndTypes` comes back, the same
+code path regardless of how exotic the query is. What actually needs deliberate test coverage is
+the **wire type-decoding surface**: `Int8`..`Int64`/`UInt8`..`UInt64`, `String`/`FixedString`,
+`Nullable(T)`, `Array(T)`, `Map(K,V)`, `DateTime`/`DateTime64`, `Decimal`, `Enum8`/`Enum16`, `UUID`,
+and so on — a contract-test matrix over real ClickHouse tables with varied column types, once
+Phase 3's `BaseClickHouseIntegrationTest` exists. One green `SELECT 1` test (Phase 1 step 6) proves
+the transport→bridge→decoder pipeline is wired correctly end to end; it proves nothing about type
+coverage, multi-row streaming, or error paths — that's exactly what this phase's contract matrix is
+for, not something to infer from the one spike test passing.
+
 ## Phase 3 — Connector (R2DBC SPI surface)
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
