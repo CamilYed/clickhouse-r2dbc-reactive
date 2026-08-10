@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -27,8 +28,9 @@ class SelectOneAgainstRealClickHouseTest {
         // given
         final ClickHouseHttpTransport transport = new ClickHouseHttpTransport(
                 clickHouse.getHttpUrl(), clickHouse.getUsername(), clickHouse.getPassword());
-        final Flux<ByteBuffer> body =
-                transport.query("SELECT 1").asByteArray().map(ByteBuffer::wrap);
+        final Flux<ByteBuffer> body = transport.query(ClickHouseQuery.of("SELECT 1"))
+                .asByteArray()
+                .map(ByteBuffer::wrap);
 
         // when
         final Map<String, Object> row =
