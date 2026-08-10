@@ -15,6 +15,7 @@ proposed to the ClickHouse team.
 - [Phase 2 — Core protocol + testkit contract tests](#phase-2--core-protocol--testkit-contract-tests)
 - [Phase 3 — Connector (R2DBC SPI surface)](#phase-3--connector-r2dbc-spi-surface)
 - [Phase 4 — "Fully reactive" sign-off](#phase-4--fully-reactive-sign-off)
+- [Non-functional requirements: logging, metrics, leaks](#non-functional-requirements-logging-metrics-leaks)
 - [Phase 5 (later) — Load and performance testing](#phase-5-later--load-and-performance-testing)
 - [Phase 6 (later) — Spring WebFlux interop demo](#phase-6-later--spring-webflux-interop-demo)
 - [Working with Claude / IntelliJ](#working-with-claude--intellij)
@@ -147,6 +148,16 @@ That adapter is the one deliberate, contained compromise in this design:
   that internal class could break us without a semver signal on the public reader class. Mitigate
   with a contract test in `testkit` that pins the exact reader behavior we rely on, so a
   `client-v2` version bump that breaks it fails CI immediately instead of silently.
+  - **Concrete instance found in step 6 (real ClickHouse):** the `Map<String, Object>` returned by
+    `next()` (client-v2's `RecordWrapper`) stores its values behind a `WeakReference` to the
+    reader's internal state, not directly. Reading from it after the reader itself is no longer
+    strongly reachable — which happened here simply from `Flux.generate`/`blockFirst()`
+    cancelling the subscription after one element — threw a `NullPointerException` from inside
+    client-v2, not from our code. Fixed in `core.RowBinaryDecoder` by copying each row into a
+    plain `LinkedHashMap` the moment it's read, while the reader is still on the stack; documented
+    in that class's Javadoc. `RowBinaryDecoderTest`/`SelectOneAgainstRealClickHouseTest` both
+    exercise exactly this cancel-after-one-row shape, so this is already regression-covered, not
+    just fixed once and hoped for.
 
 This satisfies the "verified execution-path analysis" the ClickHouse maintainers asked for as the
 first contribution — worth writing up as a follow-up comment on
@@ -313,6 +324,37 @@ not just an API shape that implies it. Concretely, a checklist pass over:
   the same way Phase 0's finding is written up here.
 
 This is the gate before spending time on Maven Central publishing polish or performance work.
+
+## Non-functional requirements: logging, metrics, leaks
+
+Named explicitly after a direct question ("najważniejsze aby dobrze działało, logowało, odkładało
+metryki, nie było wycieków pamięci i blokowania") — these aren't a separate phase, they're
+cross-cutting properties every phase from here on must not silently skip, the same "no silent
+gaps" discipline already applied to R2DBC semantics and the mid-stream-error question.
+
+- **No blocking.** Already the whole point of Phases 1–4 — tracked there, not repeated here.
+- **No memory/resource leaks.** Two concrete mechanisms, not just an aspiration: (a) Netty
+  `ByteBuf` reference counting — enable Netty's leak detector at `paranoid` level
+  (`-Dio.netty.leakDetection.level=paranoid`) in `transport-http`'s and `testkit`'s test JVM args,
+  so a forgotten `.release()` fails CI instead of showing up as a slow leak in production; (b)
+  bounded, deterministic cleanup on cancellation — already an explicit Phase 4 checklist item
+  (`FluxInputStreamBridge.close()`/`ControlledClickHouseServer`'s `activeConnectionCount()` are the
+  first two places this is already tested). The step-6 `WeakReference` finding above is a related
+  but different concern (a lifetime bug, not a leak) — noted there, not here.
+- **Logging.** Not started yet. When it starts: `slf4j-api` only (never a concrete binding) as a
+  dependency of `core`/`transport-http`/`connector`, so we never force a logging backend on a
+  consumer — same reasoning as R2DBC drivers universally do this. Log at query lifecycle
+  boundaries (start, complete, error, cancel) and connection-pool events (acquire, release,
+  saturation) once `core`'s query/`query_id` representation exists in Phase 2 — logging a query
+  without its `query_id` correlator isn't worth doing, so this naturally follows Phase 2's
+  `query_id` work rather than preceding it.
+- **Metrics.** Not started, and no vendor decided (Micrometer is the obvious default for anything
+  meant to plug into Spring, given Phase 6's WebFlux demo, but not committed to yet). What's
+  decided now: expose an extension point (counts/timers for queries issued/completed/failed,
+  connection-pool size/saturation, bytes streamed) rather than hardcoding a specific metrics
+  library's types into `core`. Concrete shape (an SPI `core` owns vs. a `connector`-level hook) is
+  a Phase 3/4 design decision, not a Phase 1 one — named here so it isn't forgotten, not designed
+  now.
 
 ## Phase 5 (later) — Load and performance testing
 

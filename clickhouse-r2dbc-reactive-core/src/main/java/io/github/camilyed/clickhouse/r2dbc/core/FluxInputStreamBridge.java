@@ -10,13 +10,48 @@ import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
 
 /**
- * Adapts a push-based {@code Flux<ByteBuffer>} into a pull-based, blocking {@link InputStream}.
+ * Adapts a push-based {@code Flux<ByteBuffer>} (how Reactor delivers HTTP response chunks) into a
+ * pull-based, blocking {@link InputStream} (what client-v2's row decoder expects to read from).
  *
- * <p>Subscribes to the source with a fixed amount of outstanding demand and never requests more
- * than that; the queue backing this bridge therefore never holds more items than the demand
- * allows, so the thread delivering {@code onNext} (typically a Netty event loop thread) is never
- * blocked. Only the thread calling {@link #read()}/{@link #read(byte[], int, int)} blocks — that
- * must be a dedicated worker thread, never the event loop.
+ * <h2>Why this exists</h2>
+ *
+ * Reactor Netty hands us chunks by <em>pushing</em> them to a subscriber as they arrive off the
+ * socket — {@code onNext} is called whenever data shows up, on Netty's own thread. client-v2's
+ * {@code RowBinaryWithNamesAndTypesFormatReader} expects the opposite shape: a plain {@link
+ * InputStream} it can <em>pull</em> bytes from, one blocking {@code read()} call at a time. This
+ * class is the adapter between those two shapes — it must never let the pull side block the push
+ * side, or every other query sharing that Netty event loop stalls too.
+ *
+ * <h2>How backpressure works here (the "credit" model)</h2>
+ *
+ * On subscription, {@link QueueingSubscriber} asks the source for exactly {@code demand} items up
+ * front (its {@code hookOnSubscribe}) — no more. Each arriving {@code ByteBuffer} lands in {@link
+ * #queue}, sized {@code demand + 1} (one spare slot reserved for the final {@code Complete}/{@code
+ * Error} signal, so the producer is never blocked trying to enqueue the terminal signal even when
+ * the queue is otherwise full). Every time {@link #read(byte[], int, int)} fully drains one buffer,
+ * it asks for exactly one more ({@link QueueingSubscriber#requestOne()}) — one "credit" is spent
+ * and immediately replenished, 1-for-1. The queue therefore never holds more than {@code demand}
+ * in-flight items, which is the whole point: the thread delivering {@code onNext} only ever does a
+ * bounded, non-blocking {@code queue.add(...)} and returns immediately. It is never the thread that
+ * waits for a slow consumer — if the consumer falls behind, Reactor simply stops calling {@code
+ * onNext} until the next {@code request(1)} arrives (real backpressure, not buffering without
+ * limit).
+ *
+ * <h2>Where the blocking actually happens</h2>
+ *
+ * Only the thread calling {@link #read()}/{@link #read(byte[], int, int)} ever blocks, inside
+ * {@link #fillCurrent()}'s {@code queue.take()} — waiting for the next signal to arrive. That
+ * thread must be a dedicated worker (e.g. whatever thread is running client-v2's decoder loop),
+ * never the Netty event loop itself. {@link StreamSignal} is what travels through the queue —
+ * {@code Data} for a chunk, {@code Complete}/{@code Error} to end the stream — modeled as a sealed
+ * type specifically so {@link #fillCurrent()}'s {@code switch} is exhaustive: adding a new signal
+ * variant without handling it here would be a compile error, not a silent bug.
+ *
+ * <h2>Cancellation</h2>
+ *
+ * {@link #close()} disposes the subscriber, which cancels the upstream subscription — whether
+ * nothing has been read yet or a consumer stops early, the source {@code Flux} is torn down
+ * instead of left running to completion unread.
  */
 public final class FluxInputStreamBridge extends InputStream {
 

@@ -11,17 +11,25 @@ import reactor.netty.resources.ConnectionProvider;
 public final class ClickHouseHttpTransport {
 
     private final HttpClient httpClient;
+    private final Authentication authentication;
 
     public ClickHouseHttpTransport(final String baseUrl) {
-        this(baseUrl, ConnectionProvider.create("clickhouse-http-transport"));
+        this(baseUrl, new Authentication.None(), ConnectionProvider.create("clickhouse-http-transport"));
     }
 
     public ClickHouseHttpTransport(final String baseUrl, final int maxConnections) {
-        this(baseUrl, ConnectionProvider.create("clickhouse-http-transport", maxConnections));
+        this(baseUrl, new Authentication.None(), ConnectionProvider.create("clickhouse-http-transport", maxConnections));
     }
 
-    private ClickHouseHttpTransport(final String baseUrl, final ConnectionProvider connectionProvider) {
+    /** Authenticates every request with HTTP Basic auth, as required by a password-protected ClickHouse server. */
+    public ClickHouseHttpTransport(final String baseUrl, final String user, final String password) {
+        this(baseUrl, new Authentication.Basic(user, password), ConnectionProvider.create("clickhouse-http-transport"));
+    }
+
+    private ClickHouseHttpTransport(
+            final String baseUrl, final Authentication authentication, final ConnectionProvider connectionProvider) {
         this.httpClient = HttpClient.create(connectionProvider).baseUrl(baseUrl).responseTimeout(Duration.ofSeconds(2));
+        this.authentication = authentication;
     }
 
     /**
@@ -29,10 +37,20 @@ public final class ClickHouseHttpTransport {
      *
      * <p>Nothing is sent over the network until the returned {@link ByteBufFlux} is subscribed to.
      * Chunks are emitted as they arrive, never aggregated into a single buffer; cancelling the
-     * subscription closes the underlying connection.
+     * subscription closes the underlying connection. The result format is fixed to {@code
+     * RowBinaryWithNamesAndTypes} — the one shape {@code core}'s decoder currently understands —
+     * via the {@code X-ClickHouse-Format} header, so a bare query with no {@code FORMAT} clause
+     * doesn't fall back to ClickHouse's default {@code TabSeparated}.
      */
     public ByteBufFlux query(final String sql) {
-        return httpClient.post().uri("/?query=" + encode(sql)).responseContent();
+        return httpClient
+                .headers(headers -> {
+                    headers.set("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes");
+                    authentication.addTo(headers);
+                })
+                .post()
+                .uri("/?query=" + encode(sql))
+                .responseContent();
     }
 
     private static String encode(final String sql) {
