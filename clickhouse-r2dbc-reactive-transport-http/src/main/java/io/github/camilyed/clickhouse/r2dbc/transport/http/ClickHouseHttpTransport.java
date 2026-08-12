@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.transport.http;
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelOption;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -37,6 +38,7 @@ public final class ClickHouseHttpTransport {
         baseUrl,
         Authentication.none(),
         ConnectionProvider.create("clickhouse-http-transport"),
+        null,
         null);
   }
 
@@ -45,6 +47,7 @@ public final class ClickHouseHttpTransport {
         baseUrl,
         Authentication.none(),
         ConnectionProvider.create("clickhouse-http-transport", maxConnections),
+        null,
         null);
   }
 
@@ -57,6 +60,7 @@ public final class ClickHouseHttpTransport {
         baseUrl,
         Authentication.basic(user, password),
         ConnectionProvider.create("clickhouse-http-transport"),
+        null,
         null);
   }
 
@@ -65,7 +69,12 @@ public final class ClickHouseHttpTransport {
    * point for auth modes beyond plain HTTP Basic (e.g. {@link Authentication#userKey}).
    */
   public ClickHouseHttpTransport(final String baseUrl, final Authentication authentication) {
-    this(baseUrl, authentication, ConnectionProvider.create("clickhouse-http-transport"), null);
+    this(
+        baseUrl,
+        authentication,
+        ConnectionProvider.create("clickhouse-http-transport"),
+        null,
+        null);
   }
 
   /**
@@ -89,16 +98,48 @@ public final class ClickHouseHttpTransport {
         baseUrl,
         authentication,
         ConnectionProvider.create("clickhouse-http-transport"),
-        responseTimeout);
+        responseTimeout,
+        null);
+  }
+
+  /**
+   * The general entry point for configuring every timeout this transport supports: {@code
+   * responseTimeout} (see the other constructor's Javadoc — how long to wait for a response once a
+   * request has been sent) and {@code connectTimeout} (how long to wait for the underlying TCP
+   * connection itself to establish, before any request is even sent). Both default to {@code null}
+   * (no timeout) via every other constructor. Wired from R2DBC's standard {@code
+   * ConnectionFactoryOptions.CONNECT_TIMEOUT} by {@code ClickHouseConnectionFactory.from} — without
+   * this, a caller going through the standard R2DBC URL/options bootstrap path (as opposed to
+   * constructing this class directly) had no way to bound how long connecting to an unreachable or
+   * firewalled host could hang.
+   */
+  public ClickHouseHttpTransport(
+      final String baseUrl,
+      final Authentication authentication,
+      final @Nullable Duration responseTimeout,
+      final @Nullable Duration connectTimeout) {
+    this(
+        baseUrl,
+        authentication,
+        ConnectionProvider.create("clickhouse-http-transport"),
+        responseTimeout,
+        connectTimeout);
   }
 
   private ClickHouseHttpTransport(
       final String baseUrl,
       final Authentication authentication,
       final ConnectionProvider connectionProvider,
-      final @Nullable Duration responseTimeout) {
-    final HttpClient client = HttpClient.create(connectionProvider).baseUrl(baseUrl);
-    this.httpClient = responseTimeout == null ? client : client.responseTimeout(responseTimeout);
+      final @Nullable Duration responseTimeout,
+      final @Nullable Duration connectTimeout) {
+    HttpClient client = HttpClient.create(connectionProvider).baseUrl(baseUrl);
+    if (responseTimeout != null) {
+      client = client.responseTimeout(responseTimeout);
+    }
+    if (connectTimeout != null) {
+      client = client.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis());
+    }
+    this.httpClient = client;
     this.authentication = authentication;
   }
 

@@ -270,6 +270,35 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldStillWorkNormallyWhenAConnectTimeoutIsConfigured() {
+    // given - proves the new connectTimeout parameter doesn't interfere with a normal, fast local
+    // connection; actually proving the timeout fires on a hung TCP handshake would need a real
+    // unreachable host, which this project deliberately avoids in hermetic tests (see
+    // ControlledClickHouseServer's Javadoc) - that mechanism is Reactor Netty's own well-tested
+    // ChannelOption.CONNECT_TIMEOUT_MILLIS, not something reimplemented here.
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    final byte[] receivedBody;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(), Authentication.none(), null, Duration.ofSeconds(5));
+
+      receivedBody =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .aggregate()
+              .asByteArray()
+              .block(Duration.ofSeconds(5));
+    }
+
+    // then
+    assertThat(receivedBody).isEqualTo(configuredBody);
+  }
+
+  @Test
   void shouldSignalAnErrorWhenTheConnectionIsResetMidResponse() {
     // given
     final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);

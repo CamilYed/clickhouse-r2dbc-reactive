@@ -23,6 +23,10 @@ import reactor.core.publisher.Flux;
  * <p>Any failure obtaining a {@link Result} for one of the statements is mapped onto {@link
  * io.r2dbc.spi.R2dbcException} via {@link ClickHouseR2dbcException} ({@code
  * ClickHouseR2dbcException.wrap}), same as {@link ClickHouseStatement}.
+ *
+ * <p><b>Not thread-safe</b>, deliberately, same as {@link ClickHouseStatement} — see that class's
+ * Javadoc for the expected usage pattern (build up state on one thread, then call {@link
+ * #execute()} once).
  */
 final class ClickHouseBatch implements Batch {
 

@@ -34,9 +34,13 @@ import reactor.core.publisher.Mono;
  * method's Javadoc for which. A caller that assumes real transactional guarantees here would be
  * wrong to, and this class fails loudly rather than silently pretending otherwise.
  *
- * <p>{@link #close()} only marks this logical connection closed; it does not tear down {@code
- * transport}, since the same transport (and its underlying connection pool) is shared by every
- * {@link Connection} a {@link ClickHouseConnectionFactory} produces.
+ * <p>{@link #close()} marks this logical connection closed; it does not tear down {@code transport}
+ * itself, since the same transport (and its underlying connection pool) is shared by every {@link
+ * Connection} a {@link ClickHouseConnectionFactory} produces. It does, however, make this instance
+ * unusable afterward: {@link #createStatement} and {@link #createBatch} both throw {@link
+ * IllegalStateException} once closed, and {@link #validate} reports {@code false} — a caller (or a
+ * connection pool) that closes this connection and then accidentally keeps using it fails loudly
+ * instead of silently sending real queries through a "closed" connection.
  */
 public final class ClickHouseConnection implements Connection {
 
@@ -72,6 +76,7 @@ public final class ClickHouseConnection implements Connection {
 
   @Override
   public Batch createBatch() {
+    requireOpen();
     return new ClickHouseBatch(transport);
   }
 
@@ -85,6 +90,7 @@ public final class ClickHouseConnection implements Connection {
     if (sql == null) {
       throw new IllegalArgumentException("sql must not be null");
     }
+    requireOpen();
     return new ClickHouseStatement(transport, sql);
   }
 
@@ -166,5 +172,11 @@ public final class ClickHouseConnection implements Connection {
         .asByteArray()
         .thenReturn(true)
         .onErrorReturn(false);
+  }
+
+  private void requireOpen() {
+    if (closed.get()) {
+      throw new IllegalStateException("This connection is closed");
+    }
   }
 }

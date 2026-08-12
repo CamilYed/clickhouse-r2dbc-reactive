@@ -108,4 +108,23 @@ class ClickHouseConnectionTest {
         .expectNext(false)
         .verifyComplete();
   }
+
+  @Test
+  void shouldRejectCreatingAStatementAfterClose() {
+    // given
+    Mono.from(connection.close()).block(Duration.ofSeconds(1));
+
+    // when / then
+    assertThatThrownBy(() -> connection.createStatement("SELECT 1"))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void shouldRejectCreatingABatchAfterClose() {
+    // given
+    Mono.from(connection.close()).block(Duration.ofSeconds(1));
+
+    // when / then
+    assertThatThrownBy(connection::createBatch).isInstanceOf(IllegalStateException.class);
+  }
 }

@@ -6,6 +6,7 @@ import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryMetadata;
 import io.r2dbc.spi.ConnectionFactoryOptions;
+import java.time.Duration;
 import reactor.core.publisher.Mono;
 
 /**
@@ -26,9 +27,13 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
   /**
    * Builds a factory from R2DBC {@link ConnectionFactoryOptions} — {@code host} (required), {@code
-   * port} (default {@value #DEFAULT_HTTP_PORT}), {@code ssl} (default {@code false}), and {@code
+   * port} (default {@value #DEFAULT_HTTP_PORT}), {@code ssl} (default {@code false}), {@code
    * user}/{@code password} (default: no authentication, relying on the server allowing anonymous
-   * access).
+   * access), and {@code connectTimeout} (default: none — see {@link ClickHouseHttpTransport}'s
+   * Javadoc for why this driver never imposes an implicit timeout). There is deliberately no {@code
+   * statementTimeout}/response-timeout option here yet: that needs to apply per statement, not per
+   * factory, and {@code ClickHouseConnection.setStatementTimeout} still throws {@link
+   * UnsupportedOperationException} rather than being wired to anything.
    */
   public static ClickHouseConnectionFactory from(final ConnectionFactoryOptions options) {
     final String host = (String) options.getRequiredValue(ConnectionFactoryOptions.HOST);
@@ -43,7 +48,11 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
     final Authentication authentication =
         user == null ? Authentication.none() : Authentication.basic(user, String.valueOf(password));
 
-    return new ClickHouseConnectionFactory(new ClickHouseHttpTransport(baseUrl, authentication));
+    final Duration connectTimeout =
+        (Duration) options.getValue(ConnectionFactoryOptions.CONNECT_TIMEOUT);
+
+    return new ClickHouseConnectionFactory(
+        new ClickHouseHttpTransport(baseUrl, authentication, null, connectTimeout));
   }
 
   @Override

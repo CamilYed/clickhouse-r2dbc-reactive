@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.NoSuchOptionException;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 class ClickHouseConnectionFactoryTest {
@@ -15,6 +16,22 @@ class ClickHouseConnectionFactoryTest {
     final ConnectionFactoryOptions options =
         ConnectionFactoryOptions.builder()
             .option(ConnectionFactoryOptions.HOST, "localhost")
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldAcceptAConfiguredConnectTimeout() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ConnectionFactoryOptions.CONNECT_TIMEOUT, Duration.ofSeconds(5))
             .build();
 
     // when

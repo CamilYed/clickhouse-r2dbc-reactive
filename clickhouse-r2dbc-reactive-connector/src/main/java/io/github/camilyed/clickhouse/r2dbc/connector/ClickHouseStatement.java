@@ -35,6 +35,14 @@ import org.reactivestreams.Publisher;
  * local decode bug — is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
  * ClickHouseR2dbcException} ({@code ClickHouseR2dbcException.wrap}), so standard R2DBC error
  * handling around {@link #execute()} catches it.
+ *
+ * <p><b>Not thread-safe</b>, deliberately, same as {@code java.sql.PreparedStatement} and every
+ * other R2DBC driver's statement type: {@code bind}/{@code bindNull} mutate this instance's binding
+ * state with no synchronization. The expected usage is one logical sequence — bind everything, then
+ * call {@link #execute()} once — even though the {@link Result} that sequence eventually produces
+ * is consumed asynchronously and may hop threads. Binding concurrently from multiple threads, or
+ * mutating bindings while {@link #execute()} is reading them, is undefined behavior this class does
+ * not guard against.
  */
 final class ClickHouseStatement implements Statement {
 
