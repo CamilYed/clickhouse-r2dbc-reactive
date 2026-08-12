@@ -8,10 +8,10 @@ import java.util.Map;
  * A decoded row, backed by {@code core}'s already-decoded {@code Map<String, Object>}.
  *
  * <p>{@link #get(int, Class)}/{@link #get(String, Class)} only cast the already-decoded value to
- * {@code type}; neither attempts any widening conversion beyond what {@code core}'s decoder
- * already produced (e.g. asking for {@code Long} when the decoded value is an {@code Integer}
- * throws {@link ClassCastException} rather than converting). Broader R2DBC type-conversion
- * support is separately scoped future work.
+ * {@code type}; neither attempts any widening conversion beyond what {@code core}'s decoder already
+ * produced (e.g. asking for {@code Long} when the decoded value is an {@code Integer} throws {@link
+ * ClassCastException} rather than converting). Broader R2DBC type-conversion support is separately
+ * scoped future work.
  */
 final class ClickHouseRow implements Row {
 

@@ -1,5 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.r2dbc.spi.Result;
@@ -38,9 +40,11 @@ class ClickHouseResultTest {
     result.getRowsUpdated();
 
     // when / then
-    StepVerifier.create(Flux.from(result.map((row, rowMetadata) -> row)))
-        .expectError(IllegalStateException.class)
-        .verify();
+    // Consumption is tracked when map()/getRowsUpdated()/flatMap() is called, not when the
+    // returned Publisher is subscribed - so the second call throws directly, synchronously,
+    // rather than the returned Publisher signalling onError.
+    assertThatThrownBy(() -> result.map((row, rowMetadata) -> row))
+        .isInstanceOf(IllegalStateException.class);
   }
 
   @Test
@@ -51,8 +55,7 @@ class ClickHouseResultTest {
     // when
     final var filtered =
         result.filter(
-            segment ->
-                ((Result.RowSegment) segment).row().get("id", Integer.class) % 2 == 0);
+            segment -> ((Result.RowSegment) segment).row().get("id", Integer.class) % 2 == 0);
 
     // then
     StepVerifier.create(filtered.map((row, rowMetadata) -> row.get("id", Integer.class)))

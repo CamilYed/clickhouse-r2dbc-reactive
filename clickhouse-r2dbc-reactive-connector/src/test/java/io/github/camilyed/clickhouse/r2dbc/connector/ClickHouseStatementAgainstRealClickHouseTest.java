@@ -77,6 +77,10 @@ class ClickHouseStatementAgainstRealClickHouseTest extends BaseClickHouseIntegra
   }
 
   private void execute(final String sql) {
-    transport().query(ClickHouseQuery.of(sql)).aggregate().asByteArray().block(Duration.ofSeconds(10));
+    transport()
+        .query(ClickHouseQuery.of(sql))
+        .aggregate()
+        .asByteArray()
+        .block(Duration.ofSeconds(10));
   }
 }

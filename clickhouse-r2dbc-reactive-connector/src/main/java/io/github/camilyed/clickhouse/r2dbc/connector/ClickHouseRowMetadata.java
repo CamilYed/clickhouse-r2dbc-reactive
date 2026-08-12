@@ -6,7 +6,9 @@ import io.r2dbc.spi.RowMetadata;
 import java.util.List;
 import java.util.NoSuchElementException;
 
-/** {@link RowMetadata} over a fixed, wire-ordered list of {@code core}'s {@link ColumnDescriptor}s. */
+/**
+ * {@link RowMetadata} over a fixed, wire-ordered list of {@code core}'s {@link ColumnDescriptor}s.
+ */
 final class ClickHouseRowMetadata implements RowMetadata {
 
   private final List<ClickHouseColumnMetadata> columnMetadatas;

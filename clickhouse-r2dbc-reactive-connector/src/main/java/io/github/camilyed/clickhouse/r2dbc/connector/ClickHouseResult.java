@@ -39,7 +39,8 @@ final class ClickHouseResult implements Result {
     this(new ClickHouseRowMetadata(decoded.columns()), decoded.rows());
   }
 
-  private ClickHouseResult(final ClickHouseRowMetadata metadata, final Flux<Map<String, Object>> rows) {
+  private ClickHouseResult(
+      final ClickHouseRowMetadata metadata, final Flux<Map<String, Object>> rows) {
     this.metadata = metadata;
     this.rows = rows;
   }

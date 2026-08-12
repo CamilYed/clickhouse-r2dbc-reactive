@@ -45,14 +45,14 @@ public final class RowBinaryDecoder {
   }
 
   /**
-   * Decodes {@code source} into its column schema and row stream together, from one reader
-   * instance and one subscription to {@code source} — unlike {@link #decodeRows}, which discards
-   * the schema client-v2 already reads off the wire before the first row.
+   * Decodes {@code source} into its column schema and row stream together, from one reader instance
+   * and one subscription to {@code source} — unlike {@link #decodeRows}, which discards the schema
+   * client-v2 already reads off the wire before the first row.
    *
    * <p>Constructing the reader blocks (it eagerly reads the {@code RowBinaryWithNamesAndTypes}
    * header — see {@link ListDecodingRowBinaryReader}), so that construction runs on {@link
-   * Schedulers#boundedElastic()}, never on the caller's thread. For a real transport that thread
-   * is Reactor Netty's event loop; blocking it here would stall every other query sharing it.
+   * Schedulers#boundedElastic()}, never on the caller's thread. For a real transport that thread is
+   * Reactor Netty's event loop; blocking it here would stall every other query sharing it.
    */
   public static Mono<DecodedResult> decode(final Flux<ByteBuffer> source) {
     return Mono.fromCallable(() -> newReader(source))
