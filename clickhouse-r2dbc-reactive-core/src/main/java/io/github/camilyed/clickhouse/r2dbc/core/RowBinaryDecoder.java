@@ -17,6 +17,11 @@ import reactor.core.publisher.SynchronousSink;
  * blocks the calling thread, so callers must subscribe on a dedicated worker, never on the
  * event-loop thread the source {@code Flux<ByteBuffer>} was produced on.
  *
+ * <p>Uses {@link ListDecodingRowBinaryReader} rather than the base reader directly, so {@code
+ * Array}/{@code Nested} columns decode as plain {@code List}s instead of client-v2's {@code
+ * .internal} {@code ArrayValue} — see that class's Javadoc for why this is safe and narrowly
+ * scoped. Every other column type is unaffected.
+ *
  * <p>Each row is copied into a plain {@link LinkedHashMap} the moment it's read, rather than
  * handed out as client-v2's own {@code Map} implementation. That implementation
  * ({@code RecordWrapper}) stores its values behind a {@link java.lang.ref.WeakReference} to the
@@ -35,7 +40,7 @@ public final class RowBinaryDecoder {
     }
 
     private static RowBinaryWithNamesAndTypesFormatReader newReader(final Flux<ByteBuffer> source) {
-        return new RowBinaryWithNamesAndTypesFormatReader(
+        return new ListDecodingRowBinaryReader(
                 FluxInputStreamBridge.subscribeTo(source, 4),
                 new QuerySettings().setUseTimeZone("UTC"),
                 new BinaryStreamReader.DefaultByteBufferAllocator());

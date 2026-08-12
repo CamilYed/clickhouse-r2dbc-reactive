@@ -21,6 +21,19 @@ public final class RowBinaryFixtures {
         return rowBinaryWithNamesAndTypes(new String[] {"1"}, new String[] {"UInt8"}, new byte[] {0x01});
     }
 
+    /** One column named {@code "arr"} of type {@code Array(Int32)}, one row with values {@code [10, 20, 30]}. */
+    public static byte[] arrayOfInt32RowBinaryWithNamesAndTypes() {
+        return rowBinaryWithNamesAndTypes(
+                new String[] {"arr"},
+                new String[] {"Array(Int32)"},
+                new byte[] {
+                    0x03, // array length (varint)
+                    0x0A, 0x00, 0x00, 0x00, // 10
+                    0x14, 0x00, 0x00, 0x00, // 20
+                    0x1E, 0x00, 0x00, 0x00 // 30
+                });
+    }
+
     private static byte[] rowBinaryWithNamesAndTypes(
             final String[] columnNames, final String[] columnTypes, final byte[] rowBytes) {
         final ByteArrayOutputStream out = new ByteArrayOutputStream();

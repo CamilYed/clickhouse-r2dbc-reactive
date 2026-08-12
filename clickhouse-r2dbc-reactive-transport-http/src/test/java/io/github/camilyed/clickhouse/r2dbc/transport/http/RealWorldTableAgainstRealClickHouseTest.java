@@ -38,18 +38,19 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *       column of that type would throw {@code IllegalArgumentException("Unsupported data type")}.
  *       A real gap, not a gap in our tests.
  *   <li><b>Network</b> — covered ({@link #shouldDecodeNetworkTypes()}): {@code IPv4}, {@code IPv6}.
- *   <li><b>Composite</b> ({@code Array}/{@code Tuple}/{@code Map}/{@code Nested}) — {@code Map} and
- *       {@code Tuple} covered ({@link #shouldDecodeMapType()}, {@link #shouldDecodeTupleType()}):
- *       checked client-v2's {@code BinaryStreamReader.readMap()}/{@code readTuple()} directly — they
- *       already return a plain {@code Map}/{@code Object[]}, not a {@code .internal} type, for
- *       element types that aren't themselves {@code Array}/{@code Nested}. {@code Array} and {@code
- *       Nested} are genuinely still blocked: both go through {@code convertArray()}, which only
- *       avoids returning the {@code .internal} {@code ArrayValue} when a {@code List.class} type hint
- *       is supplied — and the public {@code next()}/{@code readRecord()} path we use never passes
- *       one. Unblocking them means either a small dedicated row-reading loop that calls {@code
- *       BinaryStreamReader.readValue(column, List.class)} directly (a deliberate, documented
- *       dependency on that one {@code .internal} class, same shape as the Phase 0 {@code InputStream}
- *       bridge decision) or leaving them unsupported — an open design decision, not silently skipped.
+ *   <li><b>Composite</b> ({@code Array}/{@code Tuple}/{@code Map}/{@code Nested}) — {@code Map},
+ *       {@code Tuple}, and {@code Array} covered ({@link #shouldDecodeMapType()}, {@link
+ *       #shouldDecodeTupleType()}, {@link #shouldDecodeArrayType()}). {@code Map}/{@code Tuple}
+ *       already returned a plain {@code Map}/{@code Object[]} from client-v2 with no changes needed.
+ *       {@code Array} needed one deliberate addition: {@code core}'s {@code
+ *       ListDecodingRowBinaryReader} overrides the reader's {@code protected readRecord(Object[])}
+ *       hook to supply a {@code List.class} type hint per column, which {@code
+ *       BinaryStreamReader.convertArray()} already knows how to honor — avoiding the {@code
+ *       .internal} {@code ArrayValue} client-v2 returns otherwise. Same shape of compromise as the
+ *       Phase 0 {@code InputStream} bridge: one narrow, documented, tested dependency on client-v2's
+ *       {@code .internal} package, not a general one. {@code Nested} uses the exact same mechanism
+ *       (also routes through {@code convertArray()}) but doesn't have a real-ClickHouse test of its
+ *       own yet — a quick, low-risk follow-up, not a design gap.
  *   <li><b>Semi-structured</b> ({@code JSON}/{@code Dynamic}/{@code Variant}) — not attempted; all
  *       still experimental/evolving in ClickHouse itself.
  *   <li><b>Nullable and optional</b> — {@code Nullable} covered ({@link
@@ -247,7 +248,7 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat((Map<?, ?>) rows.get(0).get("map_val")).containsExactly(entry("a", 1), entry("b", 2));
+        assertThat((Map<Object, Object>) rows.getFirst().get("map_val")).containsExactly(entry("a", 1), entry("b", 2));
     }
 
     @Test
@@ -261,7 +262,7 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat((Object[]) rows.get(0).get("tuple_val")).containsExactly("hello", 42);
+        assertThat((Object[]) rows.getFirst().get("tuple_val")).containsExactly("hello", 42);
     }
 
     @Test
@@ -276,7 +277,22 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat(rows.get(0).get("enum8_val")).hasToString("a");
-        assertThat(rows.get(0).get("enum16_val")).hasToString("y");
+        assertThat(rows.getFirst().get("enum8_val")).hasToString("a");
+        assertThat(rows.getFirst().get("enum16_val")).hasToString("y");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldDecodeArrayType() {
+        // given
+        execute("CREATE TABLE array_types (id UInt32, array_val Array(Int32)) ENGINE = MergeTree ORDER BY id");
+        execute("INSERT INTO array_types VALUES (1, [10, 20, 30])");
+
+        // when
+        final List<Map<String, Object>> rows = queryRows("SELECT * FROM array_types");
+
+        // then
+        assertThat(rows).hasSize(1);
+        assertThat((List<Integer>) rows.getFirst().get("array_val")).containsExactly(10, 20, 30);
     }
 }

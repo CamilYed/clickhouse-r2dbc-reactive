@@ -325,7 +325,7 @@ for, not something to infer from the one spike test passing.
 | Date and time | ⚠️ `Date`/`Date32`/`DateTime`/`DateTime64` covered; `Time`/`Time64` **not supported by our pinned client-v2 at all** — confirmed no case for them in `BinaryStreamReader.readValue`'s switch. A real client-v2-version gap, not a test gap. |
 | Nullable and optional | ⚠️ `Nullable` covered (including an actual `NULL` value across rows); `LowCardinality` not attempted |
 | Specialized | ⚠️ `UUID` and `Enum8`/`Enum16` covered; geo types, vector-search (`QBit`), domains not attempted |
-| Composite (`Array`/`Tuple`/`Map`/`Nested`) | ⚠️ `Map`/`Tuple` covered — client-v2's `readMap()`/`readTuple()` already return plain `Map`/`Object[]`, not `.internal` types, confirmed by reading the source directly. `Array`/`Nested` genuinely still blocked (see below) |
+| Composite (`Array`/`Tuple`/`Map`/`Nested`) | ✅ `Map`/`Tuple`/`Array` covered; `Nested` uses the same mechanism as `Array` but has no dedicated real-ClickHouse test yet (low-risk follow-up) |
 | Semi-structured (`JSON`/`Dynamic`/`Variant`) | 🚫 not attempted, still experimental in ClickHouse itself |
 | Aggregate function (`AggregateFunction`/`SimpleAggregateFunction`) | 🚫 not attempted — these hold intermediate aggregation state, not literal-insertable values, so proving them needs insert-via-aggregate-query, not `INSERT ... VALUES` |
 | Special Data Types (`Expression`/`Interval`/`Nothing`/`Set`) | N/A — query-intermediate constructs, not column/storage types |
@@ -336,12 +336,20 @@ regardless of type hints, for element types that aren't themselves `Array`/`Nest
 `Enum16` return an `.internal` `EnumValue`, but it publicly overrides `toString()` to the member
 name — calling `toString()` on the opaque `Object` reads the value without importing or casting to
 the internal type (a dependency on current `toString()` behavior, not a documented contract, but no
-compile-time coupling). **Only `Array` and `Nested` are genuinely blocked**: both route through
-`convertArray()`, which only returns a plain `List` when a `List.class` type hint is supplied, and
-the public `next()`/`readRecord()` path this driver uses never passes one. Unblocking them needs
-either a small dedicated row-reading loop calling `BinaryStreamReader.readValue(column, List.class)`
-directly (a deliberate, documented `.internal` dependency, same shape as the Phase 0 `InputStream`
-bridge compromise) or leaving them unsupported for now — a real design decision, not a missing test.
+compile-time coupling).
+
+**`Array`/`Nested` resolved** — both route through `BinaryStreamReader.convertArray()`, which only
+returns a plain `List` when a `List.class` type hint is supplied, and the public `next()`/
+`readRecord()` path this driver used never passed one. Resolved by `core.ListDecodingRowBinaryReader`
+(new): overrides the reader's `protected readRecord(Object[])` hook — exposed by client-v2
+specifically for subclassing — to supply `List.class` as the type hint for `Array`/`Nested` columns
+only, leaving every other type's decoding untouched. This is a deliberate, narrow, tested dependency
+on client-v2's `.internal` package (the `BinaryStreamReader binaryStreamReader` protected field, and
+its public `readValue(column, typeHint)` method), the same shape of compromise as the Phase 0
+`InputStream` bridge: one documented seam, not a general dependency. Covered by a hermetic unit test
+in `core` (`RowBinaryDecoderTest.shouldDecodeAnArrayColumnAsAPlainList`, hand-built wire bytes, no
+ClickHouse needed) and a real-ClickHouse test (`RealWorldTableAgainstRealClickHouseTest.
+shouldDecodeArrayType`).
 
 ## Phase 3 — Connector (R2DBC SPI surface)
 
