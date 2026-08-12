@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
 import static io.github.camilyed.clickhouse.r2dbc.transport.http.assertions.ClickHouseRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 
 import io.github.camilyed.clickhouse.r2dbc.transport.http.abilities.RealClickHouseQueryAbility;
 import java.math.BigInteger;
@@ -37,20 +38,32 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *       column of that type would throw {@code IllegalArgumentException("Unsupported data type")}.
  *       A real gap, not a gap in our tests.
  *   <li><b>Network</b> — covered ({@link #shouldDecodeNetworkTypes()}): {@code IPv4}, {@code IPv6}.
- *   <li><b>Composite</b> ({@code Array}/{@code Tuple}/{@code Map}/{@code Nested}) — not attempted.
- *       Without a {@code typeHintMapping}, client-v2 returns these as its own {@code .internal}
- *       package types, which this project deliberately doesn't depend on (Phase 0 reuse-boundary
- *       decision) — an open design question (does {@code core} supply a {@code typeHintMapping}, or
- *       expose its own representation?), tracked, not silently skipped.
+ *   <li><b>Composite</b> ({@code Array}/{@code Tuple}/{@code Map}/{@code Nested}) — {@code Map} and
+ *       {@code Tuple} covered ({@link #shouldDecodeMapType()}, {@link #shouldDecodeTupleType()}):
+ *       checked client-v2's {@code BinaryStreamReader.readMap()}/{@code readTuple()} directly — they
+ *       already return a plain {@code Map}/{@code Object[]}, not a {@code .internal} type, for
+ *       element types that aren't themselves {@code Array}/{@code Nested}. {@code Array} and {@code
+ *       Nested} are genuinely still blocked: both go through {@code convertArray()}, which only
+ *       avoids returning the {@code .internal} {@code ArrayValue} when a {@code List.class} type hint
+ *       is supplied — and the public {@code next()}/{@code readRecord()} path we use never passes
+ *       one. Unblocking them means either a small dedicated row-reading loop that calls {@code
+ *       BinaryStreamReader.readValue(column, List.class)} directly (a deliberate, documented
+ *       dependency on that one {@code .internal} class, same shape as the Phase 0 {@code InputStream}
+ *       bridge decision) or leaving them unsupported — an open design decision, not silently skipped.
  *   <li><b>Semi-structured</b> ({@code JSON}/{@code Dynamic}/{@code Variant}) — not attempted; all
  *       still experimental/evolving in ClickHouse itself.
  *   <li><b>Nullable and optional</b> — {@code Nullable} covered ({@link
  *       #shouldDecodeAMultiTypeMultiRowTable()}, both a present and an actually-{@code NULL} value
  *       across multiple rows); {@code LowCardinality} not attempted.
  *   <li><b>Specialized</b> — {@code UUID} covered ({@link #shouldDecodeSpecializedTypes()}); {@code
- *       Enum8}/{@code Enum16} blocked for the same {@code .internal}-type reason as Composite types
- *       ({@code BinaryStreamReader.EnumValue}); geo types, vector-search types ({@code QBit}), and
- *       domains not attempted.
+ *       Enum8}/{@code Enum16} covered ({@link #shouldDecodeEnumTypes()}): the returned value is still
+ *       an {@code .internal} {@code EnumValue} instance, but it publicly overrides {@code toString()}
+ *       to return the member name, so calling {@code toString()} on the opaque {@code Object} reads
+ *       the value without ever importing or casting to the internal type — the tradeoff being a
+ *       dependency on {@code toString()}'s current behavior rather than a documented contract, since
+ *       the whole class is {@code .internal}. Geo types, vector-search types ({@code QBit}), and
+ *       domains not attempted yet (next likely quick win: {@code readGeoPoint()}/{@code
+ *       readGeoRing()} etc. also return plain arrays, same shape as {@code Map}/{@code Tuple} above).
  *   <li><b>Aggregate function</b> ({@code AggregateFunction}/{@code SimpleAggregateFunction}) — not
  *       attempted; these store intermediate aggregation state, not plain literal-insertable values,
  *       so proving them needs a different test shape (insert via an aggregate query, not a literal).
@@ -221,5 +234,49 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
         // then
         assertThat(rows).hasSize(1);
         assertThat((UUID) rows.get(0).get("uuid_val")).isEqualTo(UUID.fromString("61f0c404-5cb3-11e7-907b-a6006ad3dba0"));
+    }
+
+    @Test
+    void shouldDecodeMapType() {
+        // given
+        execute("CREATE TABLE map_types (id UInt32, map_val Map(String, Int32)) ENGINE = MergeTree ORDER BY id");
+        execute("INSERT INTO map_types VALUES (1, {'a': 1, 'b': 2})");
+
+        // when
+        final List<Map<String, Object>> rows = queryRows("SELECT * FROM map_types");
+
+        // then
+        assertThat(rows).hasSize(1);
+        assertThat((Map<?, ?>) rows.get(0).get("map_val")).containsExactly(entry("a", 1), entry("b", 2));
+    }
+
+    @Test
+    void shouldDecodeTupleType() {
+        // given
+        execute("CREATE TABLE tuple_types (id UInt32, tuple_val Tuple(String, Int32)) ENGINE = MergeTree ORDER BY id");
+        execute("INSERT INTO tuple_types VALUES (1, ('hello', 42))");
+
+        // when
+        final List<Map<String, Object>> rows = queryRows("SELECT * FROM tuple_types");
+
+        // then
+        assertThat(rows).hasSize(1);
+        assertThat((Object[]) rows.get(0).get("tuple_val")).containsExactly("hello", 42);
+    }
+
+    @Test
+    void shouldDecodeEnumTypes() {
+        // given
+        execute("CREATE TABLE enum_types (id UInt32, enum8_val Enum8('a' = 1, 'b' = 2), enum16_val Enum16('x' = 1, 'y' = 2)) "
+                + "ENGINE = MergeTree ORDER BY id");
+        execute("INSERT INTO enum_types VALUES (1, 'a', 'y')");
+
+        // when
+        final List<Map<String, Object>> rows = queryRows("SELECT * FROM enum_types");
+
+        // then
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("enum8_val")).hasToString("a");
+        assertThat(rows.get(0).get("enum16_val")).hasToString("y");
     }
 }

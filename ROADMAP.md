@@ -324,18 +324,24 @@ for, not something to infer from the one spike test passing.
 | Network (`IPv4`, `IPv6`) | ✅ covered |
 | Date and time | ⚠️ `Date`/`Date32`/`DateTime`/`DateTime64` covered; `Time`/`Time64` **not supported by our pinned client-v2 at all** — confirmed no case for them in `BinaryStreamReader.readValue`'s switch. A real client-v2-version gap, not a test gap. |
 | Nullable and optional | ⚠️ `Nullable` covered (including an actual `NULL` value across rows); `LowCardinality` not attempted |
-| Specialized | ⚠️ `UUID` only; `Enum8`/`Enum16` blocked (see Composite below); geo types, vector-search (`QBit`), domains not attempted |
-| Composite (`Array`/`Tuple`/`Map`/`Nested`) | 🚫 blocked — without a `typeHintMapping`, client-v2 returns these as its own `.internal` package types (`BinaryStreamReader.ArrayValue`/`EnumValue`), which this project deliberately doesn't depend on directly (Phase 0 reuse-boundary decision) |
+| Specialized | ⚠️ `UUID` and `Enum8`/`Enum16` covered; geo types, vector-search (`QBit`), domains not attempted |
+| Composite (`Array`/`Tuple`/`Map`/`Nested`) | ⚠️ `Map`/`Tuple` covered — client-v2's `readMap()`/`readTuple()` already return plain `Map`/`Object[]`, not `.internal` types, confirmed by reading the source directly. `Array`/`Nested` genuinely still blocked (see below) |
 | Semi-structured (`JSON`/`Dynamic`/`Variant`) | 🚫 not attempted, still experimental in ClickHouse itself |
 | Aggregate function (`AggregateFunction`/`SimpleAggregateFunction`) | 🚫 not attempted — these hold intermediate aggregation state, not literal-insertable values, so proving them needs insert-via-aggregate-query, not `INSERT ... VALUES` |
 | Special Data Types (`Expression`/`Interval`/`Nothing`/`Set`) | N/A — query-intermediate constructs, not column/storage types |
 
-**The Composite/Enum block is an open design decision, not a missing test.** Before those
-categories can be tested at all, `core` needs an answer to: does it pass client-v2 a
-`typeHintMapping` so `Array`/`Map`/`Enum` decode to plain `List`/`Map`/String instead of
-`.internal` types, or does `core` define its own array/map/enum representation independently of
-client-v2's internals? This blocks real progress on two of the ten categories and needs to be
-decided deliberately, not worked around inside a test.
+**Corrected finding (previous version of this table overstated the Composite block).** Reading
+`BinaryStreamReader` directly: `readMap()`/`readTuple()` return a plain `LinkedHashMap`/`Object[]`
+regardless of type hints, for element types that aren't themselves `Array`/`Nested`. `Enum8`/
+`Enum16` return an `.internal` `EnumValue`, but it publicly overrides `toString()` to the member
+name — calling `toString()` on the opaque `Object` reads the value without importing or casting to
+the internal type (a dependency on current `toString()` behavior, not a documented contract, but no
+compile-time coupling). **Only `Array` and `Nested` are genuinely blocked**: both route through
+`convertArray()`, which only returns a plain `List` when a `List.class` type hint is supplied, and
+the public `next()`/`readRecord()` path this driver uses never passes one. Unblocking them needs
+either a small dedicated row-reading loop calling `BinaryStreamReader.readValue(column, List.class)`
+directly (a deliberate, documented `.internal` dependency, same shape as the Phase 0 `InputStream`
+bridge compromise) or leaving them unsupported for now — a real design decision, not a missing test.
 
 ## Phase 3 — Connector (R2DBC SPI surface)
 
