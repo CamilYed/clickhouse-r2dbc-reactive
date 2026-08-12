@@ -13,6 +13,7 @@ import reactor.netty.ByteBufFlux;
  * point this record is constructed — only once the response headers have actually arrived, which
  * happens partway through consuming {@code body}. Call {@code writtenRows().getAsLong()} only after
  * {@code body} has started being consumed (e.g. {@code core.RowBinaryDecoder#decode} already
- * guarantees this — it reads the schema, which only happens after headers arrive, before resolving).
+ * guarantees this — it reads the schema, which only happens after headers arrive, before
+ * resolving).
  */
 public record ClickHouseQueryResponse(LongSupplier writtenRows, ByteBufFlux body) {}

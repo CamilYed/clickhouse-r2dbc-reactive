@@ -53,10 +53,10 @@ final class ClickHouseResult implements Result {
   }
 
   /**
-   * Sends {@code response.body()} through {@link RowBinaryDecoder#decode} and wraps the result
-   * into a {@link ClickHouseResult} carrying {@code response.writtenRows()} — the one place both
-   * halves of a {@link ClickHouseQueryResponse} (decoded rows from {@code core}, the written-row
-   * count from {@code transport-http}) come together, used identically by {@link
+   * Sends {@code response.body()} through {@link RowBinaryDecoder#decode} and wraps the result into
+   * a {@link ClickHouseResult} carrying {@code response.writtenRows()} — the one place both halves
+   * of a {@link ClickHouseQueryResponse} (decoded rows from {@code core}, the written-row count
+   * from {@code transport-http}) come together, used identically by {@link
    * ClickHouseStatement#execute()} and {@link ClickHouseBatch}.
    *
    * <p>{@code response.writtenRows()} is read inside the {@code map} below, after {@link

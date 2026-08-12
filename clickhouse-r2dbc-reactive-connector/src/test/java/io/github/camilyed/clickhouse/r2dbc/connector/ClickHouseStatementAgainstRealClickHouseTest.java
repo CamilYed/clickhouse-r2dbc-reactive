@@ -107,8 +107,7 @@ class ClickHouseStatementAgainstRealClickHouseTest extends BaseClickHouseIntegra
     final Long rowsUpdated =
         Flux.from(
                 connection()
-                    .createStatement(
-                        "INSERT INTO statement_rows_updated_test VALUES (1), (2), (3)")
+                    .createStatement("INSERT INTO statement_rows_updated_test VALUES (1), (2), (3)")
                     .execute())
             .flatMap(Result::getRowsUpdated)
             .blockFirst(Duration.ofSeconds(10));

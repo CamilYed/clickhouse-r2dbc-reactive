@@ -139,12 +139,12 @@ public final class ClickHouseHttpTransport {
   }
 
   /**
-   * Same as {@link #query(ClickHouseQuery)}, but also exposes ClickHouse's own reported
-   * written-row count for {@code query}, parsed from the {@code X-ClickHouse-Summary} response
-   * header (see clickhouse.com/docs/interfaces/http, "Response Buffering"/progress section).
-   * ClickHouse sends this header on every response — {@code SELECT} included, where it reports
-   * {@code 0} written rows — so {@link ClickHouseQueryResponse#writtenRows()} is always a real,
-   * server-reported count rather than a guess.
+   * Same as {@link #query(ClickHouseQuery)}, but also exposes ClickHouse's own reported written-row
+   * count for {@code query}, parsed from the {@code X-ClickHouse-Summary} response header (see
+   * clickhouse.com/docs/interfaces/http, "Response Buffering"/progress section). ClickHouse sends
+   * this header on every response — {@code SELECT} included, where it reports {@code 0} written
+   * rows — so {@link ClickHouseQueryResponse#writtenRows()} is always a real, server-reported count
+   * rather than a guess.
    *
    * <p>Deliberately does <em>not</em> use an operator like {@code Flux.next()}/{@code single()} to
    * turn the underlying {@code .response(...)} call into this method's {@code Mono} return type —
@@ -154,8 +154,8 @@ public final class ClickHouseHttpTransport {
    * response-scope subscription is reading, so the body arrives empty. Instead, this constructs the
    * still-fully-lazy {@code body} {@link ByteBufFlux} synchronously (nothing sent over the network
    * yet, same as {@link #query(ClickHouseQuery)}) and wraps it in {@link Mono#just}, so the
-   * <em>caller's own later subscription to {@code body}</em> is the one and only subscription to the
-   * underlying HTTP response, exactly as in {@link #query(ClickHouseQuery)}.
+   * <em>caller's own later subscription to {@code body}</em> is the one and only subscription to
+   * the underlying HTTP response, exactly as in {@link #query(ClickHouseQuery)}.
    */
   public Mono<ClickHouseQueryResponse> queryWithSummary(final ClickHouseQuery query) {
     final AtomicLong writtenRows = new AtomicLong();

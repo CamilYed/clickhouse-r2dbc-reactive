@@ -37,6 +37,20 @@ import reactor.core.scheduler.Schedulers;
  */
 public final class RowBinaryDecoder {
 
+  /**
+   * How many {@code ByteBuffer} chunks {@link FluxInputStreamBridge} is allowed to hold in flight
+   * while the blocking reader decodes a response body (see that class's Javadoc for the exact
+   * "credit" backpressure mechanics this bounds). A small, deliberately <em>unbenchmarked</em>
+   * default — big enough that network reads and blocking row decoding can overlap a little instead
+   * of fully serializing (chunk arrives, decoder blocks reading it, only then is the next chunk
+   * requested), without buffering an unbounded number of chunks ahead of a decoder that's fallen
+   * behind. Tuning this against real throughput/latency numbers is explicitly out of scope until
+   * this project's performance phase starts (see README.md's "Performance and dependency impact"
+   * section) — treat this constant as a documented placeholder to revisit with measurements, not a
+   * benchmarked value.
+   */
+  private static final int RESPONSE_CHUNK_DEMAND = 4;
+
   private RowBinaryDecoder() {}
 
   /** Decodes {@code source} into rows keyed by column name, in wire order. */
@@ -81,7 +95,7 @@ public final class RowBinaryDecoder {
 
   private static RowBinaryWithNamesAndTypesFormatReader newReader(final Flux<ByteBuffer> source) {
     return new ListDecodingRowBinaryReader(
-        FluxInputStreamBridge.subscribeTo(source, 4),
+        FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND),
         new QuerySettings().setUseTimeZone("UTC"),
         new BinaryStreamReader.DefaultByteBufferAllocator());
   }
