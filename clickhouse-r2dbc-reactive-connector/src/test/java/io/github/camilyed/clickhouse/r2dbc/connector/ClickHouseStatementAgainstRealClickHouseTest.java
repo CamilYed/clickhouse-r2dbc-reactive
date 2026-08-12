@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
@@ -74,6 +75,37 @@ class ClickHouseStatementAgainstRealClickHouseTest extends BaseClickHouseIntegra
 
     // then
     assertThat(typeName).isEqualTo("UInt32");
+  }
+
+  @Test
+  void shouldRunAParameterizedSelectWithBoundValues() {
+    // given
+    execute("CREATE TABLE statement_bind_test (id UInt32, name String) ENGINE = Memory");
+    execute("INSERT INTO statement_bind_test VALUES (1, 'Ada'), (2, 'Grace'), (3, 'Grace')");
+
+    // when
+    final String name =
+        Flux.from(
+                connection()
+                    .createStatement(
+                        "SELECT name FROM statement_bind_test WHERE id = {id:UInt32}")
+                    .bind("id", 1)
+                    .execute())
+            .flatMap(result -> result.map((row, rowMetadata) -> row.get("name", String.class)))
+            .blockFirst(Duration.ofSeconds(10));
+
+    // then
+    assertThat(name).isEqualTo("Ada");
+  }
+
+  @Test
+  void shouldRejectExecutingAParameterizedStatementWithAMissingBinding() {
+    // given
+    final var statement =
+        connection().createStatement("SELECT 1 WHERE 1 = {id:UInt32}");
+
+    // when / then
+    assertThatThrownBy(statement::execute).isInstanceOf(IllegalStateException.class);
   }
 
   private void execute(final String sql) {

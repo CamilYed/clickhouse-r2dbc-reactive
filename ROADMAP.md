@@ -379,12 +379,33 @@ R2DBC's `Result` assumes and this driver hasn't built an INSERT/DDL round trip t
 yet. `Result.filter`/`flatMap` are implemented (both are abstract in `r2dbc-spi:1.0.0.RELEASE`, no
 default), scoped to the only segment kind produced so far (`RowSegment`). Consumption-once is
 enforced per `Result` instance, but not transitively across a `filter()`-derived instance sharing
-the same row stream — documented as a known limitation, not silently assumed correct. Parameter
-binding (`bind`/`bindNull`) is separately-scoped future work needing its own `param_<name>` design.
-The SPI registration file (`META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`) is
-intentionally **not** added yet: registering a provider whose connections can open but can't run a
-full range of queries (no parameter binding yet) would make it discoverable
-and broken, which is worse than not discoverable — added once `Statement.execute()` is real.
+the same row stream — documented as a known limitation, not silently assumed correct.
+
+Parameter binding (`bind`/`bindNull`) is now real too, mapped directly onto ClickHouse's own named
+parameterized-query mechanism (checked against clickhouse.com/docs/interfaces/http, not assumed):
+`sql` declares each placeholder as `{name:Type}`; the bound value travels as a separate
+`param_<name>=<value>` HTTP query parameter, never substituted into the SQL text. `core.ClickHouseQuery`
+grew `parameterNamesIn(sql)` (parses declared placeholder names, in first-occurrence order) and
+`withParameters(Map<String,Object>)` (encodes bound values into ClickHouse's own `param_<name>`
+wire format — its "Escaped" text format: backslash/tab/newline/CR-escaped strings, `\N` for null,
+plain `toString()` for numbers/booleans since they have no special characters to escape).
+`connector.ClickHouseStatement` parses `sql`'s declared names once at construction;
+`bind(String,Object)`/`bindNull(String,Class)` validate against that set (`NoSuchElementException`
+for an undeclared name, matching `Statement`'s own documented contract); `bind(int,Object)`/
+`bindNull(int,Class)` map the index to the declared name at that position in first-occurrence
+order — ClickHouse's own placeholder syntax has no positional form, so this index-to-name mapping
+is this driver's own convention. `execute()` throws `IllegalStateException` synchronously (not a
+reactive error signal) if any declared parameter is still unbound, per `Statement.execute()`'s own
+documented contract. `transport-http`'s `ClickHouseHttpTransport.query()` appends one
+`&param_<name>=<url-encoded value>` per entry in `ClickHouseQuery.parameters()`.
+`testkit.ControlledClickHouseServer` grew `receivedUri()` so transport tests can assert on the
+actual request query string, not just headers.
+
+The SPI registration file (`META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`) is still
+intentionally **not** added yet: `Batch` (`add()`/batched bindings) still throws
+`UnsupportedOperationException`, and this driver wants that real before registering itself as
+discoverable — a driver that opens, queries, and binds parameters but can't batch would be a
+narrower, less honest gap to discover than "not registered yet".
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
   parameter binding, R2DBC exception mapping, explicit unsupported-transaction-semantics handling.
