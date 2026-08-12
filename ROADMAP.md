@@ -313,6 +313,30 @@ the transport→bridge→decoder pipeline is wired correctly end to end; it prov
 coverage, multi-row streaming, or error paths — that's exactly what this phase's contract matrix is
 for, not something to infer from the one spike test passing.
 
+**First real pass at type coverage, checked against ClickHouse's own category taxonomy**
+(`clickhouse.com/docs/reference/data-types`) —
+`RealWorldTableAgainstRealClickHouseTest` in `transport-http`, one test per category:
+
+| Category | Status |
+| --- | --- |
+| Numeric (`Int8`..`256`/`UInt8`..`256`, `Float32`/`64`, `Decimal`, `Bool`) | ✅ covered |
+| String (`String`, `FixedString`) | ✅ covered |
+| Network (`IPv4`, `IPv6`) | ✅ covered |
+| Date and time | ⚠️ `Date`/`Date32`/`DateTime`/`DateTime64` covered; `Time`/`Time64` **not supported by our pinned client-v2 at all** — confirmed no case for them in `BinaryStreamReader.readValue`'s switch. A real client-v2-version gap, not a test gap. |
+| Nullable and optional | ⚠️ `Nullable` covered (including an actual `NULL` value across rows); `LowCardinality` not attempted |
+| Specialized | ⚠️ `UUID` only; `Enum8`/`Enum16` blocked (see Composite below); geo types, vector-search (`QBit`), domains not attempted |
+| Composite (`Array`/`Tuple`/`Map`/`Nested`) | 🚫 blocked — without a `typeHintMapping`, client-v2 returns these as its own `.internal` package types (`BinaryStreamReader.ArrayValue`/`EnumValue`), which this project deliberately doesn't depend on directly (Phase 0 reuse-boundary decision) |
+| Semi-structured (`JSON`/`Dynamic`/`Variant`) | 🚫 not attempted, still experimental in ClickHouse itself |
+| Aggregate function (`AggregateFunction`/`SimpleAggregateFunction`) | 🚫 not attempted — these hold intermediate aggregation state, not literal-insertable values, so proving them needs insert-via-aggregate-query, not `INSERT ... VALUES` |
+| Special Data Types (`Expression`/`Interval`/`Nothing`/`Set`) | N/A — query-intermediate constructs, not column/storage types |
+
+**The Composite/Enum block is an open design decision, not a missing test.** Before those
+categories can be tested at all, `core` needs an answer to: does it pass client-v2 a
+`typeHintMapping` so `Array`/`Map`/`Enum` decode to plain `List`/`Map`/String instead of
+`.internal` types, or does `core` define its own array/map/enum representation independently of
+client-v2's internals? This blocks real progress on two of the ten categories and needs to be
+decided deliberately, not worked around inside a test.
+
 ## Phase 3 — Connector (R2DBC SPI surface)
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
