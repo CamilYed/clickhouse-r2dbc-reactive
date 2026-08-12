@@ -25,13 +25,13 @@ import reactor.core.publisher.Flux;
  * placeholder as {@code {name:Type}}, and {@link #bind(String, Object)}/{@link #bindNull(String,
  * Class)} bind a value to one of those declared names — {@link ClickHouseQuery#parameterNamesIn}
  * parses {@code sql} once, at construction, to know which names are valid to bind, so binding an
- * undeclared name fails fast with {@link NoSuchElementException} rather than silently being
- * ignored or sent as a stray, unused request parameter. {@link #bind(int, Object)}/{@link
- * #bindNull(int, Class)} map {@code index} to the declared name at that position, in first-
- * occurrence order — ClickHouse's own placeholder syntax has no positional form of its own, so
- * this index-to-name mapping is this driver's own convention, not something ClickHouse defines.
- * {@link #add()} (batched bindings, i.e. one {@code Statement} executed once per saved binding
- * set) is separately scoped future work and still throws {@link UnsupportedOperationException}.
+ * undeclared name fails fast with {@link NoSuchElementException} rather than silently being ignored
+ * or sent as a stray, unused request parameter. {@link #bind(int, Object)}/{@link #bindNull(int,
+ * Class)} map {@code index} to the declared name at that position, in first- occurrence order —
+ * ClickHouse's own placeholder syntax has no positional form of its own, so this index-to-name
+ * mapping is this driver's own convention, not something ClickHouse defines. {@link #add()}
+ * (batched bindings, i.e. one {@code Statement} executed once per saved binding set) is separately
+ * scoped future work and still throws {@link UnsupportedOperationException}.
  */
 final class ClickHouseStatement implements Statement {
 

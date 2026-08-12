@@ -87,8 +87,7 @@ class ClickHouseStatementAgainstRealClickHouseTest extends BaseClickHouseIntegra
     final String name =
         Flux.from(
                 connection()
-                    .createStatement(
-                        "SELECT name FROM statement_bind_test WHERE id = {id:UInt32}")
+                    .createStatement("SELECT name FROM statement_bind_test WHERE id = {id:UInt32}")
                     .bind("id", 1)
                     .execute())
             .flatMap(result -> result.map((row, rowMetadata) -> row.get("name", String.class)))
@@ -101,8 +100,7 @@ class ClickHouseStatementAgainstRealClickHouseTest extends BaseClickHouseIntegra
   @Test
   void shouldRejectExecutingAParameterizedStatementWithAMissingBinding() {
     // given
-    final var statement =
-        connection().createStatement("SELECT 1 WHERE 1 = {id:UInt32}");
+    final var statement = connection().createStatement("SELECT 1 WHERE 1 = {id:UInt32}");
 
     // when / then
     assertThatThrownBy(statement::execute).isInstanceOf(IllegalStateException.class);

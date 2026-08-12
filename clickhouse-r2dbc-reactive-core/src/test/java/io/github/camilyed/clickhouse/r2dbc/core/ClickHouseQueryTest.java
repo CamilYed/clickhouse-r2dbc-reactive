@@ -86,7 +86,8 @@ class ClickHouseQueryTest {
     final ClickHouseQuery parameterized = query.withParameters(boundValues);
 
     // then
-    assertThat(parameterized.parameters()).containsExactly(Map.entry("n", "\\N"), Map.entry("a", "42"));
+    assertThat(parameterized.parameters())
+        .containsExactly(Map.entry("n", "\\N"), Map.entry("a", "42"));
   }
 
   @Test
@@ -95,8 +96,7 @@ class ClickHouseQueryTest {
     final ClickHouseQuery query = ClickHouseQuery.of("SELECT {s:String}");
 
     // when
-    final ClickHouseQuery parameterized =
-        query.withParameters(Map.of("s", "a\\b\tc\nd\re"));
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("s", "a\\b\tc\nd\re"));
 
     // then
     assertThat(parameterized.parameters()).containsEntry("s", "a\\\\b\\tc\\nd\\re");

@@ -89,9 +89,10 @@ public final class ClickHouseHttpTransport {
    * message text instead — re-check this Javadoc if client-v2 is ever upgraded.
    *
    * <p>{@link ClickHouseQuery#parameters()} — already encoded into ClickHouse's own wire format by
-   * {@link ClickHouseQuery#withParameters(java.util.Map)} — are sent one {@code param_<name>=<value>}
-   * query parameter per entry, alongside {@code query}, exactly as ClickHouse's own parameterized-
-   * query mechanism expects (see {@code docs/CLIENT_V2_HTTP_REFERENCE.md}).
+   * {@link ClickHouseQuery#withParameters(java.util.Map)} — are sent one {@code
+   * param_<name>=<value>} query parameter per entry, alongside {@code query}, exactly as
+   * ClickHouse's own parameterized- query mechanism expects (see {@code
+   * docs/CLIENT_V2_HTTP_REFERENCE.md}).
    */
   public ByteBufFlux query(final ClickHouseQuery query) {
     return ByteBufFlux.fromInbound(

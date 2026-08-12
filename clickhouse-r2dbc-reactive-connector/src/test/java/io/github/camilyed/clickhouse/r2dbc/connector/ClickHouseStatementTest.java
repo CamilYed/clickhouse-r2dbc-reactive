@@ -11,13 +11,13 @@ class ClickHouseStatementTest {
 
   // No network call happens in any assertion below - binding only validates/stores values and
   // never touches transport, so an unreachable address keeps this test hermetic.
-  private final ClickHouseHttpTransport transport = new ClickHouseHttpTransport("http://localhost:1");
+  private final ClickHouseHttpTransport transport =
+      new ClickHouseHttpTransport("http://localhost:1");
 
   @Test
   void shouldAcceptBindingAKnownNamedParameter() {
     // given
-    final ClickHouseStatement statement =
-        new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
 
     // when
     final Object returned = statement.bind("id", 5);
@@ -29,8 +29,7 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingAnUnknownNamedParameter() {
     // given
-    final ClickHouseStatement statement =
-        new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
 
     // when / then
     assertThatThrownBy(() -> statement.bind("missing", 5))
@@ -40,8 +39,7 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingANullValueByName() {
     // given
-    final ClickHouseStatement statement =
-        new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
 
     // when / then
     assertThatThrownBy(() -> statement.bind("id", null))
@@ -75,8 +73,7 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingNullToAnUnknownNamedParameter() {
     // given
-    final ClickHouseStatement statement =
-        new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
 
     // when / then
     assertThatThrownBy(() -> statement.bindNull("missing", Integer.class))
@@ -86,8 +83,7 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectExecutingWithUnboundDeclaredParameters() {
     // given
-    final ClickHouseStatement statement =
-        new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
 
     // when / then
     assertThatThrownBy(statement::execute).isInstanceOf(IllegalStateException.class);

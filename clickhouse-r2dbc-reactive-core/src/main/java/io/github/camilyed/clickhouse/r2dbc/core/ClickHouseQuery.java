@@ -23,9 +23,9 @@ import java.util.regex.Pattern;
  * <p>{@code parameters} carries values already encoded into ClickHouse's own {@code param_<name>}
  * wire representation (its "Escaped" text format) — see {@link #withParameters(Map)}. Checked
  * directly against clickhouse.com/docs/interfaces/http's "Queries with parameters" section, not
- * assumed: the SQL text itself declares each placeholder as {@code {name:Type}}; the matching
- * value travels as a separate {@code param_name=<value>} request parameter, never substituted into
- * the SQL text itself.
+ * assumed: the SQL text itself declares each placeholder as {@code {name:Type}}; the matching value
+ * travels as a separate {@code param_name=<value>} request parameter, never substituted into the
+ * SQL text itself.
  */
 public record ClickHouseQuery(String sql, String queryId, Map<String, String> parameters) {
 

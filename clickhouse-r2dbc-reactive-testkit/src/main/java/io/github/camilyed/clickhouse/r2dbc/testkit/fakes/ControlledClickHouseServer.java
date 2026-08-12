@@ -101,7 +101,12 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
+        started,
+        requestReceived,
+        connectionClosed,
+        activeConnections,
+        receivedHeaders,
+        receivedUri);
   }
 
   private static ControlledClickHouseServer startRespondingWith(final Flux<byte[]> body) {
@@ -136,7 +141,12 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
+        started,
+        requestReceived,
+        connectionClosed,
+        activeConnections,
+        receivedHeaders,
+        receivedUri);
   }
 
   /** Accepts the connection and reads the request, but never sends any response at all. */
@@ -169,7 +179,12 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
+        started,
+        requestReceived,
+        connectionClosed,
+        activeConnections,
+        receivedHeaders,
+        receivedUri);
   }
 
   /**
@@ -209,7 +224,12 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
+        started,
+        requestReceived,
+        connectionClosed,
+        activeConnections,
+        receivedHeaders,
+        receivedUri);
   }
 
   /** Sends {@code firstChunk}, then resets the TCP connection after {@code beforeReset}. */
@@ -249,7 +269,12 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
+        started,
+        requestReceived,
+        connectionClosed,
+        activeConnections,
+        receivedHeaders,
+        receivedUri);
   }
 
   /** Whether this server has received at least one request since it started. */
