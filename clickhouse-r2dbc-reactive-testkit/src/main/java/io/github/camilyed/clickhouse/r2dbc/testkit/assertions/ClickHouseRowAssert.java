@@ -51,9 +51,10 @@ public final class ClickHouseRowAssert extends AbstractAssert<ClickHouseRowAsser
     }
 
     /** Asserts {@code column} is a decoded {@code Array}/{@code Nested} value, equal to {@code expected} in order. */
+    @SuppressWarnings("unchecked")
     public ClickHouseRowAssert hasList(final String column, final Object... expected) {
         isNotNull();
-        assertThat((List<?>) actual.get(column)).as("column '%s'", column).containsExactly(expected);
+        assertThat((List<Object>) actual.get(column)).as("column '%s'", column).containsExactly(expected);
         return this;
     }
 
