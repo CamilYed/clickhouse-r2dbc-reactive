@@ -2,14 +2,12 @@ package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.clickhouse.ClickHouseContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.netty.http.client.HttpClient;
 
 /**
@@ -27,19 +25,15 @@ import reactor.netty.http.client.HttpClient;
  * parameter), and check whether the server's own response header echoes the same value back, which
  * is the one way to observe the server actually used it rather than generating its own.
  */
-@Testcontainers
-class QueryIdHeaderAgainstRealClickHouseTest {
-
-    @Container
-    private final ClickHouseContainer clickHouse = new ClickHouseContainer("clickhouse/clickhouse-server:latest");
+class QueryIdHeaderAgainstRealClickHouseTest extends BaseClickHouseIntegrationTest {
 
     @Test
     void shouldEchoBackTheQueryIdWeSentAsARequestHeader() {
         // given
-        final String credentials = clickHouse.getUsername() + ":" + clickHouse.getPassword();
+        final String credentials = clickHouseUsername() + ":" + clickHousePassword();
         final String basicAuth = "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
         final HttpClient httpClient =
-                HttpClient.create().baseUrl(clickHouse.getHttpUrl()).headers(headers -> headers.set("Authorization", basicAuth));
+                HttpClient.create().baseUrl(clickHouseHttpUrl()).headers(headers -> headers.set("Authorization", basicAuth));
 
         // when
         final String echoedQueryId = httpClient

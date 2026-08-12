@@ -355,12 +355,25 @@ shouldDecodeArrayType`).
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
   parameter binding, R2DBC exception mapping, explicit unsupported-transaction-semantics handling.
-- `testkit`: add `BaseClickHouseIntegrationTest` (a singleton Testcontainers `ClickHouseContainer`,
-  started once per test JVM — the standard Testcontainers pattern, no explicit stop, Ryuk cleans up)
-  plus an Ability-pattern DSL for creating tables/rows and cleaning them up between tests
-  (`@BeforeEach`, same isolation rule as [CLAUDE.md](CLAUDE.md#hard-rules) requires everywhere
-  else). TDD, same as everything else: the first `connector` test that needs real ClickHouse data
-  drives the first Ability method into existence — don't design the whole DSL up front.
+- `testkit`: **done** — `BaseClickHouseIntegrationTest` (a singleton Testcontainers
+  `ClickHouseContainer`, one static field shared by every subclass across every module, started
+  once per test JVM, no explicit stop — Ryuk cleans up) plus a `@BeforeEach` table-dropping cleaner
+  that talks to ClickHouse over a plain synchronous `java.net.http.HttpClient`, deliberately not
+  through this project's own transport, so cleanup never depends on the driver code under test.
+  `transport-http`'s three real-ClickHouse test classes
+  (`SelectOneAgainstRealClickHouseTest`/`QueryIdHeaderAgainstRealClickHouseTest`/
+  `RealWorldTableAgainstRealClickHouseTest`) already extend it. `connector`'s own tests and
+  `integration-tests` extend it too once they exist — no per-module reimplementation. A richer
+  Ability-pattern DSL for creating tables/rows (beyond the `RealClickHouseQueryAbility` already in
+  `transport-http`'s tests) can grow here once `connector` actually needs one — TDD, same as
+  everything else: the first test that needs it drives the method into existence, don't design the
+  whole DSL up front.
+- `testkit`: `ClickHouseRowAssert` (custom assertion over a decoded row) also moved here from
+  `transport-http`'s test sources, so `connector`/`integration-tests` get it for free too. Grew
+  `hasList`/`hasTuple`/`hasMap`/`hasEnumName`/`hasBigInteger`/`hasFloatCloseTo`/`hasInetAddress`/
+  `hasUuid` alongside the original `hasValue`/`hasDecimal`/`hasNullAt`/`hasTypeAt`, so
+  `RealWorldTableAgainstRealClickHouseTest` reads its assertions as domain statements instead of
+  raw `assertThat((SomeType) row.get(...))` casts scattered through the test body.
 - `connector`'s own `src/test`: small, targeted tests for its own classes, extending
   `BaseClickHouseIntegrationTest` where real ClickHouse is the simplest way to prove behavior.
 - `integration-tests`: whole-driver black-box suite through the public R2DBC SPI only — see the

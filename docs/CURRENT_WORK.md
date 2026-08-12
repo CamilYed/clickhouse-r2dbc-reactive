@@ -1,99 +1,116 @@
 # Current work — handoff notes
 
 Snapshot for continuing this session with a fresh model. Only what CLAUDE.md/ROADMAP.md don't
-already say. Phase 1 is closed; this session pushed well into Phase 2 territory (auth, error
-handling, real-world type coverage) without yet formally opening a "Phase 2" task in ROADMAP.
+already say. Phase 1 and Phase 2's type-coverage pass are effectively done; the user has chosen
+**Phase 3 (connector/R2DBC SPI)** as the next real work, but this session detoured first into
+finishing type coverage properly and refactoring the real-ClickHouse test infrastructure — both
+now done, both committed. Phase 3 itself has not started yet (no `connector` code written beyond
+the existing skeleton).
 
 ## Exact current implementation state
 
-- `core`: unchanged from last snapshot (`FluxInputStreamBridge`, `StreamSignal`, `RowBinaryDecoder`)
-  **plus** new `ClickHouseQuery` record (`sql`, `queryId`; `of(sql)` generates a UUID, `of(sql,
-  queryId)` uses a given one) — TDD-built, 4 tests, committed.
-- `transport-http`: `ClickHouseHttpTransport` now has **four** public constructors: `(baseUrl)`,
-  `(baseUrl, maxConnections)`, `(baseUrl, user, password)` (Basic), `(baseUrl, Authentication)`
-  (any mode). `Authentication` is now a **public** sealed interface (promoted from
-  package-private once `UserKey` made it real public API surface) with static factories
-  `none()`/`basic(user,password)`/`userKey(user,key)`. `query(ClickHouseQuery)` (was
-  `query(String)`) sends `X-ClickHouse-Query-Id` as a request header (empirically verified
-  sufficient against real ClickHouse — see `QueryIdHeaderAgainstRealClickHouseTest` and
-  `docs/CLIENT_V2_HTTP_REFERENCE.md`) and detects server errors via
-  `X-ClickHouse-Exception-Code` header or HTTP status ≥ 400, surfacing them as client-v2's own
-  `ServerException` (3-arg ctor — pinned version is 0.9.0, **not** master, see class Javadoc).
-  `ClickHouseHttpTransportTest` — 13 green tests (added query-id-header, server-error,
-  userKey-auth cases; the other 11 call sites mechanically updated to `ClickHouseQuery.of(...)`).
-- `testkit`: `ControlledClickHouseServer` — `receivedQueryId` field replaced with
-  `receivedHeaders: AtomicReference<HttpHeaders>` + generic `receivedHeader(name)`; new
-  `startRespondingWithClickHouseError(code, message, httpStatus)` factory.
-- New test-support classes (module-local to `transport-http`, per CLAUDE.md's Ability/Custom
-  Assertion pattern): `abilities.RealClickHouseQueryAbility` (`execute(sql)`/`queryRows(sql)`
-  against a real server through the full pipeline), `assertions.ClickHouseRowAssert`
-  (`hasValue`/`hasDecimal`/`hasNullAt`/`hasTypeAt`).
-- `RealWorldTableAgainstRealClickHouseTest` (new, **not yet committed** — see below): six tests
-  against real ClickHouse, one per ClickHouse docs type-category actually exercised
-  (`shouldDecodeAMultiTypeMultiRowTable` for Nullable/multi-row, plus
-  `shouldDecodeNumericTypes`/`StringTypes`/`DateAndTimeTypes`/`NetworkTypes`/`SpecializedTypes`).
-  User confirmed green. Full category-by-category coverage status is now written up in both the
-  class Javadoc and ROADMAP.md (search "First real pass at type coverage") — **do not re-derive
-  this list from scratch**, it's already exhaustive and honest: 3 categories fully covered
-  (Numeric, String, Network), 3 partially covered (Date/time — `Time`/`Time64` missing from
-  pinned client-v2 itself; Nullable — `LowCardinality` untried; Specialized — only `UUID`), 3 not
-  attempted at all (Composite, Semi-structured, Aggregate function), 1 N/A (Special Data Types).
-- `connector`, `integration-tests`: still skeleton only.
+- `core`: `ClickHouseQuery`, `FluxInputStreamBridge`, `StreamSignal`, `RowBinaryDecoder` — plus new
+  `ListDecodingRowBinaryReader` (package-private): subclasses client-v2's public
+  `RowBinaryWithNamesAndTypesFormatReader`, overrides its `protected readRecord(Object[])` hook to
+  supply a `List.class` type hint for `Array`/`Nested` columns only, so they decode as a plain
+  `List` instead of client-v2's `.internal` `ArrayValue`. One deliberate, documented, tested
+  `.internal` dependency — same shape as the Phase 0 `InputStream` bridge compromise, not a general
+  one. `RowBinaryDecoder` now builds this reader instead of the base class directly; every other
+  type's decoding is unaffected. Covered by a hermetic unit test in `core`
+  (`RowBinaryDecoderTest.shouldDecodeAnArrayColumnAsAPlainList`, hand-built wire bytes, no
+  ClickHouse needed) — the fixture-building helper lives in `core`'s own test
+  `fakes.RowBinaryFixtures`.
+- `transport-http`: unchanged core transport (`ClickHouseHttpTransport`, `Authentication`) from
+  before. Its `RealWorldTableAgainstRealClickHouseTest` now has **ten** tests, one per ClickHouse
+  docs category actually exercised, including the three added this session:
+  `shouldDecodeMapType`/`shouldDecodeTupleType`/`shouldDecodeEnumTypes`/`shouldDecodeArrayType`.
+  Full, current, honest type-coverage status is written in that class's Javadoc and in
+  ROADMAP.md's Phase 2 section (search "First real pass at type coverage") — **read that before
+  re-deriving type-coverage status from scratch**, it's already exhaustive: Numeric/String/Network
+  fully covered; Date-time (missing `Time`/`Time64` — genuine client-v2 0.9.0 gap, not a test gap),
+  Nullable (missing `LowCardinality`), Specialized (`UUID`+`Enum8`/`16` covered; geo/vector/domains
+  not attempted) partially covered; Composite now **covered** (`Map`/`Tuple`/`Array`; `Nested` uses
+  the same mechanism but has no dedicated test yet — cheap follow-up); Semi-structured and
+  Aggregate-function categories not attempted at all (JSON/Dynamic/Variant still experimental in
+  ClickHouse itself; AggregateFunction needs a different test shape, not literal `INSERT`).
+- `testkit`: **new** `BaseClickHouseIntegrationTest` (top-level package) — the ClickHouse container
+  is now a single `static` field here (Testcontainers singleton-container pattern: every subclass,
+  in every module, shares one running container per JVM; `@Testcontainers`/`@Container` on a base
+  class is picked up by JUnit5's own annotation search on subclasses without redeclaring it). A
+  `@BeforeEach protected void dropAllTables()` runs before every test, discovering and dropping
+  every table via `SHOW TABLES`/`DROP TABLE IF EXISTS` sent over a plain synchronous
+  `java.net.http.HttpClient` — deliberately **not** through this project's own transport, so
+  cleanup can't depend on (or mask a bug in) the driver code under test. `ClickHouseRowAssert` also
+  moved here from `transport-http`'s test sources (package `testkit.assertions`), so
+  `connector`/`integration-tests` get it for free later, and grew new methods:
+  `hasList`/`hasTuple`/`hasMap`/`hasEnumName`/`hasBigInteger`/`hasFloatCloseTo`/`hasInetAddress`/
+  `hasUuid` alongside the original four. All three of `transport-http`'s real-ClickHouse test
+  classes now `extend BaseClickHouseIntegrationTest` instead of each declaring their own
+  `@Container` field — no behavior change, just removed duplication and added the automatic
+  cleanup they didn't have before (tests previously all created differently-named tables so
+  cross-test pollution never actually bit, but it was implicit, not enforced).
+- `connector`, `integration-tests`: still skeleton only — this is Phase 3's actual work, not
+  started.
 
-## What was completed this session
+## What was completed this session (this pass, after the "wszystko zielono" checkpoint)
 
-In order: (1) all HTTP auth modes (`UserKey` added alongside `None`/`Basic`, `Authentication`
-promoted to public sealed interface with factories); (2) server-side error surfacing via
-`ServerException`; (3) `query_id` plumbed end-to-end as `ClickHouseQuery`; (4) a genuinely
-realistic real-ClickHouse scenario test, twice-restructured — first as one wide `all_types`
-table, then split to mirror ClickHouse's own docs category taxonomy per explicit user request —
-and rebuilt on Ability + Custom Assertion instead of ad hoc code; (5) an honest, exhaustive
-type-coverage audit against that taxonomy, written into both the test's Javadoc and ROADMAP.md,
-in response to the user explicitly not being satisfied that "all types" were covered until shown
-proof.
-
-Two genuine (not test-gap) findings surfaced and documented:
-
-1. **`Time`/`Time64`** have no decode path at all in pinned client-v2 0.9.0 — confirmed by
-   reading `BinaryStreamReader.readValue`'s switch directly via `git show v0.9.0:...` against the
-   user-provided full-history clone at `/Users/kamil/Projects/clickhouse-java`.
-2. **Composite types + `Enum8`/`Enum16`** decode to client-v2's own `.internal`-package types
-   without a `typeHintMapping` — blocked by this project's own Phase 0 reuse-boundary decision,
-   not by test effort. This is now flagged in ROADMAP as an **open design decision**, not a task:
-   does `core` supply a `typeHintMapping`, or build its own array/map/enum representation?
+In order: (1) corrected an overly-broad ROADMAP claim that all of "Composite" was blocked — read
+client-v2 0.9.0 source directly and found `Map`/`Tuple` already decode cleanly with zero code
+changes, added tests for both plus `Enum8`/`Enum16` (readable via `toString()` on the opaque
+`Object`, no internal-type import needed); (2) at the user's explicit go-ahead, unblocked
+`Array`/`Nested` for real via `ListDecodingRowBinaryReader` (see above); (3) at the user's explicit
+request, refactored all real-ClickHouse tests onto a shared `BaseClickHouseIntegrationTest` with a
+singleton container and automatic per-test table cleanup, and moved+expanded the custom row
+assertion into `testkit` for reuse.
 
 ## Current branch / unfinished work
 
-- Branch `main`. Auth/error-handling/query_id work already committed in prior turns this session
-  (exact SHAs not re-verified here — check `git log`). **`RealWorldTableAgainstRealClickHouseTest`
-  and its two new `abilities`/`assertions` support classes are NOT yet committed** — write them up
-  as one commit once you resume (they're finished and user-confirmed green; nothing left to
-  change on them right now). The `ROADMAP.md` type-coverage table addition (this session, already
-  applied to the file) should go in the same or an adjacent commit.
+- Branch `main`. Commits this pass (in order): `66f9889` (Map/Tuple/Enum correction),
+  `a76f7cb` (Array/Nested unblock) — both pushed to this point. **The
+  `BaseClickHouseIntegrationTest` + `ClickHouseRowAssert` move + three-test-class refactor is
+  finished but NOT YET COMMITTED** — do that first thing on resume, before anything else, once the
+  user confirms the refactored tests are still green (they haven't re-run since this refactor
+  landed).
+- Task list: tasks through #41 are `completed`. No task yet created for Phase 3's actual opening
+  move (that's the next thing to create once this refactor's commit lands).
 
 ## Failing or pending tests
 
-None reported. Full suite green per user's last "zielono" — including the six-category real-world
-type test.
+Unknown for the very latest refactor (base class + assertion move + three test classes rewritten)
+— not yet run by the user. Everything before that refactor was last confirmed green including
+Map/Tuple/Enum/Array.
 
 ## Exact next smallest TDD step
 
-Two independent open threads, no user go-ahead yet on either:
+Two things, in order:
 
-1. Commit the uncommitted files above.
-2. The Composite/Enum design decision (typeHintMapping vs. own representation) — this is real
-   engineering work, not a quick add. Needs a deliberate conversation with the user before writing
-   any code, since it shapes what `core`'s own type surface looks like going forward.
-
-Do not start either without checking in — same standing practice as every prior snapshot.
+1. Commit the `BaseClickHouseIntegrationTest`/`ClickHouseRowAssert`/three-test-class refactor once
+   the user confirms it's green.
+2. Start Phase 3: `connector`'s `ConnectionFactoryProvider` + `ConnectionFactoryOptions` first —
+   the R2DBC discovery entry point. Already verified the exact `r2dbc-spi:1.0.0.RELEASE` source for
+   `ConnectionFactoryProvider`/`ConnectionFactoryOptions`/`ConnectionFactory`/`Connection`/
+   `Statement`/`Result` (fetched directly from `github.com/r2dbc/r2dbc-spi` at tag
+   `v1.0.0.RELEASE`, not `main` — same "pin the exact version" discipline as client-v2). Key
+   signatures worth remembering so they don't need re-fetching: `ConnectionFactoryProvider.create(
+   ConnectionFactoryOptions)`/`supports(...)`/`getDriver()`; `ConnectionFactoryOptions.DRIVER`/
+   `PROTOCOL`/`HOST`/`PORT`/`DATABASE`/`USER`/`PASSWORD`/`SSL`/`CONNECT_TIMEOUT` well-known
+   `Option`s plus arbitrary custom ones via `Option.valueOf(name)`; `ConnectionFactory.create()`
+   returns `Publisher<? extends Connection>`; `Connection.createStatement(sql)` returns
+   `Statement`; `Statement.execute()` returns `Publisher<? extends Result>`; `Result.map(BiFunction<
+   Row,RowMetadata,T>)`/`map(Function<Readable,T>)`. TDD as always: first failing test drives
+   `ConnectionFactoryProvider` into existence (e.g. "supports options with driver=clickhouse"),
+   don't design the whole `connector` module's shape up front.
 
 ## Known risks or unresolved questions
 
-- Same recurring `.git/index.lock` plumbing note as always, nothing new.
-- `Time`/`Time64` unsupported by pinned client-v2 0.9.0 is a real, user-facing gap once this
-  driver ships — worth deciding (later) whether to special-case it, wait for a client-v2 upgrade,
-  or document it as an explicit limitation.
-- LowCardinality, geo types, vector-search (`QBit`) types, domains, JSON/Dynamic/Variant,
-  AggregateFunction/SimpleAggregateFunction all remain genuinely untested — not because they're
-  hard to reach, but because they weren't yet prioritized. See ROADMAP's type-coverage table for
-  the full, current, honest list.
+- Same recurring `.git` lock-file friction as always — this session it got bad enough that a stale
+  `.git/index.lock` from days earlier could not be `rm`'d at all (mount-level delete restriction,
+  not just git's own lock contention). Worked around via `GIT_INDEX_FILE`-based plumbing commits
+  plus `allow_cowork_file_delete` (a Cowork tool that enables deletion for the folder after explicit
+  user-visible approval) to actually clear the stale lock files. If commits start failing with
+  "Unable to create .../.git/*.lock: File exists" again, try that combination before assuming the
+  repo is broken.
+- `Time`/`Time64`, `LowCardinality`, geo types, vector-search (`QBit`), domains, JSON/Dynamic/
+  Variant, AggregateFunction/SimpleAggregateFunction all remain genuinely untested — see
+  `RealWorldTableAgainstRealClickHouseTest`'s Javadoc and ROADMAP's type-coverage table for the
+  full, current, honest list. None of these block Phase 3.

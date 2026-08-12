@@ -1,11 +1,11 @@
 package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
-import static io.github.camilyed.clickhouse.r2dbc.transport.http.assertions.ClickHouseRowAssert.assertThatRow;
+import static io.github.camilyed.clickhouse.r2dbc.testkit.assertions.ClickHouseRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
 
+import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.abilities.RealClickHouseQueryAbility;
-import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.ZonedDateTime;
@@ -14,15 +14,16 @@ import java.util.Map;
 import java.util.UUID;
 import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.clickhouse.ClickHouseContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * End-to-end proof against real ClickHouse, organized by the type categories ClickHouse's own docs
  * use (<a href="https://clickhouse.com/docs/reference/data-types">clickhouse.com/docs/reference/data-types</a>),
  * decoded through the full pipeline (transport → bridge → {@code RowBinaryDecoder}) — not one row,
  * one table, or one type at a time.
+ *
+ * <p>Extends {@link BaseClickHouseIntegrationTest}: the ClickHouse container is shared across every
+ * test class that extends it (started once per JVM), and every table created by a test method here
+ * is dropped automatically before the next one runs, so test order never matters.
  *
  * <p>Status per category, checked directly against that taxonomy, not assumed:
  *
@@ -73,18 +74,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *       {@code CREATE TABLE} can hold.
  * </ul>
  */
-@Testcontainers
-class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbility {
-
-    @Container
-    private final ClickHouseContainer clickHouse = new ClickHouseContainer("clickhouse/clickhouse-server:latest");
+class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationTest implements RealClickHouseQueryAbility {
 
     private ClickHouseHttpTransport transport;
 
     @Override
     public ClickHouseHttpTransport transport() {
         if (transport == null) {
-            transport = new ClickHouseHttpTransport(clickHouse.getHttpUrl(), clickHouse.getUsername(), clickHouse.getPassword());
+            transport = new ClickHouseHttpTransport(clickHouseHttpUrl(), clickHouseUsername(), clickHousePassword());
         }
         return transport;
     }
@@ -150,8 +147,7 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        final Map<String, Object> row = rows.get(0);
-        assertThatRow(row)
+        assertThatRow(rows.get(0))
                 .hasValue("int8_val", (byte) -100)
                 .hasValue("int16_val", (short) -20000)
                 .hasValue("int32_val", -2000000000)
@@ -161,15 +157,13 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
                 .hasValue("uint32_val", 4000000000L)
                 .hasValue("float64_val", 2.718281828459)
                 .hasDecimal("decimal_val", "12345.6789")
-                .hasValue("bool_val", true);
-        assertThat((BigInteger) row.get("int128_val")).isEqualTo(new BigInteger("-123456789012345678901234567890"));
-        assertThat((BigInteger) row.get("int256_val"))
-                .isEqualTo(new BigInteger("-12345678901234567890123456789012345678901234567890123456789012345678"));
-        assertThat((BigInteger) row.get("uint64_val")).isEqualTo(new BigInteger("18000000000000000000"));
-        assertThat((BigInteger) row.get("uint128_val")).isEqualTo(new BigInteger("123456789012345678901234567890"));
-        assertThat((BigInteger) row.get("uint256_val"))
-                .isEqualTo(new BigInteger("12345678901234567890123456789012345678901234567890123456789012345678"));
-        assertThat((Float) row.get("float32_val")).isCloseTo(3.14f, Offset.offset(0.001f));
+                .hasValue("bool_val", true)
+                .hasBigInteger("int128_val", "-123456789012345678901234567890")
+                .hasBigInteger("int256_val", "-12345678901234567890123456789012345678901234567890123456789012345678")
+                .hasBigInteger("uint64_val", "18000000000000000000")
+                .hasBigInteger("uint128_val", "123456789012345678901234567890")
+                .hasBigInteger("uint256_val", "12345678901234567890123456789012345678901234567890123456789012345678")
+                .hasFloatCloseTo("float32_val", 3.14f, Offset.offset(0.001f));
     }
 
     @Test
@@ -219,8 +213,9 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat((InetAddress) rows.get(0).get("ipv4_val")).isEqualTo(InetAddress.getByName("192.168.1.1"));
-        assertThat((InetAddress) rows.get(0).get("ipv6_val")).isEqualTo(InetAddress.getByName("2001:db8::1"));
+        assertThatRow(rows.get(0))
+                .hasInetAddress("ipv4_val", InetAddress.getByName("192.168.1.1"))
+                .hasInetAddress("ipv6_val", InetAddress.getByName("2001:db8::1"));
     }
 
     @Test
@@ -234,7 +229,7 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat((UUID) rows.get(0).get("uuid_val")).isEqualTo(UUID.fromString("61f0c404-5cb3-11e7-907b-a6006ad3dba0"));
+        assertThatRow(rows.get(0)).hasUuid("uuid_val", UUID.fromString("61f0c404-5cb3-11e7-907b-a6006ad3dba0"));
     }
 
     @Test
@@ -248,7 +243,7 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat((Map<Object, Object>) rows.getFirst().get("map_val")).containsExactly(entry("a", 1), entry("b", 2));
+        assertThatRow(rows.get(0)).hasMap("map_val", entry("a", 1), entry("b", 2));
     }
 
     @Test
@@ -262,7 +257,7 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat((Object[]) rows.getFirst().get("tuple_val")).containsExactly("hello", 42);
+        assertThatRow(rows.get(0)).hasTuple("tuple_val", "hello", 42);
     }
 
     @Test
@@ -277,12 +272,10 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat(rows.getFirst().get("enum8_val")).hasToString("a");
-        assertThat(rows.getFirst().get("enum16_val")).hasToString("y");
+        assertThatRow(rows.get(0)).hasEnumName("enum8_val", "a").hasEnumName("enum16_val", "y");
     }
 
     @Test
-    @SuppressWarnings("unchecked")
     void shouldDecodeArrayType() {
         // given
         execute("CREATE TABLE array_types (id UInt32, array_val Array(Int32)) ENGINE = MergeTree ORDER BY id");
@@ -293,6 +286,6 @@ class RealWorldTableAgainstRealClickHouseTest implements RealClickHouseQueryAbil
 
         // then
         assertThat(rows).hasSize(1);
-        assertThat((List<Integer>) rows.getFirst().get("array_val")).containsExactly(10, 20, 30);
+        assertThatRow(rows.get(0)).hasList("array_val", 10, 20, 30);
     }
 }
