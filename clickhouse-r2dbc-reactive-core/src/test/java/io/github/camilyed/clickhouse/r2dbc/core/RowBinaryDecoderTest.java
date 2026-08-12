@@ -40,4 +40,19 @@ class RowBinaryDecoderTest {
     // then
     assertThat((List<Integer>) row.get("arr")).containsExactly(10, 20, 30);
   }
+
+  @Test
+  void shouldExposeColumnSchemaAlongsideDecodedRows() {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.selectOneRowBinaryWithNamesAndTypes()));
+
+    // when
+    final DecodedResult result = RowBinaryDecoder.decode(source).block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(result.columns()).containsExactly(new ColumnDescriptor("1", "UInt8"));
+    // and
+    assertThat(result.rows().blockFirst(Duration.ofSeconds(5))).containsEntry("1", (short) 1);
+  }
 }

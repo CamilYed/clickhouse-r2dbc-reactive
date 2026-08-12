@@ -2,12 +2,17 @@ package io.github.camilyed.clickhouse.r2dbc.core;
 
 import com.clickhouse.client.api.data_formats.RowBinaryWithNamesAndTypesFormatReader;
 import com.clickhouse.client.api.data_formats.internal.BinaryStreamReader;
+import com.clickhouse.client.api.metadata.TableSchema;
 import com.clickhouse.client.api.query.QuerySettings;
+import com.clickhouse.data.ClickHouseColumn;
 import java.nio.ByteBuffer;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.SynchronousSink;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Decodes a {@code RowBinaryWithNamesAndTypes} response body into rows.
@@ -37,6 +42,41 @@ public final class RowBinaryDecoder {
   /** Decodes {@code source} into rows keyed by column name, in wire order. */
   public static Flux<Map<String, Object>> decodeRows(final Flux<ByteBuffer> source) {
     return Flux.generate(() -> newReader(source), RowBinaryDecoder::emitNextRow);
+  }
+
+  /**
+   * Decodes {@code source} into its column schema and row stream together, from one reader
+   * instance and one subscription to {@code source} — unlike {@link #decodeRows}, which discards
+   * the schema client-v2 already reads off the wire before the first row.
+   *
+   * <p>Constructing the reader blocks (it eagerly reads the {@code RowBinaryWithNamesAndTypes}
+   * header — see {@link ListDecodingRowBinaryReader}), so that construction runs on {@link
+   * Schedulers#boundedElastic()}, never on the caller's thread. For a real transport that thread
+   * is Reactor Netty's event loop; blocking it here would stall every other query sharing it.
+   */
+  public static Mono<DecodedResult> decode(final Flux<ByteBuffer> source) {
+    return Mono.fromCallable(() -> newReader(source))
+        .subscribeOn(Schedulers.boundedElastic())
+        .map(
+            reader ->
+                new DecodedResult(
+                    columnsOf(reader), Flux.generate(() -> reader, RowBinaryDecoder::emitNextRow)));
+  }
+
+  private static List<ColumnDescriptor> columnsOf(
+      final RowBinaryWithNamesAndTypesFormatReader reader) {
+    // A genuinely empty response body (e.g. a DDL statement, which never sends the
+    // RowBinaryWithNamesAndTypes header at all) leaves the reader's schema null rather than an
+    // empty TableSchema — reader.getSchema().getColumns() would NPE for that case otherwise.
+    final TableSchema schema = reader.getSchema();
+    if (schema == null) {
+      return List.of();
+    }
+    return schema.getColumns().stream().map(RowBinaryDecoder::toColumnDescriptor).toList();
+  }
+
+  private static ColumnDescriptor toColumnDescriptor(final ClickHouseColumn column) {
+    return new ColumnDescriptor(column.getColumnName(), column.getOriginalTypeName());
   }
 
   private static RowBinaryWithNamesAndTypesFormatReader newReader(final Flux<ByteBuffer> source) {
