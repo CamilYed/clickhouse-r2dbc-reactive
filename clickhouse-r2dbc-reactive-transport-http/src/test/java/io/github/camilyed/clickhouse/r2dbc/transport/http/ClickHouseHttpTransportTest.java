@@ -290,4 +290,24 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
         assertThat(((ServerException) thrown).getCode()).isEqualTo(60);
         assertThat(thrown.getMessage()).contains(errorBody);
     }
+
+    @Test
+    void shouldAuthenticateWithTheClickHouseUserAndKeyHeaderPairWhenConfigured() {
+        // given
+        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+        // when
+        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+            final var transport = new ClickHouseHttpTransport(server.baseUrl(), Authentication.userKey("alice", "secret-key"));
+
+            transport.query(ClickHouseQuery.of("SELECT 1"))
+                    .aggregate()
+                    .asByteArray()
+                    .block(Duration.ofSeconds(5));
+
+            // then
+            assertThat(server.receivedHeader("X-ClickHouse-User")).isEqualTo("alice");
+            assertThat(server.receivedHeader("X-ClickHouse-Key")).isEqualTo("secret-key");
+        }
+    }
 }

@@ -24,16 +24,24 @@ public final class ClickHouseHttpTransport {
     private final Authentication authentication;
 
     public ClickHouseHttpTransport(final String baseUrl) {
-        this(baseUrl, new Authentication.None(), ConnectionProvider.create("clickhouse-http-transport"));
+        this(baseUrl, Authentication.none(), ConnectionProvider.create("clickhouse-http-transport"));
     }
 
     public ClickHouseHttpTransport(final String baseUrl, final int maxConnections) {
-        this(baseUrl, new Authentication.None(), ConnectionProvider.create("clickhouse-http-transport", maxConnections));
+        this(baseUrl, Authentication.none(), ConnectionProvider.create("clickhouse-http-transport", maxConnections));
     }
 
     /** Authenticates every request with HTTP Basic auth, as required by a password-protected ClickHouse server. */
     public ClickHouseHttpTransport(final String baseUrl, final String user, final String password) {
-        this(baseUrl, new Authentication.Basic(user, password), ConnectionProvider.create("clickhouse-http-transport"));
+        this(baseUrl, Authentication.basic(user, password), ConnectionProvider.create("clickhouse-http-transport"));
+    }
+
+    /**
+     * Authenticates every request using the given {@link Authentication} mode — the general entry
+     * point for auth modes beyond plain HTTP Basic (e.g. {@link Authentication#userKey}).
+     */
+    public ClickHouseHttpTransport(final String baseUrl, final Authentication authentication) {
+        this(baseUrl, authentication, ConnectionProvider.create("clickhouse-http-transport"));
     }
 
     private ClickHouseHttpTransport(
