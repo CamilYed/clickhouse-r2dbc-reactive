@@ -65,11 +65,11 @@ public final class ClickHouseRowAssert extends AbstractAssert<ClickHouseRowAsser
         return this;
     }
 
-    /** Asserts {@code column} is a decoded {@code Map} value, containing exactly {@code expected} (any order). */
+    /** Asserts {@code column} is a decoded {@code Map} value, containing exactly {@code expected} entries. */
     @SuppressWarnings("unchecked")
     public ClickHouseRowAssert hasMap(final String column, final Map.Entry<?, ?>... expected) {
         isNotNull();
-        assertThat((Map<Object, Object>) actual.get(column)).as("column '%s'", column).containsExactlyInAnyOrder(expected);
+        assertThat((Map<Object, Object>) actual.get(column)).as("column '%s'", column).containsExactly(expected);
         return this;
     }
 
