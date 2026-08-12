@@ -13,81 +13,90 @@ import reactor.test.StepVerifier;
 
 class ClickHouseConnectionTest {
 
-    // No network call happens during construction or in any assertion below - ClickHouseHttpTransport
-    // configures a lazy HttpClient and none of these tests execute a query, so an unreachable
-    // address is safe and keeps this test hermetic (see CLAUDE.md: unit tests, no containers).
-    private final ClickHouseConnection connection =
-            new ClickHouseConnection(new ClickHouseHttpTransport("http://localhost:1"));
+  // No network call happens during construction or in any assertion below - ClickHouseHttpTransport
+  // configures a lazy HttpClient and none of these tests execute a query, so an unreachable
+  // address is safe and keeps this test hermetic (see CLAUDE.md: unit tests, no containers).
+  private final ClickHouseConnection connection =
+      new ClickHouseConnection(new ClickHouseHttpTransport("http://localhost:1"));
 
-    @Test
-    void shouldAlwaysBeInAutoCommitMode() {
-        // when
-        final boolean autoCommit = connection.isAutoCommit();
+  @Test
+  void shouldAlwaysBeInAutoCommitMode() {
+    // when
+    final boolean autoCommit = connection.isAutoCommit();
 
-        // then
-        assertThat(autoCommit).isTrue();
-    }
+    // then
+    assertThat(autoCommit).isTrue();
+  }
 
-    @Test
-    void shouldReportClickHouseAsTheDatabaseProduct() {
-        // when
-        final String name = connection.getMetadata().getDatabaseProductName();
+  @Test
+  void shouldReportClickHouseAsTheDatabaseProduct() {
+    // when
+    final String name = connection.getMetadata().getDatabaseProductName();
 
-        // then
-        assertThat(name).isEqualTo("ClickHouse");
-    }
+    // then
+    assertThat(name).isEqualTo("ClickHouse");
+  }
 
-    @Test
-    void shouldRejectCreatingAStatementWithoutSql() {
-        // when / then
-        assertThatThrownBy(() -> connection.createStatement(null)).isInstanceOf(IllegalArgumentException.class);
-    }
+  @Test
+  void shouldRejectCreatingAStatementWithoutSql() {
+    // when / then
+    assertThatThrownBy(() -> connection.createStatement(null))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
 
-    @Test
-    void shouldRejectStartingATransaction() {
-        // when / then
-        StepVerifier.create(connection.beginTransaction()).expectError(UnsupportedOperationException.class).verify();
-    }
+  @Test
+  void shouldRejectStartingATransaction() {
+    // when / then
+    StepVerifier.create(connection.beginTransaction())
+        .expectError(UnsupportedOperationException.class)
+        .verify();
+  }
 
-    @Test
-    void shouldTreatReleasingASavepointAsANoOp() {
-        // when / then
-        StepVerifier.create(connection.releaseSavepoint("sp1")).verifyComplete();
-    }
+  @Test
+  void shouldTreatReleasingASavepointAsANoOp() {
+    // when / then
+    StepVerifier.create(connection.releaseSavepoint("sp1")).verifyComplete();
+  }
 
-    @Test
-    void shouldRejectDisablingAutoCommit() {
-        // when / then
-        StepVerifier.create(connection.setAutoCommit(false)).expectError(UnsupportedOperationException.class).verify();
-    }
+  @Test
+  void shouldRejectDisablingAutoCommit() {
+    // when / then
+    StepVerifier.create(connection.setAutoCommit(false))
+        .expectError(UnsupportedOperationException.class)
+        .verify();
+  }
 
-    @Test
-    void shouldAcceptEnablingAutoCommitAsANoOp() {
-        // when / then
-        StepVerifier.create(connection.setAutoCommit(true)).verifyComplete();
-    }
+  @Test
+  void shouldAcceptEnablingAutoCommitAsANoOp() {
+    // when / then
+    StepVerifier.create(connection.setAutoCommit(true)).verifyComplete();
+  }
 
-    @Test
-    void shouldReportReadCommittedAsTheIsolationLevel() {
-        // when
-        final IsolationLevel level = connection.getTransactionIsolationLevel();
+  @Test
+  void shouldReportReadUncommittedAsTheIsolationLevel() {
+    // when
+    final IsolationLevel level = connection.getTransactionIsolationLevel();
 
-        // then
-        assertThat(level).isEqualTo(IsolationLevel.READ_COMMITTED);
-    }
+    // then
+    assertThat(level).isEqualTo(IsolationLevel.READ_UNCOMMITTED);
+  }
 
-    @Test
-    void shouldPassLocalValidationWhenOpen() {
-        // when / then
-        StepVerifier.create(connection.validate(ValidationDepth.LOCAL)).expectNext(true).verifyComplete();
-    }
+  @Test
+  void shouldPassLocalValidationWhenOpen() {
+    // when / then
+    StepVerifier.create(connection.validate(ValidationDepth.LOCAL))
+        .expectNext(true)
+        .verifyComplete();
+  }
 
-    @Test
-    void shouldFailLocalValidationAfterClose() {
-        // given
-        Mono.from(connection.close()).block(Duration.ofSeconds(1));
+  @Test
+  void shouldFailLocalValidationAfterClose() {
+    // given
+    Mono.from(connection.close()).block(Duration.ofSeconds(1));
 
-        // when / then
-        StepVerifier.create(connection.validate(ValidationDepth.LOCAL)).expectNext(false).verifyComplete();
-    }
+    // when / then
+    StepVerifier.create(connection.validate(ValidationDepth.LOCAL))
+        .expectNext(false)
+        .verifyComplete();
+  }
 }

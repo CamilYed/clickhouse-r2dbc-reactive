@@ -17,136 +17,154 @@ import reactor.core.publisher.Mono;
 /**
  * A logical connection to ClickHouse over its HTTP interface.
  *
- * <p>ClickHouse's HTTP interface has no persistent per-connection session and no ACID
- * transactions in the sense R2DBC's {@code Connection} contract assumes — every query is an
- * independent HTTP request over a shared, pooled {@link ClickHouseHttpTransport}. This class is
- * therefore always in auto-commit mode, and every transaction/savepoint-related method either
- * fails clearly with {@link UnsupportedOperationException} or, where the R2DBC spec explicitly
- * allows it, no-ops — see each method's Javadoc for which. This is a deliberate design decision
- * (see ROADMAP.md's Phase 3 notes on "explicit unsupported-transaction-semantics handling"), not
- * an oversight: a caller that assumes real transactional guarantees here would be wrong to, and
- * this class fails loudly rather than silently pretending otherwise.
+ * <p>Checked directly against ClickHouse's own "Transactional (ACID) support" docs
+ * (clickhouse.com/docs/guides/developer/transactional), not assumed: outside of ClickHouse's own
+ * {@code BEGIN TRANSACTION}/{@code COMMIT}/{@code ROLLBACK} feature, every statement is its own
+ * atomic unit and the client sees <b>read uncommitted</b> isolation — snapshot isolation only
+ * applies to clients that are themselves inside one of those transactions. That transaction
+ * feature is explicitly <b>experimental</b>, requires ClickHouse Keeper/ZooKeeper, only works with
+ * the (default) Atomic database engine and non-replicated MergeTree tables, is off by default
+ * (needs {@code allow_experimental_transactions=1} server-side), and — as far as this driver has
+ * verified — its documented examples all go through {@code clickhouse client} / the native TCP
+ * protocol, not the stateless HTTP interface this driver uses; whether {@code BEGIN}/{@code COMMIT}
+ * even work correctly over HTTP without a sticky, connection-affine session is an open question
+ * this driver has not tried to answer. Given all of that, this class does not implement
+ * transactions: every transaction/savepoint-related method either fails clearly with {@link
+ * UnsupportedOperationException} or, where the R2DBC spec explicitly allows it, no-ops — see each
+ * method's Javadoc for which. A caller that assumes real transactional guarantees here would be
+ * wrong to, and this class fails loudly rather than silently pretending otherwise.
  *
  * <p>{@link #close()} only marks this logical connection closed; it does not tear down {@code
  * transport}, since the same transport (and its underlying connection pool) is shared by every
  * {@link Connection} a {@link ClickHouseConnectionFactory} produces.
  */
-final class ClickHouseConnection implements Connection {
+public final class ClickHouseConnection implements Connection {
 
-    private final ClickHouseHttpTransport transport;
-    private final AtomicBoolean closed = new AtomicBoolean(false);
+  private final ClickHouseHttpTransport transport;
+  private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    ClickHouseConnection(final ClickHouseHttpTransport transport) {
-        this.transport = transport;
+  ClickHouseConnection(final ClickHouseHttpTransport transport) {
+    this.transport = transport;
+  }
+
+  @Override
+  public Publisher<Void> beginTransaction() {
+    return Mono.error(
+        new UnsupportedOperationException("ClickHouse does not support transactions"));
+  }
+
+  @Override
+  public Publisher<Void> beginTransaction(final TransactionDefinition definition) {
+    return Mono.error(
+        new UnsupportedOperationException("ClickHouse does not support transactions"));
+  }
+
+  @Override
+  public Publisher<Void> close() {
+    return Mono.fromRunnable(() -> closed.set(true));
+  }
+
+  @Override
+  public Publisher<Void> commitTransaction() {
+    return Mono.error(
+        new UnsupportedOperationException("ClickHouse does not support transactions"));
+  }
+
+  @Override
+  public Batch createBatch() {
+    throw new UnsupportedOperationException("Batches are not supported yet");
+  }
+
+  @Override
+  public Publisher<Void> createSavepoint(final String name) {
+    return Mono.error(new UnsupportedOperationException("ClickHouse does not support savepoints"));
+  }
+
+  @Override
+  public Statement createStatement(final String sql) {
+    if (sql == null) {
+      throw new IllegalArgumentException("sql must not be null");
     }
+    return new ClickHouseStatement(transport, sql);
+  }
 
-    @Override
-    public Publisher<Void> beginTransaction() {
-        return Mono.error(new UnsupportedOperationException("ClickHouse does not support transactions"));
-    }
+  @Override
+  public boolean isAutoCommit() {
+    return true;
+  }
 
-    @Override
-    public Publisher<Void> beginTransaction(final TransactionDefinition definition) {
-        return Mono.error(new UnsupportedOperationException("ClickHouse does not support transactions"));
-    }
+  @Override
+  public ConnectionMetadata getMetadata() {
+    return ClickHouseConnectionMetadata.INSTANCE;
+  }
 
-    @Override
-    public Publisher<Void> close() {
-        return Mono.fromRunnable(() -> closed.set(true));
-    }
+  /**
+   * Always {@link IsolationLevel#READ_UNCOMMITTED} — ClickHouse's own docs state plainly that
+   * clients outside of an explicit transaction (which this connection never starts, see the class
+   * Javadoc) have read uncommitted isolation; snapshot isolation is only for clients inside one.
+   */
+  @Override
+  public IsolationLevel getTransactionIsolationLevel() {
+    return IsolationLevel.READ_UNCOMMITTED;
+  }
 
-    @Override
-    public Publisher<Void> commitTransaction() {
-        return Mono.error(new UnsupportedOperationException("ClickHouse does not support transactions"));
-    }
+  @Override
+  public Publisher<Void> releaseSavepoint(final String name) {
+    // The R2DBC spec explicitly allows this: "Calling this for drivers not supporting
+    // savepoint release results in a no-op."
+    return Mono.empty();
+  }
 
-    @Override
-    public Batch createBatch() {
-        throw new UnsupportedOperationException("Batches are not supported yet");
-    }
+  @Override
+  public Publisher<Void> rollbackTransaction() {
+    return Mono.error(
+        new UnsupportedOperationException("ClickHouse does not support transactions"));
+  }
 
-    @Override
-    public Publisher<Void> createSavepoint(final String name) {
-        return Mono.error(new UnsupportedOperationException("ClickHouse does not support savepoints"));
-    }
+  @Override
+  public Publisher<Void> rollbackTransactionToSavepoint(final String name) {
+    return Mono.error(new UnsupportedOperationException("ClickHouse does not support savepoints"));
+  }
 
-    @Override
-    public Statement createStatement(final String sql) {
-        if (sql == null) {
-            throw new IllegalArgumentException("sql must not be null");
-        }
-        return new ClickHouseStatement(transport, sql);
+  @Override
+  public Publisher<Void> setAutoCommit(final boolean autoCommit) {
+    if (!autoCommit) {
+      return Mono.error(
+          new UnsupportedOperationException("ClickHouse connections are always auto-commit"));
     }
+    return Mono.empty();
+  }
 
-    @Override
-    public boolean isAutoCommit() {
-        return true;
-    }
+  @Override
+  public Publisher<Void> setLockWaitTimeout(final Duration timeout) {
+    return Mono.error(new UnsupportedOperationException("Lock wait timeout is not supported yet"));
+  }
 
-    @Override
-    public ConnectionMetadata getMetadata() {
-        return ClickHouseConnectionMetadata.INSTANCE;
-    }
+  @Override
+  public Publisher<Void> setStatementTimeout(final Duration timeout) {
+    return Mono.error(new UnsupportedOperationException("Statement timeout is not supported yet"));
+  }
 
-    @Override
-    public IsolationLevel getTransactionIsolationLevel() {
-        return IsolationLevel.READ_COMMITTED;
-    }
+  @Override
+  public Publisher<Void> setTransactionIsolationLevel(final IsolationLevel isolationLevel) {
+    return Mono.error(
+        new UnsupportedOperationException(
+            "ClickHouse does not support configurable isolation levels"));
+  }
 
-    @Override
-    public Publisher<Void> releaseSavepoint(final String name) {
-        // The R2DBC spec explicitly allows this: "Calling this for drivers not supporting
-        // savepoint release results in a no-op."
-        return Mono.empty();
+  @Override
+  public Publisher<Boolean> validate(final ValidationDepth depth) {
+    if (closed.get()) {
+      return Mono.just(false);
     }
-
-    @Override
-    public Publisher<Void> rollbackTransaction() {
-        return Mono.error(new UnsupportedOperationException("ClickHouse does not support transactions"));
+    if (depth == ValidationDepth.LOCAL) {
+      return Mono.just(true);
     }
-
-    @Override
-    public Publisher<Void> rollbackTransactionToSavepoint(final String name) {
-        return Mono.error(new UnsupportedOperationException("ClickHouse does not support savepoints"));
-    }
-
-    @Override
-    public Publisher<Void> setAutoCommit(final boolean autoCommit) {
-        if (!autoCommit) {
-            return Mono.error(
-                    new UnsupportedOperationException("ClickHouse connections are always auto-commit"));
-        }
-        return Mono.empty();
-    }
-
-    @Override
-    public Publisher<Void> setLockWaitTimeout(final Duration timeout) {
-        return Mono.error(new UnsupportedOperationException("Lock wait timeout is not supported yet"));
-    }
-
-    @Override
-    public Publisher<Void> setStatementTimeout(final Duration timeout) {
-        return Mono.error(new UnsupportedOperationException("Statement timeout is not supported yet"));
-    }
-
-    @Override
-    public Publisher<Void> setTransactionIsolationLevel(final IsolationLevel isolationLevel) {
-        return Mono.error(
-                new UnsupportedOperationException("ClickHouse does not support configurable isolation levels"));
-    }
-
-    @Override
-    public Publisher<Boolean> validate(final ValidationDepth depth) {
-        if (closed.get()) {
-            return Mono.just(false);
-        }
-        if (depth == ValidationDepth.LOCAL) {
-            return Mono.just(true);
-        }
-        return transport.query(ClickHouseQuery.of("SELECT 1"))
-                .aggregate()
-                .asByteArray()
-                .thenReturn(true)
-                .onErrorReturn(false);
-    }
+    return transport
+        .query(ClickHouseQuery.of("SELECT 1"))
+        .aggregate()
+        .asByteArray()
+        .thenReturn(true)
+        .onErrorReturn(false);
+  }
 }
