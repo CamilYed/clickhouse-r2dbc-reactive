@@ -11,7 +11,8 @@ class ClickHouseBatchTest {
 
   // No network call happens in any assertion below - add() only stores sql, so an unreachable
   // address keeps this test hermetic.
-  private final ClickHouseHttpTransport transport = new ClickHouseHttpTransport("http://localhost:1");
+  private final ClickHouseHttpTransport transport =
+      new ClickHouseHttpTransport("http://localhost:1");
 
   private final ClickHouseBatch batch = new ClickHouseBatch(transport);
 

@@ -16,8 +16,8 @@ import reactor.core.publisher.Flux;
  * ClickHouseConnection#createBatch()}.
  *
  * <p>Unlike {@link ClickHouseStatement}, a batched statement carries no bound parameters — {@link
- * #add(String)} takes a complete, literal SQL string, run exactly as given. {@link #execute()}
- * runs every added statement sequentially, one full round trip per statement in the order {@link
+ * #add(String)} takes a complete, literal SQL string, run exactly as given. {@link #execute()} runs
+ * every added statement sequentially, one full round trip per statement in the order {@link
  * #add(String)} was called, and emits one {@link Result} per statement in that same order — later
  * statements are not started until the previous one's request has been sent, which matters for a
  * batch like {@code CREATE TABLE ...} followed by {@code INSERT INTO ...} against it.

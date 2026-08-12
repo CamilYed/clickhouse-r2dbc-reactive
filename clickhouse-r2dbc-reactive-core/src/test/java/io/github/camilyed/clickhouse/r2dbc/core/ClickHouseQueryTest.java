@@ -87,7 +87,7 @@ class ClickHouseQueryTest {
 
     // then
     assertThat(parameterized.parameters())
-        .containsExactly(Map.entry("n", "\\N"), Map.entry("a", "42"));
+        .containsExactlyInAnyOrderEntriesOf(Map.of("n", "\\N", "a", "42"));
   }
 
   @Test

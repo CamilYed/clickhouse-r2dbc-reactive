@@ -11,8 +11,8 @@ import reactor.core.publisher.Flux;
 
 /**
  * Proves {@link ClickHouseBatch#execute()} runs several standalone statements against a real
- * ClickHouse server, in order, and returns one {@link io.r2dbc.spi.Result} per statement — not
- * just that the pieces compile against hermetic fixtures (already covered by {@link
+ * ClickHouse server, in order, and returns one {@link io.r2dbc.spi.Result} per statement — not just
+ * that the pieces compile against hermetic fixtures (already covered by {@link
  * ClickHouseBatchTest}).
  */
 class ClickHouseBatchAgainstRealClickHouseTest extends BaseClickHouseIntegrationTest {
