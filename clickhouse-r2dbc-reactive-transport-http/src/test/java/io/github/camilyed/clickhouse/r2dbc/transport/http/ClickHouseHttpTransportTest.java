@@ -18,296 +18,346 @@ import reactor.test.StepVerifier;
 
 class ClickHouseHttpTransportTest implements ToByteArrayAbility {
 
-    @Test
-    void shouldReturnTheConfiguredResponseBody() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+  @Test
+  void shouldReturnTheConfiguredResponseBody() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
 
-        // when
-        final byte[] receivedBody;
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+    // when
+    final byte[] receivedBody;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
 
-            receivedBody = transport.query(ClickHouseQuery.of("SELECT 1"))
-                    .aggregate()
-                    .asByteArray()
-                    .block(Duration.ofSeconds(5));
-        }
-
-        // then
-        assertThat(receivedBody).isEqualTo(configuredBody);
+      receivedBody =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .aggregate()
+              .asByteArray()
+              .block(Duration.ofSeconds(5));
     }
 
-    @Test
-    void shouldNotSendTheRequestBeforeSubscription() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    // then
+    assertThat(receivedBody).isEqualTo(configuredBody);
+  }
 
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+  @Test
+  void shouldNotSendTheRequestBeforeSubscription() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
 
-            // when
-            transport.query(ClickHouseQuery.of("SELECT 1"));
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
 
-            // then
-            await().during(Duration.ofMillis(200))
-                    .atMost(Duration.ofMillis(500))
-                    .untilAsserted(() -> assertThat(server.hasReceivedRequest()).isFalse());
-        }
+      // when
+      transport.query(ClickHouseQuery.of("SELECT 1"));
+
+      // then
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(Duration.ofMillis(500))
+          .untilAsserted(() -> assertThat(server.hasReceivedRequest()).isFalse());
+    }
+  }
+
+  @Test
+  void shouldEmitEachChunkSeparatelyInsteadOfAggregating() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+    final byte[] secondChunk = "second-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    final List<byte[]> receivedChunks;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWithChunks(firstChunk, secondChunk)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      receivedChunks =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .map(this::toByteArray)
+              .collectList()
+              .block(Duration.ofSeconds(5));
     }
 
-    @Test
-    void shouldEmitEachChunkSeparatelyInsteadOfAggregating() {
-        // given
-        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
-        final byte[] secondChunk = "second-chunk".getBytes(StandardCharsets.UTF_8);
+    // then
+    assertThat(receivedChunks).containsExactly(firstChunk, secondChunk);
+  }
 
-        // when
-        final List<byte[]> receivedChunks;
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWithChunks(firstChunk, secondChunk)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+  @Test
+  void shouldCloseTheConnectionWhenTheSubscriptionIsCancelled() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
 
-            receivedChunks = transport.query(ClickHouseQuery.of("SELECT 1"))
-                    .map(this::toByteArray)
-                    .collectList()
-                    .block(Duration.ofSeconds(5));
-        }
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
 
-        // then
-        assertThat(receivedChunks).containsExactly(firstChunk, secondChunk);
+      transport.query(ClickHouseQuery.of("SELECT 1")).take(1).blockLast(Duration.ofSeconds(5));
+
+      // then
+      await()
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.hasClosedConnection()).isTrue());
+    }
+  }
+
+  @Test
+  void shouldStillReturnTheBodyWhenHeadersAreDelayed() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    final byte[] receivedBody;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWithDelay(
+            configuredBody, Duration.ofMillis(300))) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      receivedBody =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .aggregate()
+              .asByteArray()
+              .block(Duration.ofSeconds(5));
     }
 
-    @Test
-    void shouldCloseTheConnectionWhenTheSubscriptionIsCancelled() {
-        // given
-        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+    // then
+    assertThat(receivedBody).isEqualTo(configuredBody);
+  }
 
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+  @Test
+  void shouldStillReturnTheBodyWhenBodyIsDelayedAfterHeaders() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
 
-            transport.query(ClickHouseQuery.of("SELECT 1")).take(1).blockLast(Duration.ofSeconds(5));
+    // when
+    final byte[] receivedBody;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWithBodyDelay(
+            configuredBody, Duration.ofMillis(300))) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
 
-            // then
-            await().atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(server.hasClosedConnection()).isTrue());
-        }
+      receivedBody =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .aggregate()
+              .asByteArray()
+              .block(Duration.ofSeconds(5));
     }
 
-    @Test
-    void shouldStillReturnTheBodyWhenHeadersAreDelayed() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    // then
+    assertThat(receivedBody).isEqualTo(configuredBody);
+  }
 
-        // when
-        final byte[] receivedBody;
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWithDelay(configuredBody, Duration.ofMillis(300))) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+  @Test
+  void shouldNotDeliverDataBeforeTheSubscriberRequestsIt() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+    final byte[] secondChunk = "second-chunk".getBytes(StandardCharsets.UTF_8);
 
-            receivedBody = transport.query(ClickHouseQuery.of("SELECT 1"))
-                    .aggregate()
-                    .asByteArray()
-                    .block(Duration.ofSeconds(5));
-        }
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWithChunks(firstChunk, secondChunk)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
 
-        // then
-        assertThat(receivedBody).isEqualTo(configuredBody);
+      // then
+      StepVerifier.create(transport.query(ClickHouseQuery.of("SELECT 1")).map(this::toByteArray), 0)
+          .expectSubscription()
+          .thenRequest(1)
+          .assertNext(chunk -> assertThat(chunk).isEqualTo(firstChunk))
+          .thenRequest(1)
+          .assertNext(chunk -> assertThat(chunk).isEqualTo(secondChunk))
+          .verifyComplete();
+    }
+  }
+
+  @Test
+  void shouldFailWithinItsOwnTimeoutWhenTheServerNeverResponds() {
+    // given
+    try (final var server = ControlledClickHouseServer.startAcceptingButNeverResponding()) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+      final Instant start = Instant.now();
+
+      // when
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT 1"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(10)));
+
+      // then
+      assertThat(thrown).isNotNull();
+      assertThat(Duration.between(start, Instant.now())).isLessThan(Duration.ofSeconds(5));
+    }
+  }
+
+  @Test
+  void shouldSignalAnErrorWhenTheConnectionIsResetMidResponse() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingThenResettingConnection(
+            firstChunk, Duration.ofMillis(200))) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT 1"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(5)));
+
+      // then
+      assertThat(thrown).isNotNull();
+    }
+  }
+
+  @Test
+  void shouldNotStartASecondRequestUntilAConnectionIsFree() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl(), 1);
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+
+      // then
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.activeConnectionCount()).isEqualTo(1));
+    }
+  }
+
+  @Test
+  void shouldNotReachTheServerWhenAQueuedRequestIsCancelledBeforeAConnectionIsAcquired() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl(), 1);
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
+
+      final var queuedSubscription = transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      queuedSubscription.dispose();
+
+      // then
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.activeConnectionCount()).isEqualTo(1));
+    }
+  }
+
+  @Test
+  void shouldNotReachTheServerWhenCancelledImmediatelyAfterSubscribing() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe().dispose();
+
+      // then
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(Duration.ofMillis(500))
+          .untilAsserted(() -> assertThat(server.hasReceivedRequest()).isFalse());
+    }
+  }
+
+  @Test
+  void shouldSendTheQueryIdAsARequestHeader() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport
+          .query(ClickHouseQuery.of("SELECT 1", "my-query-id"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedQueryId()).isEqualTo("my-query-id");
+    }
+  }
+
+  @Test
+  void shouldSignalAServerErrorWhenTheExceptionCodeHeaderIsPresent() {
+    // given
+    final String errorBody = "Code: 60. DB::Exception: Table default.missing doesn't exist";
+
+    // when
+    final Throwable thrown;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithClickHouseError(60, errorBody, 404)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT * FROM missing"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(5)));
     }
 
-    @Test
-    void shouldStillReturnTheBodyWhenBodyIsDelayedAfterHeaders() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    // then
+    assertThat(thrown).isInstanceOf(ServerException.class);
+    assertThat(((ServerException) thrown).getCode()).isEqualTo(60);
+    assertThat(thrown.getMessage()).contains(errorBody);
+  }
 
-        // when
-        final byte[] receivedBody;
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWithBodyDelay(configuredBody, Duration.ofMillis(300))) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+  @Test
+  void shouldAuthenticateWithTheClickHouseUserAndKeyHeaderPairWhenConfigured() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
 
-            receivedBody = transport.query(ClickHouseQuery.of("SELECT 1"))
-                    .aggregate()
-                    .asByteArray()
-                    .block(Duration.ofSeconds(5));
-        }
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(), Authentication.userKey("alice", "secret-key"));
 
-        // then
-        assertThat(receivedBody).isEqualTo(configuredBody);
+      transport
+          .query(ClickHouseQuery.of("SELECT 1"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedHeader("X-ClickHouse-User")).isEqualTo("alice");
+      assertThat(server.receivedHeader("X-ClickHouse-Key")).isEqualTo("secret-key");
     }
-
-    @Test
-    void shouldNotDeliverDataBeforeTheSubscriberRequestsIt() {
-        // given
-        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
-        final byte[] secondChunk = "second-chunk".getBytes(StandardCharsets.UTF_8);
-
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWithChunks(firstChunk, secondChunk)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
-
-            // then
-            StepVerifier.create(transport.query(ClickHouseQuery.of("SELECT 1")).map(this::toByteArray), 0)
-                    .expectSubscription()
-                    .thenRequest(1)
-                    .assertNext(chunk -> assertThat(chunk).isEqualTo(firstChunk))
-                    .thenRequest(1)
-                    .assertNext(chunk -> assertThat(chunk).isEqualTo(secondChunk))
-                    .verifyComplete();
-        }
-    }
-
-    @Test
-    void shouldFailWithinItsOwnTimeoutWhenTheServerNeverResponds() {
-        // given
-        try (final var server = ControlledClickHouseServer.startAcceptingButNeverResponding()) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
-            final Instant start = Instant.now();
-
-            // when
-            final Throwable thrown = catchThrowable(() ->
-                    transport.query(ClickHouseQuery.of("SELECT 1")).aggregate().asByteArray().block(Duration.ofSeconds(10)));
-
-            // then
-            assertThat(thrown).isNotNull();
-            assertThat(Duration.between(start, Instant.now())).isLessThan(Duration.ofSeconds(5));
-        }
-    }
-
-    @Test
-    void shouldSignalAnErrorWhenTheConnectionIsResetMidResponse() {
-        // given
-        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
-
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingThenResettingConnection(firstChunk, Duration.ofMillis(200))) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
-
-            final Throwable thrown = catchThrowable(() ->
-                    transport.query(ClickHouseQuery.of("SELECT 1")).aggregate().asByteArray().block(Duration.ofSeconds(5)));
-
-            // then
-            assertThat(thrown).isNotNull();
-        }
-    }
-
-    @Test
-    void shouldNotStartASecondRequestUntilAConnectionIsFree() {
-        // given
-        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
-
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl(), 1);
-
-            transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
-            await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
-
-            transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
-
-            // then
-            await().during(Duration.ofMillis(300))
-                    .atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(server.activeConnectionCount()).isEqualTo(1));
-        }
-    }
-
-    @Test
-    void shouldNotReachTheServerWhenAQueuedRequestIsCancelledBeforeAConnectionIsAcquired() {
-        // given
-        final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
-
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl(), 1);
-
-            transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
-            await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
-
-            final var queuedSubscription = transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
-            queuedSubscription.dispose();
-
-            // then
-            await().during(Duration.ofMillis(300))
-                    .atMost(Duration.ofSeconds(2))
-                    .untilAsserted(() -> assertThat(server.activeConnectionCount()).isEqualTo(1));
-        }
-    }
-
-    @Test
-    void shouldNotReachTheServerWhenCancelledImmediatelyAfterSubscribing() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
-
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
-
-            transport.query(ClickHouseQuery.of("SELECT 1")).subscribe().dispose();
-
-            // then
-            await().during(Duration.ofMillis(200))
-                    .atMost(Duration.ofMillis(500))
-                    .untilAsserted(() -> assertThat(server.hasReceivedRequest()).isFalse());
-        }
-    }
-
-    @Test
-    void shouldSendTheQueryIdAsARequestHeader() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
-
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
-
-            transport.query(ClickHouseQuery.of("SELECT 1", "my-query-id"))
-                    .aggregate()
-                    .asByteArray()
-                    .block(Duration.ofSeconds(5));
-
-            // then
-            assertThat(server.receivedQueryId()).isEqualTo("my-query-id");
-        }
-    }
-
-    @Test
-    void shouldSignalAServerErrorWhenTheExceptionCodeHeaderIsPresent() {
-        // given
-        final String errorBody = "Code: 60. DB::Exception: Table default.missing doesn't exist";
-
-        // when
-        final Throwable thrown;
-        try (final var server = ControlledClickHouseServer.startRespondingWithClickHouseError(60, errorBody, 404)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl());
-
-            thrown = catchThrowable(() -> transport.query(ClickHouseQuery.of("SELECT * FROM missing"))
-                    .aggregate()
-                    .asByteArray()
-                    .block(Duration.ofSeconds(5)));
-        }
-
-        // then
-        assertThat(thrown).isInstanceOf(ServerException.class);
-        assertThat(((ServerException) thrown).getCode()).isEqualTo(60);
-        assertThat(thrown.getMessage()).contains(errorBody);
-    }
-
-    @Test
-    void shouldAuthenticateWithTheClickHouseUserAndKeyHeaderPairWhenConfigured() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
-
-        // when
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-            final var transport = new ClickHouseHttpTransport(server.baseUrl(), Authentication.userKey("alice", "secret-key"));
-
-            transport.query(ClickHouseQuery.of("SELECT 1"))
-                    .aggregate()
-                    .asByteArray()
-                    .block(Duration.ofSeconds(5));
-
-            // then
-            assertThat(server.receivedHeader("X-ClickHouse-User")).isEqualTo("alice");
-            assertThat(server.receivedHeader("X-ClickHouse-Key")).isEqualTo("secret-key");
-        }
-    }
+  }
 }

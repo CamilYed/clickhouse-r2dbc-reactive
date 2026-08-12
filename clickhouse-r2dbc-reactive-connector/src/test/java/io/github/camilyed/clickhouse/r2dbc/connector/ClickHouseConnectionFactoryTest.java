@@ -9,26 +9,31 @@ import org.junit.jupiter.api.Test;
 
 class ClickHouseConnectionFactoryTest {
 
-    @Test
-    void shouldBuildAFactoryFromOptionsWithoutTouchingTheNetwork() {
-        // given
-        final ConnectionFactoryOptions options =
-                ConnectionFactoryOptions.builder().option(ConnectionFactoryOptions.HOST, "localhost").build();
+  @Test
+  void shouldBuildAFactoryFromOptionsWithoutTouchingTheNetwork() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .build();
 
-        // when
-        final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
 
-        // then
-        assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
-    }
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
 
-    @Test
-    void shouldRejectOptionsWithNoHost() {
-        // given
-        final ConnectionFactoryOptions options =
-                ConnectionFactoryOptions.builder().option(ConnectionFactoryOptions.DRIVER, "clickhouse").build();
+  @Test
+  void shouldRejectOptionsWithNoHost() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.DRIVER, "clickhouse")
+            .build();
 
-        // when / then
-        assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options)).isInstanceOf(NoSuchOptionException.class);
-    }
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(NoSuchOptionException.class);
+  }
 }

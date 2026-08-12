@@ -50,111 +50,111 @@ import reactor.core.publisher.Flux;
  * <h2>Cancellation</h2>
  *
  * {@link #close()} disposes the subscriber, which cancels the upstream subscription — whether
- * nothing has been read yet or a consumer stops early, the source {@code Flux} is torn down
- * instead of left running to completion unread.
+ * nothing has been read yet or a consumer stops early, the source {@code Flux} is torn down instead
+ * of left running to completion unread.
  */
 public final class FluxInputStreamBridge extends InputStream {
 
+  private final BlockingQueue<StreamSignal> queue;
+  private final QueueingSubscriber subscriber;
+
+  private ByteBuffer current = ByteBuffer.allocate(0);
+  private boolean finished;
+
+  private FluxInputStreamBridge(final Flux<ByteBuffer> source, final int demand) {
+    this.queue = new LinkedBlockingQueue<>(demand + 1);
+    this.subscriber = new QueueingSubscriber(queue, demand);
+    source.subscribe(subscriber);
+  }
+
+  /** Subscribes to {@code source} and returns an {@link InputStream} reading its bytes. */
+  public static FluxInputStreamBridge subscribeTo(final Flux<ByteBuffer> source, final int demand) {
+    return new FluxInputStreamBridge(source, demand);
+  }
+
+  @Override
+  public int read() throws IOException {
+    final byte[] singleByte = new byte[1];
+    final int bytesRead = read(singleByte, 0, 1);
+    return bytesRead == -1 ? -1 : singleByte[0] & 0xFF;
+  }
+
+  @Override
+  public int read(final byte[] destination, final int offset, final int length) throws IOException {
+    if (finished) {
+      return -1;
+    }
+    if (!current.hasRemaining() && !fillCurrent()) {
+      return -1;
+    }
+    final int toCopy = Math.min(length, current.remaining());
+    current.get(destination, offset, toCopy);
+    if (!current.hasRemaining()) {
+      subscriber.requestOne();
+    }
+    return toCopy;
+  }
+
+  private boolean fillCurrent() throws IOException {
+    try {
+      final StreamSignal signal = queue.take();
+      return switch (signal) {
+        case StreamSignal.Data(ByteBuffer buffer) -> {
+          current = buffer;
+          yield true;
+        }
+        case StreamSignal.Complete ignored -> {
+          finished = true;
+          yield false;
+        }
+        case StreamSignal.Error(Throwable cause) -> {
+          finished = true;
+          throw new IOException("Upstream Flux signalled an error", cause);
+        }
+      };
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IOException("Interrupted while waiting for data", e);
+    }
+  }
+
+  @Override
+  public void close() {
+    subscriber.dispose();
+  }
+
+  private static final class QueueingSubscriber extends BaseSubscriber<ByteBuffer> {
+
     private final BlockingQueue<StreamSignal> queue;
-    private final QueueingSubscriber subscriber;
+    private final int demand;
 
-    private ByteBuffer current = ByteBuffer.allocate(0);
-    private boolean finished;
-
-    private FluxInputStreamBridge(final Flux<ByteBuffer> source, final int demand) {
-        this.queue = new LinkedBlockingQueue<>(demand + 1);
-        this.subscriber = new QueueingSubscriber(queue, demand);
-        source.subscribe(subscriber);
-    }
-
-    /** Subscribes to {@code source} and returns an {@link InputStream} reading its bytes. */
-    public static FluxInputStreamBridge subscribeTo(final Flux<ByteBuffer> source, final int demand) {
-        return new FluxInputStreamBridge(source, demand);
+    private QueueingSubscriber(final BlockingQueue<StreamSignal> queue, final int demand) {
+      this.queue = queue;
+      this.demand = demand;
     }
 
     @Override
-    public int read() throws IOException {
-        final byte[] singleByte = new byte[1];
-        final int bytesRead = read(singleByte, 0, 1);
-        return bytesRead == -1 ? -1 : singleByte[0] & 0xFF;
+    protected void hookOnSubscribe(final Subscription subscription) {
+      request(demand);
     }
 
     @Override
-    public int read(final byte[] destination, final int offset, final int length) throws IOException {
-        if (finished) {
-            return -1;
-        }
-        if (!current.hasRemaining() && !fillCurrent()) {
-            return -1;
-        }
-        final int toCopy = Math.min(length, current.remaining());
-        current.get(destination, offset, toCopy);
-        if (!current.hasRemaining()) {
-            subscriber.requestOne();
-        }
-        return toCopy;
-    }
-
-    private boolean fillCurrent() throws IOException {
-        try {
-            final StreamSignal signal = queue.take();
-            return switch (signal) {
-                case StreamSignal.Data(ByteBuffer buffer) -> {
-                    current = buffer;
-                    yield true;
-                }
-                case StreamSignal.Complete ignored -> {
-                    finished = true;
-                    yield false;
-                }
-                case StreamSignal.Error(Throwable cause) -> {
-                    finished = true;
-                    throw new IOException("Upstream Flux signalled an error", cause);
-                }
-            };
-        } catch (final InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while waiting for data", e);
-        }
+    protected void hookOnNext(final ByteBuffer value) {
+      queue.add(new StreamSignal.Data(value));
     }
 
     @Override
-    public void close() {
-        subscriber.dispose();
+    protected void hookOnComplete() {
+      queue.add(new StreamSignal.Complete());
     }
 
-    private static final class QueueingSubscriber extends BaseSubscriber<ByteBuffer> {
-
-        private final BlockingQueue<StreamSignal> queue;
-        private final int demand;
-
-        private QueueingSubscriber(final BlockingQueue<StreamSignal> queue, final int demand) {
-            this.queue = queue;
-            this.demand = demand;
-        }
-
-        @Override
-        protected void hookOnSubscribe(final Subscription subscription) {
-            request(demand);
-        }
-
-        @Override
-        protected void hookOnNext(final ByteBuffer value) {
-            queue.add(new StreamSignal.Data(value));
-        }
-
-        @Override
-        protected void hookOnComplete() {
-            queue.add(new StreamSignal.Complete());
-        }
-
-        @Override
-        protected void hookOnError(final Throwable throwable) {
-            queue.add(new StreamSignal.Error(throwable));
-        }
-
-        private void requestOne() {
-            request(1);
-        }
+    @Override
+    protected void hookOnError(final Throwable throwable) {
+      queue.add(new StreamSignal.Error(throwable));
     }
+
+    private void requestOne() {
+      request(1);
+    }
+  }
 }

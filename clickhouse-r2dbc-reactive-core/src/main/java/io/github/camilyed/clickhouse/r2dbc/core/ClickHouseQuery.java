@@ -14,13 +14,13 @@ import java.util.UUID;
  */
 public record ClickHouseQuery(String sql, String queryId) {
 
-    /** A query with a freshly generated {@code query_id}. */
-    public static ClickHouseQuery of(final String sql) {
-        return new ClickHouseQuery(sql, UUID.randomUUID().toString());
-    }
+  /** A query with a freshly generated {@code query_id}. */
+  public static ClickHouseQuery of(final String sql) {
+    return new ClickHouseQuery(sql, UUID.randomUUID().toString());
+  }
 
-    /** A query correlated with a caller-supplied {@code query_id}. */
-    public static ClickHouseQuery of(final String sql, final String queryId) {
-        return new ClickHouseQuery(sql, queryId);
-    }
+  /** A query correlated with a caller-supplied {@code query_id}. */
+  public static ClickHouseQuery of(final String sql, final String queryId) {
+    return new ClickHouseQuery(sql, queryId);
+  }
 }

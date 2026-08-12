@@ -9,44 +9,51 @@ import reactor.netty.http.client.HttpClient;
 
 class ControlledClickHouseServerTest {
 
-    @Test
-    void shouldRespondToSelectOneWithTheConfiguredRowBinaryBody() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+  @Test
+  void shouldRespondToSelectOneWithTheConfiguredRowBinaryBody() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
 
-        // when
-        final byte[] receivedBody;
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-            receivedBody = HttpClient.create()
-                    .baseUrl(server.baseUrl())
-                    .post()
-                    .uri("/?query=SELECT+1")
-                    .responseSingle((response, body) -> body.asByteArray())
-                    .block(Duration.ofSeconds(5));
-        }
-
-        // then
-        assertThat(receivedBody).isEqualTo(configuredBody);
+    // when
+    final byte[] receivedBody;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      receivedBody =
+          HttpClient.create()
+              .baseUrl(server.baseUrl())
+              .post()
+              .uri("/?query=SELECT+1")
+              .responseSingle((response, body) -> body.asByteArray())
+              .block(Duration.ofSeconds(5));
     }
 
-    @Test
-    void shouldExposeTheFormatHeaderClientV2ExpectsWhenDecoding() {
-        // given
-        final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    // then
+    assertThat(receivedBody).isEqualTo(configuredBody);
+  }
 
-        // when
-        final String formatHeader;
-        try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-            formatHeader = HttpClient.create()
-                    .baseUrl(server.baseUrl())
-                    .post()
-                    .uri("/?query=SELECT+1")
-                    .responseSingle((response, body) -> body.then(
-                            Mono.fromSupplier(() -> response.responseHeaders().get("X-ClickHouse-Format"))))
-                    .block(Duration.ofSeconds(5));
-        }
+  @Test
+  void shouldExposeTheFormatHeaderClientV2ExpectsWhenDecoding() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
 
-        // then
-        assertThat(formatHeader).isEqualTo("RowBinaryWithNamesAndTypes");
+    // when
+    final String formatHeader;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      formatHeader =
+          HttpClient.create()
+              .baseUrl(server.baseUrl())
+              .post()
+              .uri("/?query=SELECT+1")
+              .responseSingle(
+                  (response, body) ->
+                      body.then(
+                          Mono.fromSupplier(
+                              () -> response.responseHeaders().get("X-ClickHouse-Format"))))
+              .block(Duration.ofSeconds(5));
     }
+
+    // then
+    assertThat(formatHeader).isEqualTo("RowBinaryWithNamesAndTypes");
+  }
 }

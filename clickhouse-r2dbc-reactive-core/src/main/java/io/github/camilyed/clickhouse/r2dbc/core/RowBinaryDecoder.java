@@ -22,37 +22,38 @@ import reactor.core.publisher.SynchronousSink;
  * .internal} {@code ArrayValue} — see that class's Javadoc for why this is safe and narrowly
  * scoped. Every other column type is unaffected.
  *
- * <p>Each row is copied into a plain {@link LinkedHashMap} the moment it's read, rather than
- * handed out as client-v2's own {@code Map} implementation. That implementation
- * ({@code RecordWrapper}) stores its values behind a {@link java.lang.ref.WeakReference} to the
- * reader's internal state — reading from it later, after the reader itself is no longer strongly
- * reachable (e.g. once a downstream {@code blockFirst()} has cancelled the subscription), can throw
- * a {@code NullPointerException} if the garbage collector has since run. Copying immediately, while
- * the reader is still on the stack, sidesteps that lifetime trap entirely.
+ * <p>Each row is copied into a plain {@link LinkedHashMap} the moment it's read, rather than handed
+ * out as client-v2's own {@code Map} implementation. That implementation ({@code RecordWrapper})
+ * stores its values behind a {@link java.lang.ref.WeakReference} to the reader's internal state —
+ * reading from it later, after the reader itself is no longer strongly reachable (e.g. once a
+ * downstream {@code blockFirst()} has cancelled the subscription), can throw a {@code
+ * NullPointerException} if the garbage collector has since run. Copying immediately, while the
+ * reader is still on the stack, sidesteps that lifetime trap entirely.
  */
 public final class RowBinaryDecoder {
 
-    private RowBinaryDecoder() {}
+  private RowBinaryDecoder() {}
 
-    /** Decodes {@code source} into rows keyed by column name, in wire order. */
-    public static Flux<Map<String, Object>> decodeRows(final Flux<ByteBuffer> source) {
-        return Flux.generate(() -> newReader(source), RowBinaryDecoder::emitNextRow);
-    }
+  /** Decodes {@code source} into rows keyed by column name, in wire order. */
+  public static Flux<Map<String, Object>> decodeRows(final Flux<ByteBuffer> source) {
+    return Flux.generate(() -> newReader(source), RowBinaryDecoder::emitNextRow);
+  }
 
-    private static RowBinaryWithNamesAndTypesFormatReader newReader(final Flux<ByteBuffer> source) {
-        return new ListDecodingRowBinaryReader(
-                FluxInputStreamBridge.subscribeTo(source, 4),
-                new QuerySettings().setUseTimeZone("UTC"),
-                new BinaryStreamReader.DefaultByteBufferAllocator());
-    }
+  private static RowBinaryWithNamesAndTypesFormatReader newReader(final Flux<ByteBuffer> source) {
+    return new ListDecodingRowBinaryReader(
+        FluxInputStreamBridge.subscribeTo(source, 4),
+        new QuerySettings().setUseTimeZone("UTC"),
+        new BinaryStreamReader.DefaultByteBufferAllocator());
+  }
 
-    private static RowBinaryWithNamesAndTypesFormatReader emitNextRow(
-            final RowBinaryWithNamesAndTypesFormatReader reader, final SynchronousSink<Map<String, Object>> sink) {
-        if (reader.hasNext()) {
-            sink.next(new LinkedHashMap<>(reader.next()));
-        } else {
-            sink.complete();
-        }
-        return reader;
+  private static RowBinaryWithNamesAndTypesFormatReader emitNextRow(
+      final RowBinaryWithNamesAndTypesFormatReader reader,
+      final SynchronousSink<Map<String, Object>> sink) {
+    if (reader.hasNext()) {
+      sink.next(new LinkedHashMap<>(reader.next()));
+    } else {
+      sink.complete();
     }
+    return reader;
+  }
 }

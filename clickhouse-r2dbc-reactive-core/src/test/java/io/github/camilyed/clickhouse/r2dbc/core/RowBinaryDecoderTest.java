@@ -12,30 +12,32 @@ import reactor.core.publisher.Flux;
 
 class RowBinaryDecoderTest {
 
-    @Test
-    void shouldDecodeSelectOneIntoOneRow() {
-        // given
-        final Flux<ByteBuffer> source =
-                Flux.just(ByteBuffer.wrap(RowBinaryFixtures.selectOneRowBinaryWithNamesAndTypes()));
+  @Test
+  void shouldDecodeSelectOneIntoOneRow() {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.selectOneRowBinaryWithNamesAndTypes()));
 
-        // when
-        final Map<String, Object> row = RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
+    // when
+    final Map<String, Object> row =
+        RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
 
-        // then
-        assertThat(row).containsEntry("1", (short) 1);
-    }
+    // then
+    assertThat(row).containsEntry("1", (short) 1);
+  }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void shouldDecodeAnArrayColumnAsAPlainList() {
-        // given
-        final Flux<ByteBuffer> source =
-                Flux.just(ByteBuffer.wrap(RowBinaryFixtures.arrayOfInt32RowBinaryWithNamesAndTypes()));
+  @Test
+  @SuppressWarnings("unchecked")
+  void shouldDecodeAnArrayColumnAsAPlainList() {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.arrayOfInt32RowBinaryWithNamesAndTypes()));
 
-        // when
-        final Map<String, Object> row = RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
+    // when
+    final Map<String, Object> row =
+        RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
 
-        // then
-        assertThat((List<Integer>) row.get("arr")).containsExactly(10, 20, 30);
-    }
+    // then
+    assertThat((List<Integer>) row.get("arr")).containsExactly(10, 20, 30);
+  }
 }

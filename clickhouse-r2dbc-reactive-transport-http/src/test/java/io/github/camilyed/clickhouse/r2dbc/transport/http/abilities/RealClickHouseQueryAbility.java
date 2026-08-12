@@ -15,17 +15,21 @@ import reactor.core.publisher.Flux;
  */
 public interface RealClickHouseQueryAbility {
 
-    ClickHouseHttpTransport transport();
+  ClickHouseHttpTransport transport();
 
-    /** Runs {@code sql} and waits for it to finish (DDL/DML — no rows expected back). */
-    default void execute(final String sql) {
-        transport().query(ClickHouseQuery.of(sql)).aggregate().asByteArray().block(Duration.ofSeconds(10));
-    }
+  /** Runs {@code sql} and waits for it to finish (DDL/DML — no rows expected back). */
+  default void execute(final String sql) {
+    transport()
+        .query(ClickHouseQuery.of(sql))
+        .aggregate()
+        .asByteArray()
+        .block(Duration.ofSeconds(10));
+  }
 
-    /** Runs {@code sql} and decodes every row it returns. */
-    default List<Map<String, Object>> queryRows(final String sql) {
-        final Flux<ByteBuffer> body =
-                transport().query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
-        return RowBinaryDecoder.decodeRows(body).collectList().block(Duration.ofSeconds(10));
-    }
+  /** Runs {@code sql} and decodes every row it returns. */
+  default List<Map<String, Object>> queryRows(final String sql) {
+    final Flux<ByteBuffer> body =
+        transport().query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
+    return RowBinaryDecoder.decodeRows(body).collectList().block(Duration.ofSeconds(10));
+  }
 }

@@ -10,92 +10,94 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
 class FluxInputStreamBridgeTest {
 
-    @Test
-    void shouldReadAllBytesFromASingleChunk() throws IOException {
-        // given
-        final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap("hello".getBytes(StandardCharsets.UTF_8)));
+  @Test
+  void shouldReadAllBytesFromASingleChunk() throws IOException {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap("hello".getBytes(StandardCharsets.UTF_8)));
 
-        // when
-        final byte[] readBytes;
-        try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
-            readBytes = bridge.readAllBytes();
-        }
-
-        // then
-        assertThat(readBytes).isEqualTo("hello".getBytes(StandardCharsets.UTF_8));
+    // when
+    final byte[] readBytes;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      readBytes = bridge.readAllBytes();
     }
 
-    @Test
-    void shouldReadBytesAcrossMultipleChunks() throws IOException {
-        // given
-        final Flux<ByteBuffer> source = Flux.just(
-                ByteBuffer.wrap("hel".getBytes(StandardCharsets.UTF_8)),
-                ByteBuffer.wrap("lo".getBytes(StandardCharsets.UTF_8)));
+    // then
+    assertThat(readBytes).isEqualTo("hello".getBytes(StandardCharsets.UTF_8));
+  }
 
-        // when
-        final byte[] readBytes;
-        try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
-            readBytes = bridge.readAllBytes();
-        }
+  @Test
+  void shouldReadBytesAcrossMultipleChunks() throws IOException {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(
+            ByteBuffer.wrap("hel".getBytes(StandardCharsets.UTF_8)),
+            ByteBuffer.wrap("lo".getBytes(StandardCharsets.UTF_8)));
 
-        // then
-        assertThat(readBytes).isEqualTo("hello".getBytes(StandardCharsets.UTF_8));
+    // when
+    final byte[] readBytes;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      readBytes = bridge.readAllBytes();
     }
 
-    @Test
-    void shouldThrowWhenTheUpstreamFluxSignalsAnError() throws IOException {
-        // given
-        final RuntimeException upstreamError = new RuntimeException("boom");
-        final Flux<ByteBuffer> source = Flux.error(upstreamError);
+    // then
+    assertThat(readBytes).isEqualTo("hello".getBytes(StandardCharsets.UTF_8));
+  }
 
-        // when
-        final Throwable thrown;
-        try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
-            thrown = catchThrowable(bridge::readAllBytes);
-        }
+  @Test
+  void shouldThrowWhenTheUpstreamFluxSignalsAnError() throws IOException {
+    // given
+    final RuntimeException upstreamError = new RuntimeException("boom");
+    final Flux<ByteBuffer> source = Flux.error(upstreamError);
 
-        // then
-        assertThat(thrown).isInstanceOf(IOException.class).hasCause(upstreamError);
+    // when
+    final Throwable thrown;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      thrown = catchThrowable(bridge::readAllBytes);
     }
 
-    @Test
-    void shouldOnlyRequestAsManyItemsAsTheConfiguredDemand() {
-        // given
-        final AtomicLong requested = new AtomicLong();
-        final Flux<ByteBuffer> source = Flux.just(
-                        ByteBuffer.wrap("a".getBytes(StandardCharsets.UTF_8)),
-                        ByteBuffer.wrap("b".getBytes(StandardCharsets.UTF_8)),
-                        ByteBuffer.wrap("c".getBytes(StandardCharsets.UTF_8)))
-                .doOnRequest(requested::addAndGet);
+    // then
+    assertThat(thrown).isInstanceOf(IOException.class).hasCause(upstreamError);
+  }
 
-        // when
-        try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 2)) {
+  @Test
+  void shouldOnlyRequestAsManyItemsAsTheConfiguredDemand() {
+    // given
+    final AtomicLong requested = new AtomicLong();
+    final Flux<ByteBuffer> source =
+        Flux.just(
+                ByteBuffer.wrap("a".getBytes(StandardCharsets.UTF_8)),
+                ByteBuffer.wrap("b".getBytes(StandardCharsets.UTF_8)),
+                ByteBuffer.wrap("c".getBytes(StandardCharsets.UTF_8)))
+            .doOnRequest(requested::addAndGet);
 
-            // then
-            assertThat(requested.get()).isEqualTo(2L);
-        } catch (final IOException e) {
-            throw new UncheckedIOException(e);
-        }
+    // when
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 2)) {
+
+      // then
+      assertThat(requested.get()).isEqualTo(2L);
+    } catch (final IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  @Test
+  void shouldCancelTheUpstreamSubscriptionWhenClosed() throws IOException {
+    // given
+    final AtomicBoolean cancelled = new AtomicBoolean();
+    final Flux<ByteBuffer> source = Flux.<ByteBuffer>never().doOnCancel(() -> cancelled.set(true));
+
+    // when
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      // otwórz i zamknij, nic więcej
     }
 
-    @Test
-    void shouldCancelTheUpstreamSubscriptionWhenClosed() throws IOException {
-        // given
-        final AtomicBoolean cancelled = new AtomicBoolean();
-        final Flux<ByteBuffer> source = Flux.<ByteBuffer>never().doOnCancel(() -> cancelled.set(true));
-
-        // when
-        try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
-            // otwórz i zamknij, nic więcej
-        }
-
-        // then
-        assertThat(cancelled.get()).isTrue();
-    }
+    // then
+    assertThat(cancelled.get()).isTrue();
+  }
 }
