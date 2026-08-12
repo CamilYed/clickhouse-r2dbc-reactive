@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import reactor.test.StepVerifier;
 
@@ -307,6 +308,26 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
 
       // then
       assertThat(server.receivedQueryId()).isEqualTo("my-query-id");
+    }
+  }
+
+  @Test
+  void shouldSendBoundParametersAsParamQueryParameters() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    final ClickHouseQuery query =
+        ClickHouseQuery.of("SELECT {id:UInt32}, {name:String}")
+            .withParameters(Map.of("id", 5, "name", "Ada"));
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport.query(query).aggregate().asByteArray().block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedUri()).contains("param_id=5").contains("param_name=Ada");
     }
   }
 

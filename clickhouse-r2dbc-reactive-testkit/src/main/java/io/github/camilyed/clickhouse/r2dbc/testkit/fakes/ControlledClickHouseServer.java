@@ -25,18 +25,21 @@ public final class ControlledClickHouseServer implements AutoCloseable {
   private final AtomicBoolean connectionClosed;
   private final AtomicInteger activeConnections;
   private final AtomicReference<HttpHeaders> receivedHeaders;
+  private final AtomicReference<String> receivedUri;
 
   private ControlledClickHouseServer(
       final DisposableServer server,
       final AtomicBoolean requestReceived,
       final AtomicBoolean connectionClosed,
       final AtomicInteger activeConnections,
-      final AtomicReference<HttpHeaders> receivedHeaders) {
+      final AtomicReference<HttpHeaders> receivedHeaders,
+      final AtomicReference<String> receivedUri) {
     this.server = server;
     this.requestReceived = requestReceived;
     this.connectionClosed = connectionClosed;
     this.activeConnections = activeConnections;
     this.receivedHeaders = receivedHeaders;
+    this.receivedUri = receivedUri;
   }
 
   /** Responds to every request with {@code responseBody} in a single chunk, immediately. */
@@ -70,6 +73,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
+    final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -81,6 +85,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
+                          receivedUri.set(request.uri());
                           response.withConnection(
                               conn ->
                                   conn.onDispose(
@@ -96,7 +101,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders);
+        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
   }
 
   private static ControlledClickHouseServer startRespondingWith(final Flux<byte[]> body) {
@@ -104,6 +109,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
+    final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -115,6 +121,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
+                          receivedUri.set(request.uri());
                           response.withConnection(
                               conn ->
                                   conn.onDispose(
@@ -129,7 +136,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders);
+        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
   }
 
   /** Accepts the connection and reads the request, but never sends any response at all. */
@@ -138,6 +145,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
+    final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -149,6 +157,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
+                          receivedUri.set(request.uri());
                           response.withConnection(
                               conn ->
                                   conn.onDispose(
@@ -160,7 +169,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders);
+        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
   }
 
   /**
@@ -173,6 +182,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
+    final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -184,6 +194,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
+                          receivedUri.set(request.uri());
                           response.withConnection(
                               conn ->
                                   conn.onDispose(
@@ -198,7 +209,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders);
+        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
   }
 
   /** Sends {@code firstChunk}, then resets the TCP connection after {@code beforeReset}. */
@@ -208,6 +219,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
+    final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -219,6 +231,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
+                          receivedUri.set(request.uri());
                           response.withConnection(
                               conn -> {
                                 conn.onDispose(
@@ -236,7 +249,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         }))
             .bindNow();
     return new ControlledClickHouseServer(
-        started, requestReceived, connectionClosed, activeConnections, receivedHeaders);
+        started, requestReceived, connectionClosed, activeConnections, receivedHeaders, receivedUri);
   }
 
   /** Whether this server has received at least one request since it started. */
@@ -260,6 +273,11 @@ public final class ControlledClickHouseServer implements AutoCloseable {
    */
   public @Nullable String receivedQueryId() {
     return receivedHeader("X-ClickHouse-Query-Id");
+  }
+
+  /** The request URI (path + query string) from the most recent request, if any was received. */
+  public @Nullable String receivedUri() {
+    return receivedUri.get();
   }
 
   /** Any header value from the most recent request, if any was received; {@code null} if absent. */

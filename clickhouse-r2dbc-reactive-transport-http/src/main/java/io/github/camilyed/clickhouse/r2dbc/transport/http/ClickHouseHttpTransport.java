@@ -87,6 +87,11 @@ public final class ClickHouseHttpTransport {
    * code. Our pinned client-v2 version (see the version catalog) predates that class's {@code
    * queryId}/{@code isRetryable()} fields, so {@link ClickHouseQuery#queryId()} is folded into the
    * message text instead — re-check this Javadoc if client-v2 is ever upgraded.
+   *
+   * <p>{@link ClickHouseQuery#parameters()} — already encoded into ClickHouse's own wire format by
+   * {@link ClickHouseQuery#withParameters(java.util.Map)} — are sent one {@code param_<name>=<value>}
+   * query parameter per entry, alongside {@code query}, exactly as ClickHouse's own parameterized-
+   * query mechanism expects (see {@code docs/CLIENT_V2_HTTP_REFERENCE.md}).
    */
   public ByteBufFlux query(final ClickHouseQuery query) {
     return ByteBufFlux.fromInbound(
@@ -98,8 +103,18 @@ public final class ClickHouseHttpTransport {
                   authentication.addTo(headers);
                 })
             .post()
-            .uri("/?query=" + encode(query.sql()))
+            .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
             .response((response, content) -> receiveOrFail(response, content, query.queryId())));
+  }
+
+  private static String parameterQueryString(final ClickHouseQuery query) {
+    final StringBuilder queryString = new StringBuilder();
+    query
+        .parameters()
+        .forEach(
+            (name, value) ->
+                queryString.append("&param_").append(name).append('=').append(encode(value)));
+    return queryString.toString();
   }
 
   private static Publisher<ByteBuf> receiveOrFail(
