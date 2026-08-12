@@ -1,11 +1,9 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
 import io.r2dbc.spi.Result;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import org.reactivestreams.Publisher;
@@ -50,10 +48,9 @@ final class ClickHouseBatch implements Batch {
   }
 
   private Publisher<ClickHouseResult> executeOne(final String sql) {
-    final Flux<ByteBuffer> body =
-        transport.query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body)
-        .map(ClickHouseResult::new)
+    return transport
+        .queryWithSummary(ClickHouseQuery.of(sql))
+        .flatMap(ClickHouseResult::decode)
         .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 }

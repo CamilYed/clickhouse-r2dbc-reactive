@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
+import io.r2dbc.spi.Result;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -95,6 +96,25 @@ class ClickHouseStatementAgainstRealClickHouseTest extends BaseClickHouseIntegra
 
     // then
     assertThat(name).isEqualTo("Ada");
+  }
+
+  @Test
+  void shouldReportTheRealWrittenRowCountFromAnInsert() {
+    // given
+    execute("CREATE TABLE statement_rows_updated_test (id UInt32) ENGINE = Memory");
+
+    // when
+    final Long rowsUpdated =
+        Flux.from(
+                connection()
+                    .createStatement(
+                        "INSERT INTO statement_rows_updated_test VALUES (1), (2), (3)")
+                    .execute())
+            .flatMap(Result::getRowsUpdated)
+            .blockFirst(Duration.ofSeconds(10));
+
+    // then
+    assertThat(rowsUpdated).isEqualTo(3L);
   }
 
   @Test

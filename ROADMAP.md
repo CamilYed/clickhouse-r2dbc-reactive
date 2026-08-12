@@ -369,14 +369,24 @@ column schema (`List<ColumnDescriptor>` — name + ClickHouse's own wire type st
 `ClickHouseResult`), `Row`/`Readable` (`ClickHouseRow`), `RowMetadata`/`ColumnMetadata` (
 `ClickHouseRowMetadata`/`ClickHouseColumnMetadata`), and `Type` (`ClickHouseType`) — verified
 against `r2dbc-spi:1.0.0.RELEASE`'s actual `Result`/`Row`/`Readable`/`RowMetadata`/
-`ColumnMetadata`/`ReadableMetadata`/`Type` source, not `main`. Deliberate, documented gaps rather
-than guesses: `ColumnMetadata.getJavaType()`/`Type.getJavaType()` don't attempt to predict the Java
-class client-v2 will decode a column into ahead of reading any row — that mapping is an internal
-decision of client-v2's `BinaryStreamReader` decode switch, not a static function of
-`ClickHouseColumn`, and duplicating it here risked silently drifting from it; `getRowsUpdated()`
-always completes empty, since ClickHouse's HTTP interface doesn't return update counts the way
-R2DBC's `Result` assumes and this driver hasn't built an INSERT/DDL round trip that would need one
-yet. `Result.filter`/`flatMap` are implemented (both are abstract in `r2dbc-spi:1.0.0.RELEASE`, no
+`ColumnMetadata`/`ReadableMetadata`/`Type` source, not `main`. Deliberate, documented gap:
+`ColumnMetadata.getJavaType()`/`Type.getJavaType()` don't attempt to predict the Java class
+client-v2 will decode a column into ahead of reading any row — that mapping is an internal decision
+of client-v2's `BinaryStreamReader` decode switch, not a static function of `ClickHouseColumn`, and
+duplicating it here risked silently drifting from it. `getRowsUpdated()` now returns a real,
+server-reported count instead of always completing empty: ClickHouse sends an
+`X-ClickHouse-Summary` response header on every request (`SELECT` included, where it reports `0`
+written rows), containing JSON with a `written_rows` field (checked against
+clickhouse.com/docs/interfaces/http, not assumed) —
+`transport.ClickHouseHttpTransport.queryWithSummary` parses it and returns a
+`ClickHouseQueryResponse(long writtenRows, ByteBufFlux body)`; `connector.ClickHouseResult.decode`
+is the one place that count and `core`'s decoded rows come together into one `Result`, used
+identically by `ClickHouseStatement.execute()` and `ClickHouseBatch`. This was flagged during a
+production-readiness review as a genuine silent-risk gap (a caller checking `getRowsUpdated()`
+after an `INSERT` to confirm the write happened got nothing back, not an error, which could be
+misread as "0 rows written" when the insert actually succeeded) — not a safe fail-loud
+simplification, so it was fixed rather than just documented; see "Production readiness" below.
+`Result.filter`/`flatMap` are implemented (both are abstract in `r2dbc-spi:1.0.0.RELEASE`, no
 default), scoped to the only segment kind produced so far (`RowSegment`). Consumption-once is
 enforced per `Result` instance, but not transitively across a `filter()`-derived instance sharing
 the same row stream — documented as a known limitation, not silently assumed correct.

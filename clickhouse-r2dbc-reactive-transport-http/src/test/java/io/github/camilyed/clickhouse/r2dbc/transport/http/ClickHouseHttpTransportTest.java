@@ -43,6 +43,51 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldParseWrittenRowsFromTheClickHouseSummaryHeader() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    final long writtenRows;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWithSummary(
+            configuredBody, "{\"read_rows\":\"1\",\"written_rows\":\"3\"}")) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+      final ClickHouseQueryResponse received =
+          transport.queryWithSummary(ClickHouseQuery.of("SELECT 1")).block(Duration.ofSeconds(5));
+
+      // the written-row count is only known once the response headers have arrived, which
+      // consuming the body already waits on - see ClickHouseQueryResponse's Javadoc.
+      received.body().aggregate().asByteArray().block(Duration.ofSeconds(5));
+      writtenRows = received.writtenRows().getAsLong();
+    }
+
+    // then
+    assertThat(writtenRows).isEqualTo(3L);
+  }
+
+  @Test
+  void shouldReportZeroWrittenRowsWhenTheSummaryHeaderIsAbsent() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    final long writtenRows;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+      final ClickHouseQueryResponse received =
+          transport.queryWithSummary(ClickHouseQuery.of("SELECT 1")).block(Duration.ofSeconds(5));
+
+      received.body().aggregate().asByteArray().block(Duration.ofSeconds(5));
+      writtenRows = received.writtenRows().getAsLong();
+    }
+
+    // then
+    assertThat(writtenRows).isZero();
+  }
+
+  @Test
   void shouldNotSendTheRequestBeforeSubscription() {
     // given
     final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();

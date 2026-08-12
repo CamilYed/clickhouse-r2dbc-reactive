@@ -5,13 +5,11 @@ import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Statement;
-import java.nio.ByteBuffer;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import org.reactivestreams.Publisher;
-import reactor.core.publisher.Flux;
 
 /**
  * A ClickHouse SQL statement, created via {@link ClickHouseConnection#createStatement(String)}.
@@ -102,9 +100,9 @@ final class ClickHouseStatement implements Statement {
               + boundValues.keySet());
     }
     final ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(boundValues);
-    final Flux<ByteBuffer> body = transport.query(query).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body)
-        .map(ClickHouseResult::new)
+    return transport
+        .queryWithSummary(query)
+        .flatMap(ClickHouseResult::decode)
         .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 

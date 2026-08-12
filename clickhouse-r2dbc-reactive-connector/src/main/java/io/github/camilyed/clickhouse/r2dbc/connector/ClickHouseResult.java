@@ -1,9 +1,12 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
+import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseQueryResponse;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
+import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
@@ -14,13 +17,9 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * A ClickHouse {@link Result}: rows only, for now. ClickHouse's HTTP interface doesn't return
- * update counts or {@code OUT} parameters the way {@link #getRowsUpdated()}/{@code OutParameters}
- * assume, and this driver hasn't built an INSERT/DDL round trip that would need one yet ({@code
- * ClickHouseHttpTransport.query}/{@code RowBinaryDecoder} are "shaped for SELECT-style" queries
- * today — see ROADMAP.md). {@link #getRowsUpdated()} therefore always completes empty rather than
- * guessing a count. {@link #filter}/{@link #flatMap} only ever see {@link Result.RowSegment}s,
- * since no other segment kind is produced yet.
+ * A ClickHouse {@link Result}: rows, plus the written-row count ClickHouse itself reports for the
+ * query that produced it (see {@link #decode}). {@link #filter}/{@link #flatMap} only ever see
+ * {@link Result.RowSegment}s, since no other segment kind is produced yet.
  *
  * <p>Consumption-once is enforced per instance (a second call to {@link #map}/{@link
  * #getRowsUpdated}/{@link #flatMap} on the <em>same</em> instance throws {@link
@@ -37,22 +36,44 @@ final class ClickHouseResult implements Result {
 
   private final ClickHouseRowMetadata metadata;
   private final Flux<Map<String, Object>> rows;
+  private final long writtenRows;
   private final AtomicBoolean consumed = new AtomicBoolean(false);
 
-  ClickHouseResult(final DecodedResult decoded) {
-    this(new ClickHouseRowMetadata(decoded.columns()), decoded.rows());
+  ClickHouseResult(final DecodedResult decoded, final long writtenRows) {
+    this(new ClickHouseRowMetadata(decoded.columns()), decoded.rows(), writtenRows);
   }
 
   private ClickHouseResult(
-      final ClickHouseRowMetadata metadata, final Flux<Map<String, Object>> rows) {
+      final ClickHouseRowMetadata metadata,
+      final Flux<Map<String, Object>> rows,
+      final long writtenRows) {
     this.metadata = metadata;
     this.rows = rows;
+    this.writtenRows = writtenRows;
+  }
+
+  /**
+   * Sends {@code response.body()} through {@link RowBinaryDecoder#decode} and wraps the result
+   * into a {@link ClickHouseResult} carrying {@code response.writtenRows()} — the one place both
+   * halves of a {@link ClickHouseQueryResponse} (decoded rows from {@code core}, the written-row
+   * count from {@code transport-http}) come together, used identically by {@link
+   * ClickHouseStatement#execute()} and {@link ClickHouseBatch}.
+   *
+   * <p>{@code response.writtenRows()} is read inside the {@code map} below, after {@link
+   * RowBinaryDecoder#decode} has already resolved — deliberately, not just incidentally: per {@link
+   * ClickHouseQueryResponse}'s Javadoc, the count is only known once the response headers have
+   * actually arrived, which {@code decode}'s schema read already waits on.
+   */
+  static Mono<ClickHouseResult> decode(final ClickHouseQueryResponse response) {
+    final Flux<ByteBuffer> body = response.body().asByteArray().map(ByteBuffer::wrap);
+    return RowBinaryDecoder.decode(body)
+        .map(decoded -> new ClickHouseResult(decoded, response.writtenRows().getAsLong()));
   }
 
   @Override
   public Publisher<Long> getRowsUpdated() {
     markConsumedOrFail();
-    return Mono.empty();
+    return Mono.just(writtenRows);
   }
 
   @Override
@@ -71,7 +92,8 @@ final class ClickHouseResult implements Result {
     if (filter == null) {
       throw new IllegalArgumentException("filter must not be null");
     }
-    return new ClickHouseResult(metadata, rows.filter(values -> filter.test(rowSegment(values))));
+    return new ClickHouseResult(
+        metadata, rows.filter(values -> filter.test(rowSegment(values))), writtenRows);
   }
 
   @Override

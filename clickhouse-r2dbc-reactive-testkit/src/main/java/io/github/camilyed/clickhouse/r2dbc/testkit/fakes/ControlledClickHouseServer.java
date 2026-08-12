@@ -109,6 +109,53 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         receivedUri);
   }
 
+  /**
+   * Responds to every request with {@code responseBody}, plus {@code summaryJson} as the {@code
+   * X-ClickHouse-Summary} header — the header ClickHouse itself sends carrying {@code
+   * written_rows}/{@code read_rows}/etc. as JSON (see clickhouse.com/docs/interfaces/http).
+   */
+  public static ControlledClickHouseServer startRespondingToSelectOneWithSummary(
+      final byte[] responseBody, final String summaryJson) {
+    final AtomicBoolean requestReceived = new AtomicBoolean(false);
+    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
+    final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
+    final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final DisposableServer started =
+        HttpServer.create()
+            .port(0)
+            .route(
+                routes ->
+                    routes.post(
+                        "/",
+                        (request, response) -> {
+                          requestReceived.set(true);
+                          activeConnections.incrementAndGet();
+                          receivedHeaders.set(request.requestHeaders());
+                          receivedUri.set(request.uri());
+                          response.withConnection(
+                              conn ->
+                                  conn.onDispose(
+                                      () -> {
+                                        connectionClosed.set(true);
+                                        activeConnections.decrementAndGet();
+                                      }));
+                          return response
+                              .header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
+                              .header("Content-Type", "application/octet-stream")
+                              .header("X-ClickHouse-Summary", summaryJson)
+                              .sendByteArray(Mono.just(responseBody));
+                        }))
+            .bindNow();
+    return new ControlledClickHouseServer(
+        started,
+        requestReceived,
+        connectionClosed,
+        activeConnections,
+        receivedHeaders,
+        receivedUri);
+  }
+
   private static ControlledClickHouseServer startRespondingWith(final Flux<byte[]> body) {
     final AtomicBoolean requestReceived = new AtomicBoolean(false);
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);

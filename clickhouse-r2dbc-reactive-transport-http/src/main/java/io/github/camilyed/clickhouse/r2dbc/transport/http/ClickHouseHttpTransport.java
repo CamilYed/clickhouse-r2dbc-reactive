@@ -6,6 +6,9 @@ import io.netty.buffer.ByteBuf;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
@@ -22,6 +25,9 @@ public final class ClickHouseHttpTransport {
   private static final String FORMAT_HEADER = "X-ClickHouse-Format";
   private static final String QUERY_ID_HEADER = "X-ClickHouse-Query-Id";
   private static final String EXCEPTION_CODE_HEADER = "X-ClickHouse-Exception-Code";
+  private static final String SUMMARY_HEADER = "X-ClickHouse-Summary";
+  private static final Pattern WRITTEN_ROWS_PATTERN =
+      Pattern.compile("\"written_rows\"\\s*:\\s*\"(\\d+)\"");
 
   private final HttpClient httpClient;
   private final Authentication authentication;
@@ -123,19 +129,51 @@ public final class ClickHouseHttpTransport {
    * param_<name>=<value>} query parameter per entry, alongside {@code query}, exactly as
    * ClickHouse's own parameterized- query mechanism expects (see {@code
    * docs/CLIENT_V2_HTTP_REFERENCE.md}).
+   *
+   * <p>Delegates to {@link #queryWithSummary} — see that method if the caller also needs
+   * ClickHouse's reported written-row count for this query.
    */
   public ByteBufFlux query(final ClickHouseQuery query) {
     return ByteBufFlux.fromInbound(
-        httpClient
-            .headers(
-                headers -> {
-                  headers.set(FORMAT_HEADER, "RowBinaryWithNamesAndTypes");
-                  headers.set(QUERY_ID_HEADER, query.queryId());
-                  authentication.addTo(headers);
-                })
-            .post()
-            .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
-            .response((response, content) -> receiveOrFail(response, content, query.queryId())));
+        queryWithSummary(query).flatMapMany(ClickHouseQueryResponse::body));
+  }
+
+  /**
+   * Same as {@link #query(ClickHouseQuery)}, but also exposes ClickHouse's own reported
+   * written-row count for {@code query}, parsed from the {@code X-ClickHouse-Summary} response
+   * header (see clickhouse.com/docs/interfaces/http, "Response Buffering"/progress section).
+   * ClickHouse sends this header on every response — {@code SELECT} included, where it reports
+   * {@code 0} written rows — so {@link ClickHouseQueryResponse#writtenRows()} is always a real,
+   * server-reported count rather than a guess.
+   *
+   * <p>Deliberately does <em>not</em> use an operator like {@code Flux.next()}/{@code single()} to
+   * turn the underlying {@code .response(...)} call into this method's {@code Mono} return type —
+   * either would cancel or otherwise terminate that response's subscription as soon as it emits its
+   * one item, before the caller ever gets to subscribe to {@link ClickHouseQueryResponse#body()}
+   * separately; Reactor Netty then has no reason to keep streaming a body nobody in its own
+   * response-scope subscription is reading, so the body arrives empty. Instead, this constructs the
+   * still-fully-lazy {@code body} {@link ByteBufFlux} synchronously (nothing sent over the network
+   * yet, same as {@link #query(ClickHouseQuery)}) and wraps it in {@link Mono#just}, so the
+   * <em>caller's own later subscription to {@code body}</em> is the one and only subscription to the
+   * underlying HTTP response, exactly as in {@link #query(ClickHouseQuery)}.
+   */
+  public Mono<ClickHouseQueryResponse> queryWithSummary(final ClickHouseQuery query) {
+    final AtomicLong writtenRows = new AtomicLong();
+    final ByteBufFlux body =
+        ByteBufFlux.fromInbound(
+            httpClient
+                .headers(
+                    headers -> {
+                      headers.set(FORMAT_HEADER, "RowBinaryWithNamesAndTypes");
+                      headers.set(QUERY_ID_HEADER, query.queryId());
+                      authentication.addTo(headers);
+                    })
+                .post()
+                .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
+                .response(
+                    (response, content) ->
+                        receiveOrFail(response, content, query.queryId(), writtenRows)));
+    return Mono.just(new ClickHouseQueryResponse(writtenRows::get, body));
   }
 
   private static String parameterQueryString(final ClickHouseQuery query) {
@@ -149,8 +187,12 @@ public final class ClickHouseHttpTransport {
   }
 
   private static Publisher<ByteBuf> receiveOrFail(
-      final HttpClientResponse response, final ByteBufFlux content, final String queryId) {
+      final HttpClientResponse response,
+      final ByteBufFlux content,
+      final String queryId,
+      final AtomicLong writtenRows) {
     if (!isError(response)) {
+      writtenRows.set(writtenRows(response));
       return content;
     }
     final int serverCode = exceptionCode(response);
@@ -181,6 +223,15 @@ public final class ClickHouseHttpTransport {
     } catch (final NumberFormatException e) {
       return ServerException.CODE_UNKNOWN;
     }
+  }
+
+  private static long writtenRows(final HttpClientResponse response) {
+    final String summary = response.responseHeaders().get(SUMMARY_HEADER);
+    if (summary == null) {
+      return 0L;
+    }
+    final Matcher matcher = WRITTEN_ROWS_PATTERN.matcher(summary);
+    return matcher.find() ? Long.parseLong(matcher.group(1)) : 0L;
   }
 
   private static String encode(final String sql) {

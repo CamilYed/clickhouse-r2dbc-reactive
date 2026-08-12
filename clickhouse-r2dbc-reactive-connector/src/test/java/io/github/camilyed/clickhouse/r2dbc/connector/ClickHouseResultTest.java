@@ -25,12 +25,21 @@ class ClickHouseResultTest {
   }
 
   @Test
-  void shouldCompleteEmptyWhenAskedForRowsUpdated() {
+  void shouldReportZeroWrittenRowsForASelectByDefault() {
     // given
     final ClickHouseResult result = resultOf(Map.of("id", 1));
 
     // when / then
-    StepVerifier.create(result.getRowsUpdated()).verifyComplete();
+    StepVerifier.create(result.getRowsUpdated()).expectNext(0L).verifyComplete();
+  }
+
+  @Test
+  void shouldReportTheWrittenRowCountFromTheQueryResponse() {
+    // given
+    final ClickHouseResult result = resultOf(7L, Map.of("id", 1));
+
+    // when / then
+    StepVerifier.create(result.getRowsUpdated()).expectNext(7L).verifyComplete();
   }
 
   @Test
@@ -65,7 +74,12 @@ class ClickHouseResultTest {
 
   @SafeVarargs
   private ClickHouseResult resultOf(final Map<String, Object>... rows) {
+    return resultOf(0L, rows);
+  }
+
+  @SafeVarargs
+  private ClickHouseResult resultOf(final long writtenRows, final Map<String, Object>... rows) {
     final List<ColumnDescriptor> columns = List.of(new ColumnDescriptor("id", "Int32"));
-    return new ClickHouseResult(new DecodedResult(columns, Flux.just(rows)));
+    return new ClickHouseResult(new DecodedResult(columns, Flux.just(rows)), writtenRows);
   }
 }
