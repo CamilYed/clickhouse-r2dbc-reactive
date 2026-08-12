@@ -5,6 +5,7 @@ plugins {
 dependencies {
     api(project(":clickhouse-r2dbc-reactive-core"))
     api(libs.reactor.netty.http)
+    compileOnly(libs.jspecify)
 
     api(platform(libs.junit.bom))
     api(libs.junit.jupiter)

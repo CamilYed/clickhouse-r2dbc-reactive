@@ -6,6 +6,7 @@ dependencies {
     api(libs.r2dbc.spi)
     implementation(project(":clickhouse-r2dbc-reactive-core"))
     implementation(project(":clickhouse-r2dbc-reactive-transport-http"))
+    compileOnly(libs.jspecify)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
