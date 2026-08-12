@@ -9,11 +9,11 @@ import java.util.ServiceLoader;
  * R2DBC service-provider entry point for the ClickHouse driver.
  *
  * <p>Discovered via {@link ServiceLoader} once registered in {@code
- * META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider} — not registered yet, since {@link
- * #create(ConnectionFactoryOptions)} has no working {@code ConnectionFactory}/{@code Connection}
- * behind it yet. Registering the SPI file before {@code create()} actually works would let
- * discovery find a provider that can't create anything, which is worse than not being discoverable
- * at all; that happens once {@code create()} is real.
+ * META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider} — not registered yet. {@link
+ * #create(ConnectionFactoryOptions)} now returns a working {@link ClickHouseConnectionFactory},
+ * but {@code Statement.execute()} still isn't implemented (see {@code ClickHouseStatement}), so a
+ * consumer discovering this driver via {@code ServiceLoader} today could open a connection but not
+ * run a single query. The SPI file is added once that's no longer true.
  */
 public final class ClickHouseConnectionFactoryProvider implements ConnectionFactoryProvider {
 
@@ -22,7 +22,7 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
 
     @Override
     public ConnectionFactory create(final ConnectionFactoryOptions connectionFactoryOptions) {
-        throw new UnsupportedOperationException("ClickHouseConnectionFactory does not exist yet");
+        return ClickHouseConnectionFactory.from(connectionFactoryOptions);
     }
 
     @Override

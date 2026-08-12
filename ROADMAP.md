@@ -353,13 +353,20 @@ shouldDecodeArrayType`).
 
 ## Phase 3 — Connector (R2DBC SPI surface)
 
-**Started.** `ClickHouseConnectionFactoryProvider` exists (`supports`/`getDriver`, driver id
-`"clickhouse"`), verified against `r2dbc-spi:1.0.0.RELEASE`'s actual source (not `main`), TDD,
-black-box tests. `create(ConnectionFactoryOptions)` still throws `UnsupportedOperationException` —
-deliberately, until `ConnectionFactory`/`Connection` exist to back it. The SPI registration file
+**Started.** `ClickHouseConnectionFactoryProvider` (`supports`/`getDriver`/`create`),
+`ClickHouseConnectionFactory`, and `ClickHouseConnection` exist, verified against
+`r2dbc-spi:1.0.0.RELEASE`'s actual source (not `main`), TDD, black-box tests plus one real-
+ClickHouse round trip (`create()` → `validate(REMOTE)`). ClickHouse's HTTP interface has no
+persistent session and no real ACID transactions, so `ClickHouseConnection` is always auto-commit;
+every transaction/savepoint method either fails with `UnsupportedOperationException` or, where the
+spec explicitly allows it (`releaseSavepoint`), no-ops — this is the "explicit
+unsupported-transaction-semantics handling" this phase named up front, not an oversight.
+`createStatement(sql)` returns a real `ClickHouseStatement`, but its `execute()` isn't implemented
+yet (next slice, along with `Result`/`Row`/`RowMetadata`); parameter binding (`bind`/`bindNull`) is
+separately-scoped future work needing its own `param_<name>` design. The SPI registration file
 (`META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`) is intentionally **not** added yet:
-registering a provider that can't `create()` anything would make it discoverable and broken, which
-is worse than not discoverable — added once `create()` is real.
+registering a provider whose connections can open but can't run a query would make it discoverable
+and broken, which is worse than not discoverable — added once `Statement.execute()` is real.
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
   parameter binding, R2DBC exception mapping, explicit unsupported-transaction-semantics handling.
