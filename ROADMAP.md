@@ -361,11 +361,29 @@ persistent session and no real ACID transactions, so `ClickHouseConnection` is a
 every transaction/savepoint method either fails with `UnsupportedOperationException` or, where the
 spec explicitly allows it (`releaseSavepoint`), no-ops — this is the "explicit
 unsupported-transaction-semantics handling" this phase named up front, not an oversight.
-`createStatement(sql)` returns a real `ClickHouseStatement`, but its `execute()` isn't implemented
-yet (next slice, along with `Result`/`Row`/`RowMetadata`); parameter binding (`bind`/`bindNull`) is
-separately-scoped future work needing its own `param_<name>` design. The SPI registration file
-(`META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`) is intentionally **not** added yet:
-registering a provider whose connections can open but can't run a query would make it discoverable
+`createStatement(sql)` returns a real `ClickHouseStatement`, and `execute()` is now real too:
+`core.RowBinaryDecoder.decode(Flux<ByteBuffer>)` (new) returns a `Mono<DecodedResult>` pairing the
+column schema (`List<ColumnDescriptor>` — name + ClickHouse's own wire type string, e.g.
+`"Nullable(Int32)"`) with the row stream, from one reader instance and one subscription — unlike
+`decodeRows`, which only ever exposed rows. `connector` adapts that into r2dbc-spi's `Result` (
+`ClickHouseResult`), `Row`/`Readable` (`ClickHouseRow`), `RowMetadata`/`ColumnMetadata` (
+`ClickHouseRowMetadata`/`ClickHouseColumnMetadata`), and `Type` (`ClickHouseType`) — verified
+against `r2dbc-spi:1.0.0.RELEASE`'s actual `Result`/`Row`/`Readable`/`RowMetadata`/
+`ColumnMetadata`/`ReadableMetadata`/`Type` source, not `main`. Deliberate, documented gaps rather
+than guesses: `ColumnMetadata.getJavaType()`/`Type.getJavaType()` don't attempt to predict the Java
+class client-v2 will decode a column into ahead of reading any row — that mapping is an internal
+decision of client-v2's `BinaryStreamReader` decode switch, not a static function of
+`ClickHouseColumn`, and duplicating it here risked silently drifting from it; `getRowsUpdated()`
+always completes empty, since ClickHouse's HTTP interface doesn't return update counts the way
+R2DBC's `Result` assumes and this driver hasn't built an INSERT/DDL round trip that would need one
+yet. `Result.filter`/`flatMap` are implemented (both are abstract in `r2dbc-spi:1.0.0.RELEASE`, no
+default), scoped to the only segment kind produced so far (`RowSegment`). Consumption-once is
+enforced per `Result` instance, but not transitively across a `filter()`-derived instance sharing
+the same row stream — documented as a known limitation, not silently assumed correct. Parameter
+binding (`bind`/`bindNull`) is separately-scoped future work needing its own `param_<name>` design.
+The SPI registration file (`META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`) is
+intentionally **not** added yet: registering a provider whose connections can open but can't run a
+full range of queries (no parameter binding yet) would make it discoverable
 and broken, which is worse than not discoverable — added once `Statement.execute()` is real.
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
