@@ -15,6 +15,7 @@ proposed to the ClickHouse team.
 - [Phase 2 — Core protocol + testkit contract tests](#phase-2--core-protocol--testkit-contract-tests)
 - [Phase 3 — Connector (R2DBC SPI surface)](#phase-3--connector-r2dbc-spi-surface)
 - [Phase 4 — "Fully reactive" sign-off](#phase-4--fully-reactive-sign-off)
+- [Production readiness review](#production-readiness-review)
 - [Non-functional requirements: logging, metrics, leaks](#non-functional-requirements-logging-metrics-leaks)
 - [Phase 5 (later) — Load and performance testing](#phase-5-later--load-and-performance-testing)
 - [Phase 6 (later) — Spring WebFlux interop demo](#phase-6-later--spring-webflux-interop-demo)
@@ -467,6 +468,120 @@ not just an API shape that implies it. Concretely, a checklist pass over:
   the same way Phase 0's finding is written up here.
 
 This is the gate before spending time on Maven Central publishing polish or performance work.
+
+## Production readiness review
+
+Standing goal, stated explicitly by the user: this driver should reach a state someone could
+actually run in production, not just a state that compiles and passes a happy-path test. Every
+finding below is triaged into one of two buckets — **silent risk** (wrong or missing behavior a
+caller could reasonably rely on without noticing it's wrong until production) versus **safe,
+documented limitation** (a real gap, but one that fails loudly or matches a well-established
+convention other drivers share) — the distinction the user pushed for directly ("czy świadomie
+czegoś nie implementujemy... aby potem nie działało to na produkcji"). Silent-risk findings get
+fixed, not just documented.
+
+### Fixed this pass
+
+- **Hardcoded 2-second response timeout with no way to disable it** (`ClickHouseHttpTransport`).
+  Every real ClickHouse query taking longer than 2 seconds — routine for an analytical database —
+  would have failed outright. No test caught this because every existing test used trivial, fast
+  queries. Fixed: response timeout is now `null` (no timeout) by default on every constructor,
+  configurable explicitly via a new constructor overload. Silent risk — fixed.
+- **`ServerException` (client-v2's, reused by `transport-http` for ClickHouse's own errors) does
+  not extend `io.r2dbc.spi.R2dbcException`.** A caller doing standard R2DBC error handling
+  (`catch (R2dbcException e)`) around a query would never catch a ClickHouse server error. Fixed:
+  `connector.ClickHouseR2dbcException.wrap` walks the failure's cause chain for a `ServerException`
+  and reuses its code/message, falling back to a generic wrapped exception for anything else
+  (connection reset, pool exhaustion, a local decode bug) — wired into
+  `ClickHouseStatement`/`ClickHouseBatch`/`ClickHouseResult` via `onErrorMap`. Silent risk — fixed.
+- **`Result.getRowsUpdated()` always completed empty**, regardless of how many rows an `INSERT`
+  actually wrote — a caller checking it to confirm a write succeeded got nothing back, not an
+  error, which could be misread as "0 rows written" when the insert actually succeeded. Fixed: it
+  now parses ClickHouse's own `X-ClickHouse-Summary` response header (`written_rows` field, sent on
+  every response including `SELECT`, where it's `0`) via
+  `ClickHouseHttpTransport.queryWithSummary`. Found and fixed a real bug surfaced while wiring this
+  up: an intermediate version used `Flux.next()` to materialize the response, which cancels the
+  underlying HTTP response scope before the body is ever read separately — every batch/statement
+  result came back silently empty until caught by
+  `ClickHouseBatchAgainstRealClickHouseTest` against real ClickHouse. Silent risk — fixed.
+- **`ClickHouseConnection.close()` didn't actually prevent further use** — `createStatement`/
+  `createBatch` kept happily creating statements that would run real queries through a "closed"
+  connection. A caller or connection-pool implementation that closes a connection and then
+  accidentally keeps using it (e.g. a pooled connection returned to the pool while something still
+  holds a reference) got silent, unexpected query execution instead of a clear error. Fixed: both
+  methods now throw `IllegalStateException` once closed, matching `validate()`'s existing behavior.
+  Silent risk — fixed.
+- **No way to bound how long establishing the TCP connection itself could take** — only
+  `responseTimeout` (time waiting for a response after the request is sent) was configurable, and a
+  caller going through the standard R2DBC URL/options bootstrap path (`ConnectionFactories.get(...)`
+  rather than constructing `ClickHouseHttpTransport` directly) had no way to configure even that.
+  Fixed: `connectTimeout` wired to Netty's `ChannelOption.CONNECT_TIMEOUT_MILLIS`, threaded from
+  R2DBC's standard `ConnectionFactoryOptions.CONNECT_TIMEOUT` in `ClickHouseConnectionFactory.from`.
+  Silent risk (unbounded hang against an unreachable/firewalled host) — fixed.
+- **`RowBinaryDecoder`'s response-chunk backpressure demand was a bare, unexplained `4`.** Not a
+  correctness bug, but an unbenchmarked magic number that plausibly affects throughput/latency (too
+  low serializes network reads and decoding, too high buffers more memory per in-flight query).
+  Named as `RESPONSE_CHUNK_DEMAND` with a Javadoc explaining the trade-off and explicitly deferring
+  actual tuning to the not-yet-started performance phase (see below). Documented placeholder, not a
+  silent risk — turning a silent magic number into an honest one.
+- **`ClickHouseStatement`/`ClickHouseBatch` mutable binding state was undocumented for
+  thread-safety.** Not a bug — this matches `java.sql.PreparedStatement` and every other R2DBC
+  driver's statement type (bind on one thread, then execute once) — but was silently assumed rather
+  than stated. Added explicit "not thread-safe" Javadoc. Safe, now-documented limitation.
+
+### Known, documented, safe limitations (not fixed — deliberate)
+
+- **`ColumnMetadata.getJavaType()`/`Type.getJavaType()` don't predict a Java class ahead of
+  decoding a row.** client-v2's `BinaryStreamReader` decode switch is the actual source of truth;
+  duplicating it here risks silent drift. A caller that needs a Java type per column derives one
+  from an actually-decoded row's value instead. Fails loudly (no wrong guess), documented on both
+  classes.
+- **`Connection.setStatementTimeout(Duration)` still throws `UnsupportedOperationException`.**
+  `ClickHouseHttpTransport` now supports a transport-wide `responseTimeout`, but per-statement
+  timeouts would need that value threaded per-request rather than baked into the `HttpClient`
+  instance at construction — a real architectural change, not a small fix, and out of scope for this
+  pass. Fails loudly (throws) rather than silently ignoring the call.
+- **Transactions/savepoints are unimplemented**, matching ClickHouse's HTTP interface having no real
+  session affinity for its experimental transaction feature (see `ClickHouseConnection`'s class
+  Javadoc for the full, checked-against-docs reasoning). Fails loudly.
+- **Cancellation propagates by closing the underlying HTTP connection**, not by sending an explicit
+  `KILL QUERY` — already covered by existing transport contract tests
+  (`ClickHouseHttpTransportTest`'s cancellation-before/while-queued/during-receive matrix).
+  ClickHouse's own HTTP interface is expected to notice the dropped connection and stop executing
+  server-side; `query_id` is already sent as `X-ClickHouse-Query-Id` on every request, giving a
+  caller the means to run `KILL QUERY WHERE query_id = ...` manually if server-side detection ever
+  proves too slow in practice. Not yet independently verified against a real ClickHouse server that
+  this actually stops server-side execution (vs. just stops the client from reading further) —
+  tracked below as unverified, not silently assumed correct.
+
+### Open gaps, not yet addressed
+
+- **`ssl=true` is completely untested.** `ClickHouseConnectionFactory.from` builds an `https://`
+  base URL and hands it to Reactor Netty's `HttpClient`, expected to auto-negotiate TLS from the URI
+  scheme — but no test constructs a transport with `ssl=true` or exercises HTTPS end to end. Genuine
+  silent risk if it doesn't actually work; needs a real or self-signed-cert test server.
+- **No retry/reconnect policy of any kind.** A transient failure (connection reset, one dropped
+  request) surfaces directly to the caller as an error; there is no automatic retry, and none should
+  be added silently (retrying a non-idempotent `INSERT` automatically would be its own silent risk)
+  — but a documented, opt-in retry policy for idempotent reads is plausible future work, not designed
+  yet.
+- **`KILL QUERY` server-side cancellation is not independently verified** — see above; needs a
+  real-ClickHouse test that starts a slow query, cancels the R2DBC subscription, and then confirms
+  (e.g. via `SHOW PROCESSLIST`) that ClickHouse actually stopped executing it, not just that the
+  client stopped reading.
+- **No way to configure the transport's HTTP connection-pool size (`maxConnections`) through the
+  standard R2DBC `ConnectionFactoryOptions` bootstrap path** — only through constructing
+  `ClickHouseHttpTransport` directly. `CONNECT_TIMEOUT` is now wired (this pass); pool sizing isn't a
+  well-known R2DBC `Option`, so this would need a driver-specific custom `Option`. Configurability
+  gap, not a correctness bug.
+- **`docs/CURRENT_WORK.md` is a stale session handoff note from the Phase 2→3 transition** and no
+  longer reflects the current state of the driver (references "Phase 3 not started yet", written
+  before `connector` existed at all). Documentation hygiene, not a code gap — should be deleted or
+  rewritten, not left to mislead a future reader.
+
+Next to check (session close, 2026-08-12): finish verifying `KILL QUERY` server-side behavior,
+decide on the `ssl=true` test approach, and reassess whether a retry policy belongs in this driver
+at all before designing one.
 
 ## Non-functional requirements: logging, metrics, leaks
 
