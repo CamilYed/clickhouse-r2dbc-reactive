@@ -6,6 +6,7 @@ import io.netty.buffer.ByteBuf;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 import reactor.netty.ByteBufFlux;
@@ -26,14 +27,19 @@ public final class ClickHouseHttpTransport {
   private final Authentication authentication;
 
   public ClickHouseHttpTransport(final String baseUrl) {
-    this(baseUrl, Authentication.none(), ConnectionProvider.create("clickhouse-http-transport"));
+    this(
+        baseUrl,
+        Authentication.none(),
+        ConnectionProvider.create("clickhouse-http-transport"),
+        null);
   }
 
   public ClickHouseHttpTransport(final String baseUrl, final int maxConnections) {
     this(
         baseUrl,
         Authentication.none(),
-        ConnectionProvider.create("clickhouse-http-transport", maxConnections));
+        ConnectionProvider.create("clickhouse-http-transport", maxConnections),
+        null);
   }
 
   /**
@@ -44,7 +50,8 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         Authentication.basic(user, password),
-        ConnectionProvider.create("clickhouse-http-transport"));
+        ConnectionProvider.create("clickhouse-http-transport"),
+        null);
   }
 
   /**
@@ -52,17 +59,40 @@ public final class ClickHouseHttpTransport {
    * point for auth modes beyond plain HTTP Basic (e.g. {@link Authentication#userKey}).
    */
   public ClickHouseHttpTransport(final String baseUrl, final Authentication authentication) {
-    this(baseUrl, authentication, ConnectionProvider.create("clickhouse-http-transport"));
+    this(baseUrl, authentication, ConnectionProvider.create("clickhouse-http-transport"), null);
+  }
+
+  /**
+   * The general entry point for configuring a per-request response timeout alongside {@code
+   * authentication}.
+   *
+   * <p>{@code responseTimeout} is {@code null} (no timeout at all) via every other constructor —
+   * deliberately: ClickHouse is an analytical database where a legitimate query can easily run far
+   * longer than a typical OLTP request, so this transport does not impose an arbitrary global time
+   * limit on query execution unless a caller explicitly asks for one. An earlier version of this
+   * class hardcoded a 2-second response timeout with no way to change it, which would have failed
+   * every real query that took longer than that — corrected here. A caller that wants a hard
+   * per-query time limit should configure one explicitly via this constructor (or, once
+   * implemented, per statement via {@code Connection.setStatementTimeout}).
+   */
+  public ClickHouseHttpTransport(
+      final String baseUrl,
+      final Authentication authentication,
+      final @Nullable Duration responseTimeout) {
+    this(
+        baseUrl,
+        authentication,
+        ConnectionProvider.create("clickhouse-http-transport"),
+        responseTimeout);
   }
 
   private ClickHouseHttpTransport(
       final String baseUrl,
       final Authentication authentication,
-      final ConnectionProvider connectionProvider) {
-    this.httpClient =
-        HttpClient.create(connectionProvider)
-            .baseUrl(baseUrl)
-            .responseTimeout(Duration.ofSeconds(2));
+      final ConnectionProvider connectionProvider,
+      final @Nullable Duration responseTimeout) {
+    final HttpClient client = HttpClient.create(connectionProvider).baseUrl(baseUrl);
+    this.httpClient = responseTimeout == null ? client : client.responseTimeout(responseTimeout);
     this.authentication = authentication;
   }
 

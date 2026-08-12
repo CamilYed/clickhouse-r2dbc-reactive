@@ -176,10 +176,12 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
-  void shouldFailWithinItsOwnTimeoutWhenTheServerNeverResponds() {
+  void shouldFailWithinAnExplicitlyConfiguredTimeoutWhenTheServerNeverResponds() {
     // given
     try (final var server = ControlledClickHouseServer.startAcceptingButNeverResponding()) {
-      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(), Authentication.none(), Duration.ofSeconds(2));
       final Instant start = Instant.now();
 
       // when
@@ -195,6 +197,30 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
       // then
       assertThat(thrown).isNotNull();
       assertThat(Duration.between(start, Instant.now())).isLessThan(Duration.ofSeconds(5));
+    }
+  }
+
+  @Test
+  void shouldNotTimeOutByDefaultOnAQueryThatTakesLongerThanTheOldHardcodedLimit() {
+    // given - an earlier version of this transport hardcoded a 2-second response timeout with no
+    // way to disable it; a query taking longer than that would always fail. The default
+    // constructor must impose no such limit, matching standard JDBC/R2DBC driver behavior.
+    final byte[] body = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWithDelay(
+            body, Duration.ofSeconds(3))) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      // when
+      final byte[] received =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .aggregate()
+              .asByteArray()
+              .block(Duration.ofSeconds(10));
+
+      // then
+      assertThat(received).isEqualTo(body);
     }
   }
 
