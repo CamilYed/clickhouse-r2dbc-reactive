@@ -45,6 +45,15 @@ class ClickHouseConnectionTest {
   }
 
   @Test
+  void shouldCreateABatch() {
+    // when
+    final var batch = connection.createBatch();
+
+    // then
+    assertThat(batch).isNotNull();
+  }
+
+  @Test
   void shouldRejectStartingATransaction() {
     // when / then
     StepVerifier.create(connection.beginTransaction())

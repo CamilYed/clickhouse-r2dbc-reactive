@@ -401,11 +401,19 @@ documented contract. `transport-http`'s `ClickHouseHttpTransport.query()` append
 `testkit.ControlledClickHouseServer` grew `receivedUri()` so transport tests can assert on the
 actual request query string, not just headers.
 
+`Connection.createBatch()` is real too: `ClickHouseBatch` implements `add(String)`/`execute()` per
+`r2dbc-spi:1.0.0.RELEASE`'s `Batch` contract — unlike `ClickHouseStatement`, a batched statement
+takes complete, literal SQL (no bound parameters), and `execute()` runs every added statement
+sequentially (one full round trip per statement, via `concatMap` so the next statement isn't sent
+before the previous one's request has gone out), emitting one `Result` per statement in the same
+order — needed for a batch like `CREATE TABLE ...` immediately followed by `INSERT INTO ...`
+against it. Proven against real ClickHouse
+(`ClickHouseBatchAgainstRealClickHouseTest`: create + insert + a `count()`-based select, in one
+batch, asserting the select's result reflects the insert that ran before it in the same batch).
+
 The SPI registration file (`META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`) is still
-intentionally **not** added yet: `Batch` (`add()`/batched bindings) still throws
-`UnsupportedOperationException`, and this driver wants that real before registering itself as
-discoverable — a driver that opens, queries, and binds parameters but can't batch would be a
-narrower, less honest gap to discover than "not registered yet".
+intentionally **not** added yet — see [Phase 4](#phase-4--fully-reactive-sign-off) below for what's
+still outstanding before this driver calls itself registrable/discoverable.
 
 - `connector`: `ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata,
   parameter binding, R2DBC exception mapping, explicit unsupported-transaction-semantics handling.

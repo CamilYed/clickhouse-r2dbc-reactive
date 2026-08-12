@@ -72,7 +72,7 @@ public final class ClickHouseConnection implements Connection {
 
   @Override
   public Batch createBatch() {
-    throw new UnsupportedOperationException("Batches are not supported yet");
+    return new ClickHouseBatch(transport);
   }
 
   @Override
