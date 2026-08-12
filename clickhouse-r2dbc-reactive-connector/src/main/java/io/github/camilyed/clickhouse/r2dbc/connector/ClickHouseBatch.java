@@ -21,6 +21,10 @@ import reactor.core.publisher.Flux;
  * #add(String)} was called, and emits one {@link Result} per statement in that same order — later
  * statements are not started until the previous one's request has been sent, which matters for a
  * batch like {@code CREATE TABLE ...} followed by {@code INSERT INTO ...} against it.
+ *
+ * <p>Any failure obtaining a {@link Result} for one of the statements is mapped onto {@link
+ * io.r2dbc.spi.R2dbcException} via {@link ClickHouseR2dbcException} ({@code
+ * ClickHouseR2dbcException.wrap}), same as {@link ClickHouseStatement}.
  */
 final class ClickHouseBatch implements Batch {
 
@@ -48,6 +52,8 @@ final class ClickHouseBatch implements Batch {
   private Publisher<ClickHouseResult> executeOne(final String sql) {
     final Flux<ByteBuffer> body =
         transport.query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body).map(ClickHouseResult::new);
+    return RowBinaryDecoder.decode(body)
+        .map(ClickHouseResult::new)
+        .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 }

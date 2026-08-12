@@ -28,6 +28,10 @@ import reactor.core.publisher.Mono;
  * derived instance — that derived {@link Result} wraps the same underlying row stream and has its
  * own, separate consumption guard. Calling both the original and a filtered view is a misuse this
  * class does not currently detect.
+ *
+ * <p>A failure while consuming rows (e.g. a connection reset mid-stream, a local decode bug) is
+ * mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link ClickHouseR2dbcException} ({@code
+ * ClickHouseR2dbcException.wrap}), same as {@link ClickHouseStatement}/{@link ClickHouseBatch}.
  */
 final class ClickHouseResult implements Result {
 
@@ -57,7 +61,9 @@ final class ClickHouseResult implements Result {
       throw new IllegalArgumentException("mappingFunction must not be null");
     }
     markConsumedOrFail();
-    return rows.map(values -> mappingFunction.apply(new ClickHouseRow(values, metadata), metadata));
+    final Flux<T> mapped =
+        rows.map(values -> mappingFunction.apply(new ClickHouseRow(values, metadata), metadata));
+    return mapped.onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
   @Override
@@ -75,7 +81,8 @@ final class ClickHouseResult implements Result {
       throw new IllegalArgumentException("mappingFunction must not be null");
     }
     markConsumedOrFail();
-    return rows.concatMap(values -> mappingFunction.apply(rowSegment(values)));
+    final Flux<T> flatMapped = rows.concatMap(values -> mappingFunction.apply(rowSegment(values)));
+    return flatMapped.onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
   private RowSegment rowSegment(final Map<String, Object> values) {

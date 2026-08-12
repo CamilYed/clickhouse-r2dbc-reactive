@@ -32,6 +32,11 @@ import reactor.core.publisher.Flux;
  * mapping is this driver's own convention, not something ClickHouse defines. {@link #add()}
  * (batched bindings, i.e. one {@code Statement} executed once per saved binding set) is separately
  * scoped future work and still throws {@link UnsupportedOperationException}.
+ *
+ * <p>Any failure obtaining a {@link Result} — a ClickHouse server error, a transport failure, a
+ * local decode bug — is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
+ * ClickHouseR2dbcException} ({@code ClickHouseR2dbcException.wrap}), so standard R2DBC error
+ * handling around {@link #execute()} catches it.
  */
 final class ClickHouseStatement implements Statement {
 
@@ -98,7 +103,9 @@ final class ClickHouseStatement implements Statement {
     }
     final ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(boundValues);
     final Flux<ByteBuffer> body = transport.query(query).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body).map(ClickHouseResult::new);
+    return RowBinaryDecoder.decode(body)
+        .map(ClickHouseResult::new)
+        .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
   private String nameAt(final int index) {
