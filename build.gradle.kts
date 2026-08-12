@@ -8,6 +8,8 @@ import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
+import org.gradle.api.tasks.javadoc.Javadoc
+import org.gradle.external.javadoc.CoreJavadocOptions
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.plugins.signing.SigningExtension
 import org.gradle.testing.jacoco.plugins.JacocoPluginExtension
@@ -52,6 +54,15 @@ subprojects {
                 withSourcesJar()
                 withJavadocJar()
             }
+        }
+
+        // Relax only the "missing tag" doclint category (no @param/@return/@throws), not doclint
+        // as a whole: CLAUDE.md's own Javadoc rule asks for a one-line contract summary per public
+        // member, not exhaustive per-parameter tags that just repeat what the summary already says.
+        // Doclint's other checks (malformed HTML, broken {@link} targets, etc.) still run and still
+        // fail the build, since those catch genuinely broken documentation.
+        tasks.withType<Javadoc>().configureEach {
+            (options as? CoreJavadocOptions)?.addStringOption("Xdoclint:all,-missing", "-quiet")
         }
 
         extensions.configure<JacocoPluginExtension> {
