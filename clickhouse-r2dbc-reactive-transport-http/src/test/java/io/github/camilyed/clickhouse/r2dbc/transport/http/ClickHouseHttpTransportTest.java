@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
+import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.ToByteArrayAbility;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
@@ -266,5 +267,27 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
             // then
             assertThat(server.receivedQueryId()).isEqualTo("my-query-id");
         }
+    }
+
+    @Test
+    void shouldSignalAServerErrorWhenTheExceptionCodeHeaderIsPresent() {
+        // given
+        final String errorBody = "Code: 60. DB::Exception: Table default.missing doesn't exist";
+
+        // when
+        final Throwable thrown;
+        try (final var server = ControlledClickHouseServer.startRespondingWithClickHouseError(60, errorBody, 404)) {
+            final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+            thrown = catchThrowable(() -> transport.query(ClickHouseQuery.of("SELECT * FROM missing"))
+                    .aggregate()
+                    .asByteArray()
+                    .block(Duration.ofSeconds(5)));
+        }
+
+        // then
+        assertThat(thrown).isInstanceOf(ServerException.class);
+        assertThat(((ServerException) thrown).getCode()).isEqualTo(60);
+        assertThat(thrown.getMessage()).contains(errorBody);
     }
 }

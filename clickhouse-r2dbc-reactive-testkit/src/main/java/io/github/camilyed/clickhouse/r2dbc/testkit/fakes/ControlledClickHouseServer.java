@@ -114,6 +114,31 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         return new ControlledClickHouseServer(started, requestReceived, connectionClosed, activeConnections, receivedQueryId);
     }
 
+    /** Responds with a ClickHouse-style error: the exception-code header, plus the given HTTP status and body. */
+    public static ControlledClickHouseServer startRespondingWithClickHouseError(
+            final int errorCode, final String message, final int httpStatus) {
+        final AtomicBoolean requestReceived = new AtomicBoolean(false);
+        final AtomicBoolean connectionClosed = new AtomicBoolean(false);
+        final AtomicInteger activeConnections = new AtomicInteger(0);
+        final AtomicReference<String> receivedQueryId = new AtomicReference<>();
+        final DisposableServer started = HttpServer.create()
+                .port(0)
+                .route(routes -> routes.post("/", (request, response) -> {
+                    requestReceived.set(true);
+                    activeConnections.incrementAndGet();
+                    receivedQueryId.set(request.requestHeaders().get("X-ClickHouse-Query-Id"));
+                    response.withConnection(conn -> conn.onDispose(() -> {
+                        connectionClosed.set(true);
+                        activeConnections.decrementAndGet();
+                    }));
+                    return response.status(httpStatus)
+                            .header("X-ClickHouse-Exception-Code", String.valueOf(errorCode))
+                            .sendString(Mono.just(message));
+                }))
+                .bindNow();
+        return new ControlledClickHouseServer(started, requestReceived, connectionClosed, activeConnections, receivedQueryId);
+    }
+
     public static ControlledClickHouseServer startRespondingThenResettingConnection(
             final byte[] firstChunk, final Duration beforeReset) {
         final AtomicBoolean requestReceived = new AtomicBoolean(false);
