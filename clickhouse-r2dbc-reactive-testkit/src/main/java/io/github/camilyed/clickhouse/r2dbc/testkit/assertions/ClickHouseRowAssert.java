@@ -19,7 +19,10 @@ public final class ClickHouseRowAssert
     super(actual, ClickHouseRowAssert.class);
   }
 
-  /** Entry point for fluent assertions on a decoded row, e.g. {@code assertThatRow(row).hasValue(...)}. */
+  /**
+   * Entry point for fluent assertions on a decoded row, e.g. {@code
+   * assertThatRow(row).hasValue(...)}.
+   */
   public static ClickHouseRowAssert assertThatRow(final Map<String, Object> actual) {
     return new ClickHouseRowAssert(actual);
   }

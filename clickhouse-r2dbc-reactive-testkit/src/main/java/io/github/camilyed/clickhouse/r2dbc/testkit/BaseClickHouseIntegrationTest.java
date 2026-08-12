@@ -36,7 +36,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 public abstract class BaseClickHouseIntegrationTest {
 
-  /** Constructor for subclasses; there is no state to initialize beyond the shared static container. */
+  /**
+   * Constructor for subclasses; there is no state to initialize beyond the shared static container.
+   */
   protected BaseClickHouseIntegrationTest() {}
 
   @Container

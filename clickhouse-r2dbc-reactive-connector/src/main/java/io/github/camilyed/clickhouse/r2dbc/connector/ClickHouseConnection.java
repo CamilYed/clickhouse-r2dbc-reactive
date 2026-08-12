@@ -21,15 +21,15 @@ import reactor.core.publisher.Mono;
  * (clickhouse.com/docs/guides/developer/transactional), not assumed: outside of ClickHouse's own
  * {@code BEGIN TRANSACTION}/{@code COMMIT}/{@code ROLLBACK} feature, every statement is its own
  * atomic unit and the client sees <b>read uncommitted</b> isolation — snapshot isolation only
- * applies to clients that are themselves inside one of those transactions. That transaction
- * feature is explicitly <b>experimental</b>, requires ClickHouse Keeper/ZooKeeper, only works with
- * the (default) Atomic database engine and non-replicated MergeTree tables, is off by default
- * (needs {@code allow_experimental_transactions=1} server-side), and — as far as this driver has
- * verified — its documented examples all go through {@code clickhouse client} / the native TCP
- * protocol, not the stateless HTTP interface this driver uses; whether {@code BEGIN}/{@code COMMIT}
- * even work correctly over HTTP without a sticky, connection-affine session is an open question
- * this driver has not tried to answer. Given all of that, this class does not implement
- * transactions: every transaction/savepoint-related method either fails clearly with {@link
+ * applies to clients that are themselves inside one of those transactions. That transaction feature
+ * is explicitly <b>experimental</b>, requires ClickHouse Keeper/ZooKeeper, only works with the
+ * (default) Atomic database engine and non-replicated MergeTree tables, is off by default (needs
+ * {@code allow_experimental_transactions=1} server-side), and — as far as this driver has verified
+ * — its documented examples all go through {@code clickhouse client} / the native TCP protocol, not
+ * the stateless HTTP interface this driver uses; whether {@code BEGIN}/{@code COMMIT} even work
+ * correctly over HTTP without a sticky, connection-affine session is an open question this driver
+ * has not tried to answer. Given all of that, this class does not implement transactions: every
+ * transaction/savepoint-related method either fails clearly with {@link
  * UnsupportedOperationException} or, where the R2DBC spec explicitly allows it, no-ops — see each
  * method's Javadoc for which. A caller that assumes real transactional guarantees here would be
  * wrong to, and this class fails loudly rather than silently pretending otherwise.

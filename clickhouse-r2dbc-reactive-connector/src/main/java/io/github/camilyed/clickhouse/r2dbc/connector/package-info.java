@@ -12,9 +12,9 @@
  * a second general-purpose ClickHouse client.
  *
  * <p>{@code @NullMarked}: every parameter, return value, and field is non-null unless explicitly
- * annotated {@code @Nullable}. Note this is <em>our own</em> null-safety convention, not r2dbc-spi's
- * — that SPI's own {@code Nullable}/{@code NonNullApi} annotations are package-private to {@code
- * io.r2dbc.spi} and cannot be reused by implementors like this driver.
+ * annotated {@code @Nullable}. Note this is <em>our own</em> null-safety convention, not
+ * r2dbc-spi's — that SPI's own {@code Nullable}/{@code NonNullApi} annotations are package-private
+ * to {@code io.r2dbc.spi} and cannot be reused by implementors like this driver.
  */
 @NullMarked
 package io.github.camilyed.clickhouse.r2dbc.connector;
