@@ -91,6 +91,15 @@ are real but lower priority — document as supported-later, not silently unsupp
 story (server-side `KILL QUERY` semantics) needs it generated and threaded through from day one,
 not bolted on later.
 
+**Verified empirically (Phase 2, `QueryIdHeaderAgainstRealClickHouseTest`):** client-v2's own
+`ClickHouseHttpProto.HEADER_QUERY_ID` Javadoc claims "Response only header ... Cannot be used in
+request" — yet client-v2's own `addHeaders` code sets it as a request header anyway, and separately
+sends a `query_id` URL query parameter too. That's a contradiction inside client-v2 itself, worth
+not trusting blindly. Tested directly against a real ClickHouse container, header-only (no query
+parameter): the server's response echoed back exactly the `query_id` we sent as a request header.
+**The header alone is sufficient** — client-v2's own doc comment is stale/misleading, not something
+to imitate defensively by also sending the query parameter unless a future finding says otherwise.
+
 ## Query parameters (settings, query_id, roles, statement params)
 
 `addRequestParams`/`addStatementParams` (lines 926–954):
