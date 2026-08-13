@@ -1,7 +1,7 @@
 # ClickHouse R2DBC Reactive
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-design%20%2F%20pre--alpha-orange.svg)](#status)
+[![Status](https://img.shields.io/badge/status-functional%20%2F%20pre--release-orange.svg)](#status)
 [![Java](https://img.shields.io/badge/Java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
 [![Reactor](https://img.shields.io/badge/Reactor-Mono%20%7C%20Flux-blueviolet.svg)](https://projectreactor.io/)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-Client%20V2-FFCC01.svg)](https://github.com/ClickHouse/clickhouse-java)
@@ -27,9 +27,10 @@ The design direction started as a public design discussion with the ClickHouse t
 
 - [Why](#why)
 - [Status](#status)
+- [Known limitations](#known-limitations)
 - [What "fully reactive" means here](#what-fully-reactive-means-here)
 - [Architecture direction](#architecture-direction)
-- [Planned modules](#planned-modules)
+- [Modules](#modules)
 - [Requirements](#requirements)
 - [Testing strategy](#testing-strategy)
 - [Roadmap](#roadmap)
@@ -52,17 +53,61 @@ a driver where those properties are explicit, tested, and owned by a single, wel
 
 ## Status
 
-Early design and validation phase. No production implementation exists yet.
+Functional, not yet released. The full R2DBC SPI surface exists and is exercised against a real
+ClickHouse server (Testcontainers): connection lifecycle, `SELECT`/`INSERT`/parameterized
+statements, batches, row/column metadata, `getRowsUpdated()`, and R2DBC exception mapping for
+ClickHouse server errors. No version has been published to Maven Central yet, and the driver has
+not been run against a production workload.
 
-The current focus is:
-
-1. verifying the existing ClickHouse Java client execution path (blocking boundaries,
-   `CompletableFuture` usage, streaming vs. aggregation, pool and queue ownership);
-2. a small transport spike proving non-blocking I/O, streaming decoding, bounded buffering,
-   and cancellation with `SELECT 1` and a streamed multi-row result;
-3. only after that, building out the R2DBC SPI surface.
+Before relying on this in production, read
+[ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) — an explicit,
+honestly-triaged list of what's fixed, what's a documented safe limitation, and what's still an
+open gap (currently: `ssl=true` is untested, there's no retry/reconnect policy, and — see
+[Known limitations](#known-limitations) below — cancelling a subscription does not stop a query on
+the ClickHouse server). That page is the actual source of truth for "is this safe to depend on
+today", kept up to date as things are found and fixed — treat this README as a summary of it, not
+the other way around.
 
 Expect breaking changes at every stage before a `0.1.0` release.
+
+## Known limitations
+
+> [!WARNING]
+> **Cancelling a subscription does not stop the query on the ClickHouse server.** This is a
+> ClickHouse HTTP interface limitation, not a bug in this driver — verified against a real server,
+> not assumed. See
+> [ROADMAP.md's writeup](ROADMAP.md#production-readiness-review) (search "Cancelling a client-side
+> subscription") and the regression test that proves it,
+> [`QueryCancellationAgainstRealClickHouseTest`](clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/QueryCancellationAgainstRealClickHouseTest.java).
+
+Disposing a `Flux`/`Mono` subscription (`.take(n)`, a timeout operator, an upstream cancel) makes
+this driver stop reading the response and closes its HTTP connection — that part is fully reactive
+and tested. What it does **not** do is stop ClickHouse itself from continuing to execute the query.
+ClickHouse's own HTTP interface docs say so directly: *"Running requests don't stop automatically
+if the HTTP connection is lost"* (clickhouse.com/docs/interfaces/http). The one setting meant to
+close this gap, `cancel_http_readonly_queries_on_client_close`, is itself unreliable — a query kept
+running after client disconnect even with that setting enabled was reproduced against a recent
+ClickHouse release and closed by ClickHouse's own maintainers as
+["not planned"](https://github.com/ClickHouse/ClickHouse/issues/92786).
+
+**Why this matters for a reactive stack specifically:** the whole premise of this driver is that
+`.timeout(...)`, `.take(n)`, backpressure-driven early completion, and request cancellation on
+client disconnect are meant to bound resource usage end to end. For every other property in the
+["fully reactive" table](#what-fully-reactive-means-here) below, that premise holds all the way to
+the server. For query cancellation specifically, it currently does not: a cancelled slow `SELECT`
+gives the caller their thread/subscription back immediately, but ClickHouse keeps the query running
+server-side for as long as it would have taken to finish anyway — consuming real CPU, memory, and
+query-slots the whole time. Under a pattern like "timeout and retry", that can quietly pile up
+concurrent, unkillable queries on the server even though the client-side code looks correctly
+bounded.
+
+**What you can do about it today:** this driver always sends `query_id` as the
+`X-ClickHouse-Query-Id` request header, specifically so a caller can issue
+`KILL QUERY WHERE query_id = '<id>'` themselves (over any ClickHouse client, including this one) to
+actually stop a query it cancelled. Whether this driver should do that automatically on
+cancellation is an open design question — tracked in
+[ROADMAP.md's open gaps](ROADMAP.md#production-readiness-review) — not implemented silently, since
+it needs its own error handling and relies on the connecting user having `KILL QUERY` privilege.
 
 ## What "fully reactive" means here
 
@@ -75,7 +120,7 @@ reactive end to end only if it satisfies all of the following:
 | Non-blocking I/O | No `Future#get()`, `CompletableFuture#join()`, `block()`, blocking semaphore, or thread-per-request wrapper on the query path. |
 | Stream-oriented consumption | Responses are decoded incrementally; large results are not aggregated in memory before rows are emitted. |
 | Backpressure-aware delivery | Downstream demand influences upstream work and buffering; intermediate queues stay bounded and documented. |
-| Cancellation propagation | Cancelling a subscription removes a queued request or aborts an active exchange, releases buffers and connections, and can cancel the server-side query via `query_id`. |
+| Cancellation propagation | Cancelling a subscription removes a queued request or aborts an active exchange, and releases buffers and connections. Every query carries a `query_id` a caller can use to cancel it server-side via `KILL QUERY` — but cancellation does not (yet) reach the server automatically; see [Known limitations](#known-limitations). |
 | Bounded concurrency | Maximum active requests, maximum pending requests, and pending-acquire timeout are explicit; overload produces a predictable error, not an invisible queue. |
 | Deterministic cleanup | Connections, response bodies, buffers, and decoder state are released on completion, error, timeout, and cancellation. |
 | Reactive error signalling | Transport and ClickHouse errors surface through `onError` with proper R2DBC exception mapping. |
@@ -121,12 +166,13 @@ Responsibility boundaries:
 A particular networking library is a swappable adapter behind the transport boundary, not a
 public architectural dependency.
 
-## Planned modules
+## Modules
 
-Five modules exist now; two more are named but deliberately not built yet. Full responsibilities
-and the reasoning behind each boundary live in
-[ROADMAP.md's module map](ROADMAP.md#module-map) — treat that as authoritative and this table as
-a quick summary only, to avoid the two drifting apart.
+All five modules below exist as Gradle modules today; `integration-tests` is still an empty
+scaffold (see [Roadmap](#roadmap)) — whole-driver black-box coverage currently lives inside
+`connector`'s own `*AgainstRealClickHouseTest` classes instead. Full responsibilities and the
+reasoning behind each boundary live in [ROADMAP.md's module map](ROADMAP.md#module-map) — treat
+that as authoritative and this table as a quick summary only, to avoid the two drifting apart.
 
 | Module | Purpose |
 | --- | --- |
@@ -171,20 +217,24 @@ committed API.
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for the detailed, gated working plan (execution-path analysis,
-transport spike, contract tests, connector, "fully reactive" sign-off, performance testing).
+transport spike, contract tests, connector, "fully reactive" sign-off, performance testing), and
+its [Production readiness review](ROADMAP.md#production-readiness-review) for the current,
+up-to-date list of what's fixed, safe-and-documented, or still an open gap — that section is
+updated far more often than this one and is the one to check before depending on this driver.
 
-Near-term:
+The execution-path analysis, transport spike, transport SPI, and first R2DBC connector surface
+(the "Near-term"/"Later" items this section used to list) are all done; what's left before a
+`0.1.0` release is closing the open gaps below, not building new surface area:
 
-- Publish verified execution-path analysis of the existing ClickHouse Java client
-- Transport spike: `SELECT 1` through non-blocking I/O, incremental decoding, deterministic
-  cleanup, against a controlled local server
-- Define the small transport SPI (active/pending limits, timeouts, cancellation, streaming chunks)
-
-Later:
-
-- First R2DBC connector surface reusing Client V2 core components
-- ClickHouse integration test matrix (Testcontainers)
-- Benchmarks vs. the existing R2DBC driver
+- Decide whether cancellation should send an explicit `KILL QUERY` server-side (see
+  [Known limitations](#known-limitations))
+- Test `ssl=true` end to end against a real or self-signed-cert server
+- Decide whether a retry/reconnect policy belongs in this driver at all before designing one
+- Fill in `clickhouse-r2dbc-reactive-integration-tests` — the module exists but is still an empty
+  scaffold; whole-driver black-box coverage today lives inside `connector`'s own
+  `*AgainstRealClickHouseTest` classes instead
+- Benchmarks vs. the existing R2DBC driver — deliberately not started yet, see
+  [CLAUDE.md's Performance testing section](CLAUDE.md#performance-testing)
 - Maven Central publication (`io.github.camilyed`), following the same release process used in
   [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)
 - Evaluate HTTP multiplexing / native TCP transport as a separate track
@@ -211,8 +261,10 @@ proposed back to `ClickHouse/clickhouse-java` as a module or connector, followin
 
 ## Contributing
 
-Issues and discussion are welcome, especially around the execution-path analysis and transport
-spike. Contribution guidelines will be added once the first module skeleton lands.
+Issues and discussion are welcome, especially around the open gaps tracked in
+[ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review). Formal
+contribution guidelines (`CONTRIBUTING.md`) exist and cover the PR checklist; see there for the
+current process.
 
 ## License
 
