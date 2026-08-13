@@ -96,11 +96,27 @@ baseline (272 vs 296 B/row), but the two aren't doing equivalent work — the di
 row without calling any getter, while client-v2's benchmark calls three. Not yet a "faster than
 client-v2" result; that needs a production-shaped prototype with real value access.
 
-Next: still not yet started — a compact `Object[]`-per-row prototype (replacing
-`Flux<Map<String, Object>>`) with once-per-result shared column metadata, benchmarked with equivalent
-per-value access against client-v2's getters, before committing to the full `RowBinaryDecoder`
-redesign. Wide multi-type decode, aggregation, INSERT, and the reactive-vs-blocking concurrency burst
-scenario stay queued behind this — all designed in ROADMAP.md, not yet built.
+**`DecoderOnlyBenchmark.ourDriverCompactRow` — the fair comparison — run and confirmed with 3 forks**:
+calls the same three typed getters (`getLong`/`getString`/`getBigDecimal`) client-v2's own benchmark
+calls and packs them into a plain `Object[]` — a real retained per-row object, no
+`LinkedHashMap`/`RecordWrapper.entrySet()` involved. Result: recovers essentially all of H1's cost,
+but a genuine, moderate residual remains — **~13–16% slower than client-v2, ~48–56 bytes/row more**,
+most likely the `FluxInputStreamBridge`/`Flux.generate` pipeline itself (the never-isolated H2
+hypothesis) — a reasonable cost for real backpressure and a non-blocking event loop, not a multi-x
+regression. Full numbers and the multi-fork methodology note: ROADMAP.md's Phase 5 section.
+
+**Multi-fork methodology note**: the first `ourDriverCompactRow` run used the default single fork and
+gave numbers that didn't reproduce run-to-run on identical code/data. `-Pjmh.forks`/
+`-Pjmh.warmupIterations` are now wired (same pattern as `includes`/`profilers`) — use them before
+trusting any result enough to act on it:
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc -Pjmh.forks=3 -Pjmh.warmupIterations=3
+```
+
+Wide multi-type decode, aggregation, INSERT, and the reactive-vs-blocking concurrency burst scenario
+stay queued behind this — all designed in ROADMAP.md, not yet built. Charts of the final confirmed
+numbers for the main README are explicitly deferred to the end of this phase.
 
 **Fairness fixes applied after the first run** (a real run surfaced real gaps — not designed away
 in the abstract): the ClickHouse image is now version-pinned rather than `latest`; client-v2 now

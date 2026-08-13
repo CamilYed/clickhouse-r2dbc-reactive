@@ -134,6 +134,49 @@ public class DecoderOnlyBenchmark {
   }
 
   /**
+   * The production-shaped candidate replacement for {@link #ourDriver}'s {@code
+   * new LinkedHashMap<>(reader.next())} — a compact {@code Object[]} snapshot per row, built from
+   * the same three typed getters {@link #clientV2} calls ({@code getLong}/{@code getString}/{@code
+   * getBigDecimal}), never touching {@code RecordWrapper.entrySet()} at all. Unlike {@link
+   * #ourDriverWithoutMapCopy} (which discards each row untouched — useful for isolating H1's cost,
+   * but not a fair comparison against {@link #clientV2}, which does real per-value work), this
+   * method does the same per-column extraction {@link #clientV2} does and retains a real per-row
+   * object (an {@code Object[]}, blackholed same as the row count) — the same shape a production
+   * {@code DecodedRow} would need to hand back to an R2DBC caller. This is the benchmark the
+   * investigation in ROADMAP.md's Phase 5 "Optimization phase" section calls for before committing
+   * to the compact-row redesign: equivalent value access on both sides, not a discard-only diagnostic.
+   */
+  @Benchmark
+  public void ourDriverCompactRow(final Blackhole blackhole) {
+    final RowBinaryWithNamesAndTypesFormatReader reader =
+        new RowBinaryWithNamesAndTypesFormatReader(
+            FluxInputStreamBridge.subscribeTo(
+                Flux.just(ByteBuffer.wrap(capturedResponseBytes)), RESPONSE_CHUNK_DEMAND),
+            new QuerySettings()
+                .setUseTimeZone("UTC")
+                .serverSetting(ServerSettings.OUTPUT_FORMAT_BINARY_WRITE_JSON_AS_STRING, "1"),
+            new BinaryStreamReader.DefaultByteBufferAllocator());
+    final long rowCount =
+        Flux.generate(
+                () -> reader,
+                (final RowBinaryWithNamesAndTypesFormatReader r,
+                    final SynchronousSink<Object[]> sink) -> {
+                  if (r.hasNext()) {
+                    r.next();
+                    final Object[] row = {r.getLong(1), r.getString(2), r.getBigDecimal(3)};
+                    blackhole.consume(row);
+                    sink.next(row);
+                  } else {
+                    sink.complete();
+                  }
+                  return r;
+                })
+            .count()
+            .block(Duration.ofSeconds(60));
+    blackhole.consume(rowCount);
+  }
+
+  /**
    * client-v2's own reader, constructed directly over the captured bytes (no {@code Client}/{@code
    * QueryResponse} involved) — the same {@code RowBinaryWithNamesAndTypesFormatReader} class and
    * settings {@link RowBinaryDecoder#decodeRows} itself wraps, so this measures client-v2's decode

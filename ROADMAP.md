@@ -1646,9 +1646,81 @@ getter-based access, not this discard-only diagnostic.
 that can change or go stale as decoding continues. What this data supports: replace
 `Flux<Map<String, Object>>` with a compact per-row `Object[]` snapshot (one copy, no hash table) plus
 once-per-result shared column-name→index metadata, matching R2DBC's index/name row-access shape
-directly instead of routing through a `Map`. Not yet built — next step is a small production-shaped
-prototype benchmarked with real value access (not a discard-only diagnostic) before committing to the
-full redesign.
+directly instead of routing through a `Map`.
+
+**`DecoderOnlyBenchmark.ourDriverCompactRow` — the fair, production-shaped comparison — run and
+confirmed (2026-08-13).** `ourDriverWithoutMapCopy` proved the bridge/Reactor machinery isn't the
+regression, but wasn't a fair number to compare against `clientV2` (it discards each row untouched,
+no getter calls, while `clientV2`'s benchmark does real per-value work). `ourDriverCompactRow` closes
+that gap: same `FluxInputStreamBridge`/`Flux.generate` shape, but instead of
+`new LinkedHashMap<>(reader.next())` it calls the same three typed getters `clientV2` calls
+(`getLong(1)`/`getString(2)`/`getBigDecimal(3)`) and packs them into a plain `Object[3]` — a real
+retained per-row object, the shape a production `DecodedRow` would need, built without ever touching
+`RecordWrapper.entrySet()`.
+
+**Methodology correction first — the initial single-fork run was not trustworthy.** The first
+`-Pjmh.forks` run (default `fork.set(1)`, one warmup iteration) gave numbers that didn't reproduce
+between runs of byte-for-byte identical code and data (`ourDriver` at 1M: 848 B/row one run, 808
+B/row the next; `ourDriverWithoutMapCopy` at 100k: 272 B/row one run, 248 B/row the next) — a single
+fork can't separate a real structural cost from that particular JVM instance's own JIT/GC/TLAB state.
+Added `-Pjmh.forks`/`-Pjmh.warmupIterations` wiring to `build.gradle.kts` (same pattern as
+`includes`/`profilers`) and re-ran with 3 forks × 3 iterations (`Cnt: 9` per GC metric below):
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc -Pjmh.forks=3 -Pjmh.warmupIterations=3
+```
+
+**With 3 forks, B/row numbers converge tightly and the H0/H1 decomposition holds exactly:**
+
+| rows | clientV2 B/row | `ourDriverWithoutMapCopy` B/row | `ourDriverCompactRow` B/row | `ourDriver` B/row |
+| --- | --- | --- | --- | --- |
+| 10,000 | 296.08 | 248.46 | 327.84 | 835.1 (±33.6 — noisy tier, one fork/iteration hit a GC outlier) |
+| 100,000 | 296.01 | 272.05 | 351.99 | 848.05 |
+| 1,000,000 | 296.00 | 272.00 | 344.00 (±20.2 — larger error than other rows, see below) | 848.01 |
+
+`ourDriver` and `ourDriverWithoutMapCopy` at 100k/1M now match the original H0/H1-decomposition
+numbers exactly (848.0 / 272.0) — the earlier 808/248 readings were single-fork noise, not a real
+per-tier effect. **H0 (~24 B/row) and H1 (~576 B/row) stand confirmed, unchanged.**
+
+**The fair comparison's real result: a genuine, moderate, previously-overstated-by-noise residual
+gap remains between `ourDriverCompactRow` and `clientV2`'s baseline.**
+
+| rows | `ourDriverCompactRow` latency | `clientV2` latency | slower by | B/row gap |
+| --- | --- | --- | --- | --- |
+| 10,000 | 934.3 us | 744.6 us | +25.5% | +31.8 |
+| 100,000 | 9052.9 us | 7807.9 us | +15.9% | +56.0 |
+| 1,000,000 | 94532.4 us | 83652.2 us | +13.0% | +48.0 (within the 1M tier's own ±20.2 error margin of the 100k tier's 56.0) |
+
+Unlike the single-fork run's erratic 8%–40% swing, this is a coherent, converging signal: **removing
+the `LinkedHashMap` closes the vast majority of the original gap (H1's 576 B/row, ~77% of latency),
+but ~13–16% of latency and ~48–56 bytes/row remain** once the comparison is fair (equivalent getter
+calls on both sides). The most likely source, by elimination: `clientV2`'s benchmark reads from a
+plain `ByteArrayInputStream` with no bridge and no Reactor involved at all; `ourDriverCompactRow`
+still goes through the full `FluxInputStreamBridge` (queue/`StreamSignal`) + `Flux.generate`
+pipeline — this is the H2 hypothesis this investigation named early on and never isolated on its own.
+**Not yet quantified as its own single-variable measurement — same discipline as H1: no attributing
+this by elimination-reasoning alone without a dedicated isolation benchmark**, but at ~13–16% it's a
+tolerable cost for what the bridge buys (real backpressure, no blocking the Netty event loop), not
+the kind of multi-x regression H1 was.
+
+**One more noise signal worth recording, not chasing right now:** both `ourDriver` and
+`ourDriverWithoutMapCopy` show a single extreme `p1.00` outlier at the 10k tier only (790.6ms and
+132.1ms respectively, against p0.9999 values under 4ms and 1ms) — one sample, out of tens/hundreds of
+thousands, in one fork/iteration. Consistent with a one-off safepoint/GC/OS scheduling stall, not a
+reproducible tail-latency property; doesn't change any conclusion above (means and B/row are stable
+across 9 samples), but would need investigating before any p99.9+ SLA claim is made.
+
+**Decision point:** the compact-row direction is now validated by a fair, multi-fork-confirmed
+comparison — it recovers essentially all of H1's cost and lands within ~13–16% of client-v2's own
+decode speed, a reasonable trade for a reactive, non-blocking pipeline. Scoping the production
+`RowBinaryDecoder`/`DecodedResult`/connector-layer redesign around this compact `Object[]` + shared
+metadata shape is now justified by evidence, not inspection. An H2 isolation benchmark (bridge/Reactor
+cost alone, zero row materialization) remains open as a smaller follow-up if the ~13–16% residual
+gap is ever worth chasing further.
+
+**Deferred to the very end of this phase, once performance is fully confirmed:** nice-looking charts
+of the final benchmark numbers, styled to match GitHub's colour scheme, pasted into the main
+`README.md`. Explicitly not now — noted here so it isn't lost.
 
 **Guardrail, explicit:** every future change from this investigation reruns
 `TrivialQueryBenchmark`/`PointQueryBenchmark` alongside `StreamingScanBenchmark`'s three tiers — a

@@ -65,4 +65,18 @@ jmh {
     if (project.hasProperty("jmh.profilers")) {
         profilers.set((project.property("jmh.profilers") as String).split(","))
     }
+    // Added 2026-08-13: a single fork + one warmup iteration (the defaults above) turned out to be
+    // too thin once results needed to be trusted between separate runs, not just between iterations
+    // within one run - the same method/tier combination gave meaningfully different B/op numbers
+    // (e.g. ourDriver at 1M: ~848 B/row one run, ~808 B/row the next) with byte-for-byte identical
+    // code and input data. A single fork can't distinguish "real per-tier structural cost" from
+    // "this particular JVM instance's JIT/GC/TLAB state" - only multiple independent forks can. Not
+    // defaulted higher because a full multi-fork run is slow; opt in explicitly when a result is
+    // about to be trusted for an architecture decision, not for routine iteration.
+    if (project.hasProperty("jmh.forks")) {
+        fork.set((project.property("jmh.forks") as String).toInt())
+    }
+    if (project.hasProperty("jmh.warmupIterations")) {
+        warmupIterations.set((project.property("jmh.warmupIterations") as String).toInt())
+    }
 }
