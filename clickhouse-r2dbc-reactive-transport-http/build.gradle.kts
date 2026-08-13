@@ -15,6 +15,7 @@ dependencies {
     testImplementation(libs.assertj.core)
     testImplementation(libs.reactor.test)
     testRuntimeOnly(libs.slf4j.simple)
+    testRuntimeOnly(libs.bouncycastle.pkix)
 
     testImplementation(project(":clickhouse-r2dbc-reactive-testkit"))
 }

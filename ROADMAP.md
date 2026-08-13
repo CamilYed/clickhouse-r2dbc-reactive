@@ -585,13 +585,34 @@ fixed, not just documented.
   Logged at `WARN` either way; deliberately not retried, to avoid open-ended retry logic on what is
   already a best-effort cleanup path (see the open retry-policy question below, which is a separate,
   broader decision).
+- **`ssl=true` was completely untested — the TLS auto-negotiation half of that is now verified.**
+  `ClickHouseConnectionFactory.from` builds an `https://` base URL and hands it to Reactor Netty's
+  `HttpClient`, which its own docs say auto-applies a default `SslProvider` when the URI scheme is
+  `https`, with no explicit `.secure(...)` call needed — previously trusted on faith, not checked.
+  Fixed: `ClickHouseHttpTransportTlsTest` starts a real (self-signed-cert) TLS server via Reactor
+  Netty and connects `ClickHouseHttpTransport` to it unmodified over `https://`; since the client
+  doesn't trust that certificate, a successful handshake attempt is provable by the *kind* of
+  failure it gets — an `SSLException` somewhere in the cause chain, categorically different from
+  what would happen if the `https://` scheme were silently ignored and plaintext HTTP sent to a
+  TLS-only port instead (a hang, reset, or garbled response, not a clean TLS alert). This closes
+  the "does `https://` even trigger TLS" half of the question. It deliberately does **not** close
+  the other half — see below.
 
 ### Open gaps, not yet addressed
 
-- **`ssl=true` is completely untested.** `ClickHouseConnectionFactory.from` builds an `https://`
-  base URL and hands it to Reactor Netty's `HttpClient`, expected to auto-negotiate TLS from the URI
-  scheme — but no test constructs a transport with `ssl=true` or exercises HTTPS end to end. Genuine
-  silent risk if it doesn't actually work; needs a real or self-signed-cert test server.
+- **No way to configure a custom trust store for `ssl=true`, so a self-signed or internal-CA
+  certificate — which real ClickHouse deployments commonly use — cannot be connected to at all.**
+  `ClickHouseHttpTransport` has no constructor accepting a custom `SslContext`/trust
+  store/`InsecureTrustManagerFactory`-equivalent; `ClickHouseConnectionFactory.from` has no
+  corresponding `ConnectionFactoryOptions` for it either. A caller whose ClickHouse server uses a
+  publicly-CA-signed certificate is unaffected (the JVM's default trust store already covers that
+  case, no driver code needed); a caller on a self-signed or internal-CA certificate — plausibly the
+  more common case for a database that usually isn't exposed to the public internet — gets a hard
+  `SSLHandshakeException` with no way to work around it short of importing the certificate into the
+  whole JVM's default trust store (`-Djavax.net.ssl.trustStore`), which is a real but heavyweight,
+  outside-the-driver workaround. Whether this driver should grow its own trust-configuration surface
+  (a custom `Option`, a constructor overload) is a genuine design decision, not a small fix — not
+  designed yet.
 - **No retry/reconnect policy of any kind.** A transient failure (connection reset, one dropped
   request) surfaces directly to the caller as an error; there is no automatic retry, and none should
   be added silently (retrying a non-idempotent `INSERT` automatically would be its own silent risk)

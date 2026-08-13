@@ -62,11 +62,12 @@ not been run against a production workload.
 Before relying on this in production, read
 [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) — an explicit,
 honestly-triaged list of what's fixed, what's a documented safe limitation, and what's still an
-open gap (currently: `ssl=true` is untested and there's no retry/reconnect policy — see
-[Known limitations](#known-limitations) below for the cancellation/`KILL QUERY` caveat, which *is*
-handled but on a best-effort basis). That page is the actual source of truth for "is this safe to
-depend on today", kept up to date as things are found and fixed — treat this README as a summary of
-it, not the other way around.
+open gap (currently: `ssl=true` correctly triggers TLS but there's no way to configure a custom
+trust store, so a self-signed or internal-CA certificate can't be connected to at all; and there's
+no retry/reconnect policy — see [Known limitations](#known-limitations) below for the
+cancellation/`KILL QUERY` caveat, which *is* handled but on a best-effort basis). That page is the
+actual source of truth for "is this safe to depend on today", kept up to date as things are found
+and fixed — treat this README as a summary of it, not the other way around.
 
 Expect breaking changes at every stage before a `0.1.0` release.
 
@@ -102,6 +103,17 @@ caller's already-cancelled subscription, and the kill itself is not retried. Und
 "timeout and retry" against a server where this occasionally fails, that residual risk (a query
 that keeps running despite being cancelled) still exists, just far less often than before this was
 implemented — watch for the `WARN` log if that matters to you.
+
+> [!NOTE]
+> **`ssl=true` works, but only against a publicly-CA-signed certificate.** TLS auto-negotiation
+> from the `https://` scheme is verified (see
+> [`ClickHouseHttpTransportTlsTest`](clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransportTlsTest.java)),
+> but there is currently no way to configure a custom trust store, so a self-signed or internal-CA
+> certificate — common for a database that usually isn't exposed to the public internet — cannot be
+> connected to. The only workaround today is importing the certificate into the JVM's own default
+> trust store (`-Djavax.net.ssl.trustStore`), outside this driver entirely. Whether to add
+> trust-store configuration to this driver is an open design question, tracked in
+> [ROADMAP.md's open gaps](ROADMAP.md#production-readiness-review).
 
 ## What "fully reactive" means here
 
@@ -220,7 +232,9 @@ The execution-path analysis, transport spike, transport SPI, and first R2DBC con
 (the "Near-term"/"Later" items this section used to list) are all done; what's left before a
 `0.1.0` release is closing the open gaps below, not building new surface area:
 
-- Test `ssl=true` end to end against a real or self-signed-cert server
+- Decide whether `ssl=true` should grow a way to configure a custom trust store, for self-signed/
+  internal-CA certificates (TLS auto-negotiation itself is now verified — see
+  [Known limitations](#known-limitations))
 - Decide whether a retry/reconnect policy belongs in this driver at all before designing one
 - Fill in `clickhouse-r2dbc-reactive-integration-tests` — the module exists but is still an empty
   scaffold; whole-driver black-box coverage today lives inside `connector`'s own

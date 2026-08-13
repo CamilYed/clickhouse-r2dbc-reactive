@@ -12,6 +12,7 @@ testcontainers = "2.0.5"
 awaitility = "4.3.0"
 jspecify = "1.0.0"
 slf4j = "2.0.18"
+bouncycastle = "1.85"
 
 [plugins]
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
@@ -42,3 +43,7 @@ jspecify = { module = "org.jspecify:jspecify", version.ref = "jspecify" }
 
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+
+# Test-only: Netty's SelfSignedCertificate needs a JCE provider capable of generating a
+# self-signed cert; the JDK-internal fallback generator doesn't work on every JDK version.
+bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
