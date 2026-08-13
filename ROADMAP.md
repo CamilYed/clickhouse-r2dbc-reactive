@@ -1215,10 +1215,64 @@ isn't in this run's JSON — that's logged to the console via SLF4J at trial tea
 own result file. Not captured this run; worth asking for the console log (or re-running with
 `tee`) next time TTFR specifically matters.
 
-**Recommended next benchmarks:** re-run `StreamingScanBenchmark` with `-prof gc` to test the
-allocation hypothesis above (cheap, no code change, directly answers the open question). In
-parallel or after: `ConcurrencyBenchmark` (Level 3, reactive-vs-blocking under concurrent load) —
-the architecturally most important benchmark for this driver, per this section's original design.
+### Correction: the "13% slower" result above has a real methodology bug (2026-08-13)
+
+Caught by review, not by re-running: `ourDriver`'s time-to-first-row instrumentation called
+`AtomicLong#compareAndSet` unconditionally on **every** row, not just the first —
+
+```java
+.doOnNext(row -> {
+    firstRowNanos.compareAndSet(-1, System.nanoTime());   // CAS + System.nanoTime() every row
+    blackhole.consume(row);
+})
+```
+
+— while `clientV2`'s equivalent check was already the cheap plain branch:
+
+```java
+if (firstRowNanos == -1) {
+    firstRowNanos = System.nanoTime();   // only on the first row
+}
+```
+
+At 10,000 rows that's 10,000 unconditional `System.nanoTime()` calls plus 10,000 CAS operations on
+`ourDriver`'s side, against effectively one of each on `clientV2`'s — instrumentation overhead
+baked directly into the very numbers the table above reports, not something outside the measured
+window. **The table above should not be read as a real performance comparison until re-run** — it
+may be measuring this driver's TTFR instrumentation cost as much as its actual decode/transport
+cost. Left in place (not deleted) as the historical record of the bug, not as a trustworthy result.
+
+Fixed in `StreamingScanBenchmark.ourDriver`: the first-row check is now a plain array-backed
+flag (`long[] firstRowNanos = {-1L}`, checked with a plain `==` and set with a plain assignment),
+matching `clientV2`'s shape exactly — no `AtomicLong`, no CAS. Safe because `RowBinaryDecoder
+.decodeRows` applies no `publishOn`/`subscribeOn`, so `Flux.generate` emits every row synchronously
+on the calling thread; there was never a real cross-thread visibility need the CAS was buying.
+
+**Two more fixes made at the same time, per the same review, before any re-run:**
+
+- **Dataset now scales.** `@Param({"10000", "100000", "1000000"})` instead of a single 10,000-row
+  tier. A single small tier can't distinguish fixed per-request overhead (HTTP round trip, query
+  startup, first-chunk latency) from genuine per-row streaming cost — if a gap is flat across tiers
+  it's the former; if it grows with `rows` it's the latter. `10_000_000`+ ("large" tier) stays a
+  manual, opt-in edit for a release-gate run, not routine iteration.
+- **Rows/sec, derived, not a new metric.** No new JMH instrumentation added (avoiding stacking
+  another "did we get the benchmark code itself right" risk on top of the one just found) — computed
+  from a completed run's own numbers: `rows / (mean_us / 1_000_000)`. Recorded per tier the next
+  time this table is filled in for real.
+
+**Deliberately not done, per the same review's own sequencing:** no change to
+`RowBinaryDecoder`/production code. The per-row `Map<String, Object>` allocation hypothesis from the
+section above is still just a hypothesis — confirming or ruling it out needs the fixed benchmark's
+own numbers across 10k/100k/1M first (does the gap grow with `rows`, or stay flat?), and `-prof gc`
+after that if it does grow. Acting on a number produced by a buggy benchmark would have meant
+"fixing" a problem that may not exist.
+
+**Recommended next step:** re-run `StreamingScanBenchmark` now (fixed TTFR instrumentation, three
+row-count tiers) and report, per tier, for both drivers: mean/p50/p95/p99, derived rows/sec, and
+TTFR p50/p99 (from the console log, not the JSON — see the gap noted above). Only after that: decide
+whether the gap is fixed-overhead or per-row, and only then reach for `-prof gc` or touch
+`RowBinaryDecoder`. `ConcurrencyBenchmark` (Level 3) stays next after `StreamingScanBenchmark` is
+actually trustworthy.
 
 ## Phase 6 — Spring WebFlux interop demo (2026-08-13, reworked after a genuine BindMarkersFactory finding — pending green confirmation)
 

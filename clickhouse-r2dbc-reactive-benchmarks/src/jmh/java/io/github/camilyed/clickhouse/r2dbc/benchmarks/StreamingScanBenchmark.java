@@ -9,7 +9,6 @@ import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTranspor
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import org.HdrHistogram.Histogram;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -37,7 +36,17 @@ import reactor.core.publisher.Flux;
  * <p>The whole-method {@code SampleTime} JMH records is closer to time-to-last-row (drain the
  * entire scan); time-to-first-row is a separate metric JMH has no built-in support for, so it's
  * recorded into its own {@link Histogram} per driver and logged at the end of the trial rather
- * than folded into JMH's own result — see ROADMAP.md's "What's measured, and how".
+ * than folded into JMH's own result — see ROADMAP.md's "What's measured, and how". Rows/sec isn't
+ * computed here either: derive it from a run's {@code rows} param divided by that run's mean
+ * {@code us/op}, as ROADMAP.md's results tables do, rather than adding a redundant JMH metric.
+ *
+ * <p><b>One known, deliberately-not-forced-to-match asymmetry</b> (documented, not silently
+ * accepted — see {@link PointQueryBenchmark}'s own Javadoc, which this inherits): this driver
+ * materializes each row into a {@code Map<String, Object>} via {@link RowBinaryDecoder#decodeRows},
+ * while client-v2 reads three typed values directly off its reader with no intermediate
+ * collection. At one row that cost is negligible; at this benchmark's row counts (thousands, not
+ * one) it's exactly what this benchmark exists to surface — not something to paper over by forcing
+ * both sides through the same shape.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -51,8 +60,16 @@ public class StreamingScanBenchmark {
 
   private static final long TTFR_HIGHEST_TRACKABLE_VALUE_MICROS = TimeUnit.SECONDS.toMicros(60);
 
-  /** Row-count tier — see ROADMAP.md's Phase 5 "Dataset" table for what each tier is for. */
-  @Param({"10000"})
+  /**
+   * Row-count tiers — see ROADMAP.md's Phase 5 "Dataset" table for what each tier is for. A
+   * single-tier run (only 10,000 rows) is dominated by fixed per-request cost (HTTP round trip,
+   * ClickHouse query startup, first-chunk latency) rather than sustained per-row streaming cost;
+   * running 10k/100k/1M side by side is what actually shows whether a latency gap is fixed
+   * overhead (flat across tiers) or per-row cost (grows with {@code rows}). {@code 10_000_000}+
+   * ("large" tier) is deliberately not included here — a manual, opt-in {@code @Param} edit for a
+   * release-gate run, not routine local iteration (see ROADMAP.md's Phase 5 "Dataset" table).
+   */
+  @Param({"10000", "100000", "1000000"})
   public long rows;
 
   private ClickHouseHttpTransport ourTransport;
@@ -92,23 +109,34 @@ public class StreamingScanBenchmark {
    * This driver: streams every row via {@link RowBinaryDecoder#decodeRows}, timing the gap
    * between subscribe and the first emitted row into {@link #ourDriverTtfr}, then draining the
    * rest of the stream (this method's own JMH-measured latency is effectively time-to-last-row).
+   *
+   * <p>The first-row check is a plain array-backed flag read-then-set, not an {@code AtomicLong}
+   * compare-and-swap — {@link RowBinaryDecoder#decodeRows} applies no {@code publishOn}/{@code
+   * subscribeOn}, so {@link reactor.core.publisher.Flux#generate} emits every row synchronously on
+   * this method's own calling thread; there is no cross-thread visibility to buy with a CAS. An
+   * earlier version of this method used {@code AtomicLong#compareAndSet} unconditionally on every
+   * row (not just the first) — a real per-row cost {@code clientV2} never paid, since its own
+   * first-row check is exactly the plain branch used here. Fixed so both methods pay the same
+   * per-row instrumentation cost: one field read, and {@code System.nanoTime()} exactly once.
    */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
     final long startNanos = System.nanoTime();
-    final AtomicLong firstRowNanos = new AtomicLong(-1);
+    final long[] firstRowNanos = {-1L};
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(SELECT_ALL_SQL)).asByteArray().map(ByteBuffer::wrap);
     final long rowCount =
         RowBinaryDecoder.decodeRows(body)
             .doOnNext(
                 row -> {
-                  firstRowNanos.compareAndSet(-1, System.nanoTime());
+                  if (firstRowNanos[0] == -1L) {
+                    firstRowNanos[0] = System.nanoTime();
+                  }
                   blackhole.consume(row);
                 })
             .count()
             .block(Duration.ofSeconds(60));
-    recordTtfr(ourDriverTtfr, startNanos, firstRowNanos.get());
+    recordTtfr(ourDriverTtfr, startNanos, firstRowNanos[0]);
     blackhole.consume(rowCount);
   }
 

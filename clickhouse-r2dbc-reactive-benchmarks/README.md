@@ -31,14 +31,16 @@ numbers):
 - `TrivialQueryBenchmark` — `SELECT 1`, no table at all; isolates protocol/connection overhead from
   the storage-engine lookup `PointQueryBenchmark` also pays for.
 
-A third, `StreamingScanBenchmark`, is now run for real too — full-table scan over the same seeded
-table (no `WHERE`), measuring both JMH's own SampleTime (effectively time-to-last-row) and a
-separate `HdrHistogram`-backed time-to-first-row per driver, logged at the end of each trial rather
-than folded into JMH's own result (JMH has no built-in TTFR metric — see its own Javadoc and
-ROADMAP.md's "What's measured, and how"). **This is the first benchmark in the suite where this
-driver is slower than client-v2** — leading hypothesis is the per-row `Map` allocation cost that's
-negligible at one row and isn't at ten thousand; see ROADMAP.md's Phase 5 section for the numbers
-and the recommended `-prof gc` follow-up to confirm before changing any production code.
+A third, `StreamingScanBenchmark` — full-table scan over the same seeded table (no `WHERE`),
+measuring both JMH's own SampleTime (effectively time-to-last-row) and a separate
+`HdrHistogram`-backed time-to-first-row per driver, logged at the end of each trial rather than
+folded into JMH's own result (JMH has no built-in TTFR metric — see its own Javadoc and
+ROADMAP.md's "What's measured, and how"). Its first real run showed this driver slower than
+client-v2, but that run had a genuine methodology bug (an `AtomicLong` compare-and-swap called on
+every row instead of just the first, in the TTFR instrumentation itself) — fixed now, along with
+adding `10k`/`100k`/`1M` row-count tiers so a real gap can be told apart from single-tier fixed
+overhead. **Not yet re-run since the fix** — see ROADMAP.md's Phase 5 section for the full
+before/after writeup and what to check next.
 
 After that: wide multi-type decode, aggregation, INSERT, the reactive-vs-blocking concurrency burst
 scenario, and the backpressure/pool-saturation/cancellation benchmarks — all designed in
