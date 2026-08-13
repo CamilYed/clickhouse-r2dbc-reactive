@@ -1113,15 +1113,20 @@ next benchmark, not yet built.
 measurement shape as before — still a sanity check, not a trustworthy baseline (JMH's own output
 repeats that warning every run). New numbers, now on equal parameterization and a pinned server:
 
-| | client-v2 | this driver | this driver's edge |
+All latency rows are µs/op (lower = faster). **Reading this table: "this driver is X% FASTER"
+means this driver's latency number is X% lower/better than client-v2's — the opposite wording
+("SLOWER") means this driver's number is worse. Never read "higher"/"lower" alone as good or bad —
+they only describe the raw number, not which direction is better.**
+
+| | client-v2 | this driver | verdict |
 | --- | --- | --- | --- |
-| mean | 1142.8 µs | 1075.1 µs | 5.9% lower |
-| p50 | 1122.3 µs | 1058.8 µs | 5.7% lower |
-| p90 | 1226.8 µs | 1155.1 µs | 5.8% lower |
-| p95 | 1280.0 µs | 1189.9 µs | 7.0% lower |
-| p99 | 1577.0 µs | 1273.9 µs | 19.2% lower |
-| p99.9 | 2564.0 µs | 1904.9 µs | 25.7% lower |
-| sample count (30s) | 26,227 (≈874 ops/s) | 27,884 (≈930 ops/s) | ≈6.3% higher throughput |
+| mean | 1142.8 µs | 1075.1 µs | **this driver 5.9% FASTER** |
+| p50 | 1122.3 µs | 1058.8 µs | **this driver 5.7% FASTER** |
+| p90 | 1226.8 µs | 1155.1 µs | **this driver 5.8% FASTER** |
+| p95 | 1280.0 µs | 1189.9 µs | **this driver 7.0% FASTER** |
+| p99 | 1577.0 µs | 1273.9 µs | **this driver 19.2% FASTER** |
+| p99.9 | 2564.0 µs | 1904.9 µs | **this driver 25.7% FASTER** |
+| sample count (30s) | 26,227 (≈874 ops/s) | 27,884 (≈930 ops/s) | **this driver 6.3% higher throughput** |
 
 Notable shift from the pre-fix run: the gap **widens at the tail** (p99/p99.9) rather than staying
 flat — this driver's tail latency held closer to its own median than client-v2's did, even in this
@@ -1138,17 +1143,20 @@ alongside a repeat of `PointQueryBenchmark` in the same invocation (confirmed st
 5–7% mean/median edge as the fairness-fixed run above — not re-tabulated here since nothing about
 it changed).
 
-| | client-v2 | this driver | this driver's edge |
+All latency rows are µs/op (lower = faster; verdict column spells out which side wins, see the
+reading note on the `PointQueryBenchmark` table above).
+
+| | client-v2 | this driver | verdict |
 | --- | --- | --- | --- |
-| mean | 591.1 µs | 548.5 µs | 7.2% lower |
-| p50 | — | — | ≈6.3% lower |
-| p90 | — | — | ≈10.6% lower |
-| p95 | — | — | ≈10.1% lower |
-| p99 | — | — | ≈7.2% lower |
-| p99.9 | — | — | ≈31.6% lower |
-| p99.99 | 2586.8 µs | 4650.7 µs | **higher**, not lower |
-| p100 (max) | 15106.0 µs | 8847.4 µs | 41.4% lower |
-| sample count (30s) | 50,699 (≈1690 ops/s) | 54,652 (≈1822 ops/s) | ≈7.8% higher throughput |
+| mean | 591.1 µs | 548.5 µs | **this driver ≈7.2% FASTER** |
+| p50 | — | — | **this driver ≈6.3% FASTER** |
+| p90 | — | — | **this driver ≈10.6% FASTER** |
+| p95 | — | — | **this driver ≈10.1% FASTER** |
+| p99 | — | — | **this driver ≈7.2% FASTER** |
+| p99.9 | — | — | **this driver ≈31.6% FASTER** |
+| p99.99 | 2586.8 µs | 4650.7 µs | **this driver SLOWER here** (only percentile where it loses) |
+| p100 (max) | 15106.0 µs | 8847.4 µs | **this driver 41.4% FASTER** |
+| sample count (30s) | 50,699 (≈1690 ops/s) | 54,652 (≈1822 ops/s) | **this driver ≈7.8% higher throughput** |
 
 Same shape as `PointQueryBenchmark`: this driver reads faster from the mean through p99.9, and the
 gap widens sharply at p99.9 (31.6%, the widest yet). Two honest caveats, not smoothed over:
@@ -1180,16 +1188,19 @@ Full scan (`SELECT id, label, amount FROM benchmark_point_query`, `smoke` tier, 
 confirmation of both — same shape as the tables above, exact numbers below), from the JSON result
 file (`-rf json`), not a console paste, so every figure here is exact:
 
-| | client-v2 | this driver | this driver's edge |
+**Superseded by the confirmed, corrected 3-tier result further below — kept only as the historical
+record that first surfaced this as worth investigating.** Latency rows are µs/op (lower = faster):
+
+| | client-v2 | this driver | verdict |
 | --- | --- | --- | --- |
-| mean | 3946.5 µs | 4460.8 µs | **13.0% higher** |
-| p50 | 3846.1 µs | 4366.3 µs | **13.5% higher** |
-| p90 | 4816.9 µs | 5210.1 µs | **8.2% higher** |
-| p95 | 5103.6 µs | 5390.3 µs | **5.6% higher** |
-| p99 | 5513.2 µs | 5857.3 µs | **6.2% higher** |
-| p99.9 | 6363.9 µs | 8266.1 µs | **29.9% higher** |
-| p99.99 / p100 (max) | 21266.4 µs | 26247.2 µs | **23.4% higher** |
-| sample count (30s) | 7,597 (≈253 ops/s) | 6,723 (≈224 ops/s) | **11.5% lower throughput** |
+| mean | 3946.5 µs | 4460.8 µs | **this driver 13.0% SLOWER** |
+| p50 | 3846.1 µs | 4366.3 µs | **this driver 13.5% SLOWER** |
+| p90 | 4816.9 µs | 5210.1 µs | **this driver 8.2% SLOWER** |
+| p95 | 5103.6 µs | 5390.3 µs | **this driver 5.6% SLOWER** |
+| p99 | 5513.2 µs | 5857.3 µs | **this driver 6.2% SLOWER** |
+| p99.9 | 6363.9 µs | 8266.1 µs | **this driver 29.9% SLOWER** |
+| p99.99 / p100 (max) | 21266.4 µs | 26247.2 µs | **this driver 23.4% SLOWER** |
+| sample count (30s) | 7,597 (≈253 ops/s) | 6,723 (≈224 ops/s) | **this driver 11.5% lower throughput** |
 
 **This driver is slower here, at every percentile, not just the tail — the first benchmark in this
 suite where that's true.** Not glossed over: `PointQueryBenchmark`/`TrivialQueryBenchmark` both
@@ -1267,12 +1278,140 @@ own numbers across 10k/100k/1M first (does the gap grow with `rows`, or stay fla
 after that if it does grow. Acting on a number produced by a buggy benchmark would have meant
 "fixing" a problem that may not exist.
 
-**Recommended next step:** re-run `StreamingScanBenchmark` now (fixed TTFR instrumentation, three
-row-count tiers) and report, per tier, for both drivers: mean/p50/p95/p99, derived rows/sec, and
-TTFR p50/p99 (from the console log, not the JSON — see the gap noted above). Only after that: decide
-whether the gap is fixed-overhead or per-row, and only then reach for `-prof gc` or touch
-`RowBinaryDecoder`. `ConcurrencyBenchmark` (Level 3) stays next after `StreamingScanBenchmark` is
-actually trustworthy.
+### `StreamingScanBenchmark`, re-run with the TTFR fix and three tiers (2026-08-13) — confirmed real
+
+**This is the trustworthy result — read this table, not the two above.** Fixed TTFR instrumentation
+(no more CAS-per-row), three row-count tiers, from JSON (`-rf json`), exact figures. Latency rows
+are µs/op — **lower is faster; the verdict column always names which driver wins:**
+
+| rows | client-v2 mean | this driver mean | verdict | client-v2 rows/s | this driver rows/s |
+| --- | --- | --- | --- | --- | --- |
+| 10,000 | 4,038.6 µs | 4,575.3 µs | **this driver 13.3% SLOWER** | 2.48 M | 2.19 M |
+| 100,000 | 21,948.3 µs | 33,961.3 µs | **this driver 54.7% SLOWER** | 4.56 M | 2.94 M |
+| 1,000,000 | 153,972.2 µs | 276,924.2 µs | **this driver 79.9% SLOWER** | 6.49 M | 3.61 M |
+
+p50/p99 confirm the same trend, not just the mean:
+
+| rows | p50 verdict | p99 verdict |
+| --- | --- | --- |
+| 10,000 | this driver 13.0% SLOWER | this driver 13.1% SLOWER |
+| 100,000 | this driver 55.8% SLOWER | this driver 53.4% SLOWER |
+| 1,000,000 | this driver 80.0% SLOWER | this driver 68.0% SLOWER |
+
+**Answer to this section's own question ("does the gap grow with rows, or stay flat?"): it grows,
+sharply and monotonically — 13% → 55% → 80%.** This rules out fixed per-request overhead (HTTP
+round trip, query startup, first-chunk latency) as the explanation — a fixed cost would shrink as a
+*percentage* of a longer-running operation, not grow six-fold. **This driver's per-row decode path
+is now a confirmed, real, worth-fixing regression, not a benchmark artifact.** At the same time:
+`TrivialQueryBenchmark`/`PointQueryBenchmark` (one row decoded) still favor this driver by 5–11%,
+unaffected by any of this — the fixed-request path is genuinely good; the *sustained streaming*
+path is genuinely not, yet. Both things are true at once, and the README/any external claim must
+say both, not average them into one number.
+
+### Optimization phase: what's actually in the code, and the investigation plan
+
+An external review (uploaded findings/optimization-plan document, cross-checked against this
+repository's real source below, not taken at face value) independently converged on the same
+"per-row decode/materialization" diagnosis and proposed a ranked hypothesis list and a
+profile-before-you-touch-anything methodology. Verified against the actual code:
+
+- **H1: per-row `LinkedHashMap` copy — confirmed to exist, and sharper than the external review's
+  own framing once client-v2's actual internals are read (the mounted `clickhouse-java` source, not
+  assumed).** `RowBinaryDecoder.emitNextRow` does `sink.next(new LinkedHashMap<>(reader.next()))`
+  for every row. Traced what `reader.next()` itself costs on client-v2's side
+  (`AbstractBinaryFormatReader`): it does **not** allocate a fresh `Map` or array per row either —
+  it keeps two reused `Object[]` buffers (`currentRecord`/`nextRecord`) that are swapped, not
+  reallocated, each call, and wraps whichever one is current in a lightweight `RecordWrapper` (a
+  `Map` facade over the array, name→index lookup, no hash table built). So client-v2's own per-row
+  cost is one small wrapper object plus the unavoidable boxed value objects (`Long`/`String`/
+  `BigDecimal` — this driver must allocate the same ones). **Our `new LinkedHashMap<>(...)` copy
+  constructor then iterates that wrapper's entries and builds a brand-new hash table — real hashing,
+  real `Node` allocations, an extra cost client-v2's own path never pays**, on top of the values
+  both sides already allocate. This sharpens the "preferred direction": copying each row into a
+  plain `Object[]` (with once-per-query shared column-name→index metadata for name-based lookup, not
+  a `Map` at all) would drop the per-row rehash entirely while keeping the same lifetime-safety
+  reasoning `RowBinaryDecoder`'s own Javadoc already gives for not exposing client-v2's `RecordWrapper`
+  directly. Still a hypothesis about *how much* it costs, not a measurement, until an allocation
+  profiler says so — but now a precisely-scoped one, not a guess.
+- **H0 (new — found by reading `FluxInputStreamBridge`/client-v2's `BinaryStreamReader` directly,
+  not in the external review): `InputStream.read()`'s single-byte overload allocates a fresh
+  `byte[1]` on every call.**
+  ```java
+  // FluxInputStreamBridge
+  @Override
+  public int read() throws IOException {
+    final byte[] singleByte = new byte[1];   // new allocation, every call
+    final int bytesRead = read(singleByte, 0, 1);
+    return bytesRead == -1 ? -1 : singleByte[0] & 0xFF;
+  }
+  ```
+  Traced client-v2's `BinaryStreamReader` (the mounted `clickhouse-java` source, not assumed):
+  fixed-width columns (`UInt64`, the `Decimal` this table uses) go through `readNBytes`, which loops
+  on the bulk `read(byte[], offset, length)` overload — no extra allocation there. But
+  `readVarInt`/`readByteOrEOF` — used for every `String` column's length prefix, called once per row
+  for `PointQueryTable`'s `label` column — call the single-byte `read()` directly. At 1,000,000 rows
+  that's 1,000,000 avoidable tiny-array allocations, on top of H1's `LinkedHashMap` cost, purely
+  from this adapter class's naive single-byte path. A real finding, cheap to fix (a reusable
+  one-element buffer field — this class is only ever read by one dedicated worker thread, per its
+  own Javadoc, so no thread-safety concern), but **not yet fixed** — same discipline as everything
+  else here: measure its actual share of allocations first, don't fix on inspection alone.
+- **H2: the blocking bridge itself (`FluxInputStreamBridge` → client-v2's blocking reader).**
+  Queue/synchronization/wakeup cost per chunk hand-off — real, but this project's architecture
+  accepts a bounded, backpressure-respecting blocking bridge as a deliberate interim design (see
+  this class's own Javadoc); the question here is only how much of the *measured* cost it accounts
+  for, not whether to remove it outright.
+- **H3: `ByteBuf → byte[] → ByteBuffer` in `.asByteArray().map(ByteBuffer::wrap)`.** Verified this
+  is real production code, not just the benchmark harness — `ClickHouseResult.java:69` uses the
+  identical pattern the benchmarks do. Lower priority than H0/H1: this copies once per network
+  chunk (tens to low thousands for a 1M-row response), not once per row.
+  H4: `RESPONSE_CHUNK_DEMAND = 4` (already documented in `RowBinaryDecoder` as an unbenchmarked
+  placeholder) — plausible for sustained-throughput pipelining, independent of H0/H1/H3.
+  H5: `Flux.generate`'s own per-row Reactor machinery — lowest priority, investigate only if a
+  meaningful gap remains after H0/H1/H3/H4 are quantified and addressed.
+
+**Investigation plan, in order — profile before touching `RowBinaryDecoder` or
+`FluxInputStreamBridge`, per this project's own testing discipline (measure, don't infer):**
+
+1. **JMH's built-in GC profiler** (`-prof gc`, no extra tooling needed) on `StreamingScanBenchmark`
+   at `rows=1000000` for both drivers — `gc.alloc.rate.norm` (bytes/op) directly answers "how many
+   bytes does each driver allocate to decode 1M rows," and dividing by 1,000,000 gives allocated
+   bytes/row, the first number this investigation actually needs.
+2. **Two new diagnostic isolation benchmarks** (below), to split "is it transport or is it decode"
+   and "is it the `Map` copy or something else in decode" instead of guessing from one combined
+   number.
+3. **CPU/allocation flame graph** (`async-profiler`, if/when set up — not yet part of this project's
+   tooling) only if steps 1–2 don't already make the dominant cost obvious.
+4. **Only then**, a benchmark-only prototype of a `Map`-free row representation (e.g. `Object[]` +
+   shared column-name-to-index metadata) to quantify how much of the gap it actually closes, before
+   any production `RowBinaryDecoder`/`ClickHouseRow` change.
+
+**Two new diagnostic benchmarks written (not yet run):**
+
+- `TransportOnlyStreamingBenchmark` — `ClickHouseHttpTransport.query(...)` consuming raw bytes
+  (chunk-length sum only, no `RowBinaryDecoder` involved at all) vs client-v2's own
+  `QueryResponse#getInputStream()` drained in a plain byte-counting loop. Answers whether H2/H3
+  (bridge, byte-array copying) account for a meaningful share on their own, with decode removed from
+  the picture entirely. Same `rows` tiers as `StreamingScanBenchmark`.
+- `DecoderOnlyBenchmark` — captures one full response body once per trial (outside the measured
+  region, via `.aggregate().asByteArray()`), then benchmarks `RowBinaryDecoder.decodeRows` vs
+  client-v2's `RowBinaryWithNamesAndTypesFormatReader` (constructed directly, no `Client`/
+  `QueryResponse` — the exact class `RowBinaryDecoder` itself wraps) over the *same* captured bytes,
+  no network at all. Answers whether H0/H1 (decode/materialization) account for the gap in isolation
+  from transport.
+
+Run both:
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes='TransportOnlyStreamingBenchmark|DecoderOnlyBenchmark'
+```
+
+**Guardrail, explicit:** every future change from this investigation reruns
+`TrivialQueryBenchmark`/`PointQueryBenchmark` alongside `StreamingScanBenchmark`'s three tiers — a
+streaming fix that regresses the fixed-request path (this driver's genuine current strength) is not
+an acceptable trade. Concurrency (`ConcurrencyBenchmark`, Level 3) stays queued behind this
+investigation — per this project's own priority reasoning, but now the priority is real:
+`StreamingScanBenchmark` surfaced an actual, sizable regression concurrency work shouldn't be built
+on top of unmeasured.
 
 ## Phase 6 — Spring WebFlux interop demo (2026-08-13, reworked after a genuine BindMarkersFactory finding — pending green confirmation)
 
