@@ -25,8 +25,9 @@ public final class ClickHouseR2dbcException extends R2dbcException {
   /**
    * Maps {@code throwable} onto an {@link R2dbcException} suitable for propagating out of this
    * driver's {@code Publisher}s. Package-private: only {@link ClickHouseStatement}, {@link
-   * ClickHouseBatch}, and {@link ClickHouseResult} — the seams where this driver's {@code
-   * Publisher}s can fail — call this; nothing outside the package needs to.
+   * ClickHouseBatch}, {@link ClickHouseResult}, and {@link ClickHouseConnection#insertStreaming} —
+   * the seams where this driver's {@code Publisher}s can fail — call this; nothing outside the
+   * package needs to.
    *
    * <p>Returns {@code throwable} unchanged if it already is an {@link R2dbcException}. Otherwise,
    * walks {@code throwable}'s cause chain for a client-v2 {@link ServerException} — reading a

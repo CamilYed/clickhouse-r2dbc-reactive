@@ -131,6 +131,19 @@ cancelled) still exists, just far less often than before this was implemented �
 > Kubernetes/Tanzu-style deployment where the certificate is mounted from a `Secret`/`ConfigMap`.
 > Requires `ssl=true`; setting it without `ssl=true` fails fast with `IllegalArgumentException`.
 
+> [!NOTE]
+> **Large/batch `INSERT`s can stream their data as the request body instead of the URL, via
+> `ClickHouseConnection.insertStreaming(String, Publisher<ByteBuffer>)`.** Standard
+> `Statement`/`Batch` still send `INSERT` data URL-encoded, same as any `SELECT` — correct, but not
+> what large payloads want (URL length limits, the whole payload held in memory). ClickHouse's own
+> HTTP docs describe the request-body form as the preferred pattern for exactly this reason. This is
+> a ClickHouse-specific vendor extension (R2DBC's `Statement`/`Batch` have no concept of a streamed
+> request body), and it is **never retried**, even with `retryMaxAttempts` configured — once bytes
+> of the payload may have already reached the server mid-stream, retrying on a connection-level
+> failure risks silently duplicating rows. See
+> [`ClickHouseHttpTransport.insertWithSummary`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransport.java)'s
+> Javadoc for the full reasoning.
+
 ## What "fully reactive" means here
 
 Returning a reactive type is a necessary but insufficient condition. A driver is treated as

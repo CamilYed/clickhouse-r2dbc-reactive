@@ -6,8 +6,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.IsolationLevel;
 import io.r2dbc.spi.ValidationDepth;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -126,5 +128,32 @@ class ClickHouseConnectionTest {
 
     // when / then
     assertThatThrownBy(connection::createBatch).isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void shouldRejectInsertStreamingWithoutSql() {
+    // when / then
+    assertThatThrownBy(() -> connection.insertStreaming(null, Flux.empty()))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldRejectInsertStreamingWithoutData() {
+    // when / then
+    assertThatThrownBy(() -> connection.insertStreaming("INSERT INTO t FORMAT TabSeparated", null))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldRejectInsertStreamingAfterClose() {
+    // given
+    Mono.from(connection.close()).block(Duration.ofSeconds(1));
+
+    // when / then
+    assertThatThrownBy(
+            () ->
+                connection.insertStreaming(
+                    "INSERT INTO t FORMAT TabSeparated", Flux.just(ByteBuffer.wrap(new byte[0]))))
+        .isInstanceOf(IllegalStateException.class);
   }
 }

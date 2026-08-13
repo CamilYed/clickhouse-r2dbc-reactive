@@ -7,6 +7,7 @@ import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
@@ -68,6 +69,18 @@ final class ClickHouseResult implements Result {
     final Flux<ByteBuffer> body = response.body().asByteArray().map(ByteBuffer::wrap);
     return RowBinaryDecoder.decode(body)
         .map(decoded -> new ClickHouseResult(decoded, response.writtenRows().getAsLong()));
+  }
+
+  /**
+   * A {@link Result} carrying only {@code writtenRows} and no rows/columns at all — what {@link
+   * ClickHouseConnection#insertStreaming} returns, since ClickHouse's HTTP interface sends back no
+   * body at all for a plain {@code INSERT} (unlike a {@code SELECT}'s {@code
+   * RowBinaryWithNamesAndTypes} response, which {@link #decode} expects). {@link #map}/{@link
+   * #flatMap} on the returned instance never emit anything; only {@link #getRowsUpdated()} is
+   * meaningful.
+   */
+  static ClickHouseResult forInsert(final long writtenRows) {
+    return new ClickHouseResult(new ClickHouseRowMetadata(List.of()), Flux.empty(), writtenRows);
   }
 
   @Override

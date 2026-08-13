@@ -713,12 +713,17 @@ fixed, not just documented.
   `ControlledClickHouseServer.startAcceptingInsertsAndRespondingWithSummary` body-capturing
   factory) and `shouldNeverRetryAnInsertEvenOnAConnectionLevelFailureBeforeTheRequestWasSent`
   (proves no retry happens even with `RetryPolicy(20, 200ms)` configured, by asserting the failure
-  surfaces in well under the time 20 retries would take). **Not yet wired to the connector/R2DBC
-  level** — `ClickHouseStatement`/`ClickHouseBatch` still only call `queryWithSummary`; exposing
-  `insertWithSummary` through the public R2DBC API (a vendor extension, since `Statement`/`Batch`
-  have no standard streaming-body concept) is a separate, not-yet-made design decision. Silent risk
-  (URL-based inserts still work correctly, just don't scale) — transport-level fix done, connector
-  wiring open.
+  surfaces in well under the time 20 retries would take). Wired to the connector/R2DBC level as a
+  vendor extension, `ClickHouseConnection.insertStreaming(String, Publisher<ByteBuffer>)` — `Result`
+  carries only `getRowsUpdated()` (`ClickHouseResult.forInsert`, since a plain `INSERT`'s HTTP
+  response has no row body to decode, unlike `SELECT`'s `RowBinaryWithNamesAndTypes`), errors are
+  mapped through the same `ClickHouseR2dbcException.wrap` as `ClickHouseStatement`/`ClickHouseBatch`.
+  Covered hermetically (`ClickHouseConnectionInsertStreamingTest`: streamed body arrives intact,
+  server error maps to `R2dbcException`) and against real ClickHouse
+  (`ClickHouseConnectionInsertStreamingAgainstRealClickHouseTest`: rows genuinely land in the table,
+  not just accepted-and-discarded). `ClickHouseStatement`/`ClickHouseBatch` themselves are
+  unchanged and still URL-encode their data — correct for small inserts, `insertStreaming` is the
+  opt-in path for large ones. Silent risk — fixed.
 
 ### Open gaps, not yet addressed
 
@@ -735,23 +740,20 @@ fixed, not just documented.
   `ClickHouseHttpTransport` directly. `CONNECT_TIMEOUT` is now wired (this pass); pool sizing isn't a
   well-known R2DBC `Option`, so this would need a driver-specific custom `Option`. Configurability
   gap, not a correctness bug.
-- **`insertWithSummary`'s streamed-body path is not reachable through the public R2DBC API yet** —
-  `ClickHouseStatement`/`ClickHouseBatch` both still call `queryWithSummary` only, so every insert
-  going through the standard R2DBC `Statement`/`Batch` surface still URL-encodes its data (correct,
-  but not the streaming path a heavy-insert workload wants). `Statement`/`Batch` have no standard
-  concept of a streamed request body, so exposing this needs a driver-specific vendor extension —
-  shape not yet decided. `Statement.add()` (bound-parameter batching) is a related, separately
-  tracked gap: still `UnsupportedOperationException` in `ClickHouseStatement`; making it genuinely
-  performant would mean coalescing N bound-parameter sets into one multi-row `INSERT` (ClickHouse's
-  `{name:Type}` mechanism only binds one value per name per request) rather than N sequential
-  round-trips.
+- **`Statement.add()` (bound-parameter batching) is still `UnsupportedOperationException`** in
+  `ClickHouseStatement` — related to, but not solved by, `insertStreaming` (see "Fixed this pass"
+  above): making `add()` genuinely performant would mean coalescing N bound-parameter sets into one
+  multi-row `INSERT` (ClickHouse's `{name:Type}` mechanism only binds one value per name per
+  request) rather than N sequential round-trips. Deliberately deferred — `insertStreaming` covers
+  the "I already have my data encoded, stream it efficiently" case; `add()`-based batching is a
+  different, not-yet-designed problem (building the multi-row SQL text safely).
 
 **Confirmed plan and order (2026-08-13), before Maven Central publishing:** raised directly —
-INSERT correctness is already implemented and tested against real ClickHouse
+INSERT correctness was already implemented and tested against real ClickHouse
 (`ClickHouseStatementAgainstRealClickHouseTest`, `ClickHouseBatchAgainstRealClickHouseTest`); this
-pass additionally closed the *performance* gap for large inserts (streamed request body, see
-"Fixed this pass" above), so the remaining connector-level gap is exposing that path through a
-vendor-extension API, not INSERT support itself. Order agreed:
+pass additionally closed the *performance* gap for large inserts, both at the transport level
+(streamed request body) and the connector/R2DBC level (`ClickHouseConnection.insertStreaming`
+vendor extension) — see "Fixed this pass" above. Order agreed for what's left:
 
 1. Fill in the realistically-closable type-coverage gaps first: a dedicated real-ClickHouse test
    for `Nested` (mechanism already works via `Array`'s `ListDecodingRowBinaryReader`, just

@@ -6,9 +6,11 @@ import io.r2dbc.spi.Batch;
 import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionMetadata;
 import io.r2dbc.spi.IsolationLevel;
+import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Statement;
 import io.r2dbc.spi.TransactionDefinition;
 import io.r2dbc.spi.ValidationDepth;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.reactivestreams.Publisher;
@@ -172,6 +174,40 @@ public final class ClickHouseConnection implements Connection {
         .asByteArray()
         .thenReturn(true)
         .onErrorReturn(false);
+  }
+
+  /**
+   * ClickHouse-specific vendor extension: sends {@code sql} (an {@code INSERT}) with {@code data}
+   * streamed as the HTTP request body instead of embedded in the URL — see {@code
+   * ClickHouseHttpTransport#insertWithSummary} for the full reasoning, including why this path is
+   * never retried regardless of how this connection's {@code RetryPolicy} is configured. Not part
+   * of the standard R2DBC SPI: {@link Statement}/{@link Batch} have no concept of a streamed
+   * request body, so this is exposed directly on the connection rather than wrapped in either of
+   * those.
+   *
+   * <p>{@code sql} is expected to be a complete {@code INSERT} statement, including its input
+   * {@code FORMAT} clause (e.g. {@code "INSERT INTO t FORMAT TabSeparated"}); {@code data} is the
+   * already-encoded payload in that format, streamed as-is with no transformation. The returned
+   * {@link Result} carries only {@link Result#getRowsUpdated()} — ClickHouse's HTTP interface sends
+   * back no row data for a plain {@code INSERT}, so {@link Result#map}/{@link Result#flatMap} on it
+   * never emit anything (see {@link ClickHouseResult#forInsert}). Any failure, including one that
+   * happens mid-stream, is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
+   * ClickHouseR2dbcException#wrap}, same as {@link ClickHouseStatement#execute()}.
+   */
+  public Publisher<? extends Result> insertStreaming(
+      final String sql, final Publisher<ByteBuffer> data) {
+    if (sql == null) {
+      throw new IllegalArgumentException("sql must not be null");
+    }
+    if (data == null) {
+      throw new IllegalArgumentException("data must not be null");
+    }
+    requireOpen();
+    return transport
+        .insertWithSummary(ClickHouseQuery.of(sql), data)
+        .flatMap(response -> response.body().aggregate().asByteArray().thenReturn(response))
+        .map(response -> ClickHouseResult.forInsert(response.writtenRows().getAsLong()))
+        .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
   private void requireOpen() {
