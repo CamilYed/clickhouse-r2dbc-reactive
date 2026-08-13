@@ -275,15 +275,13 @@ file instead of a whole package.
 | --- | --- | --- |
 | Unit tests | every module, `src/test/java` | JUnit 5 + AssertJ + in-memory fakes. No Spring, no containers, no Mockito. |
 | Transport contract tests | `clickhouse-r2dbc-reactive-transport-http`, using `clickhouse-r2dbc-reactive-testkit`'s `ControlledClickHouseServer` | Deterministic, fast, hermetic wire-level scenarios a real server won't reliably give you on demand: delayed headers/body, fragmented rows, slow subscriber, pool saturation, cancellation at every stage (see README's testing strategy). |
-| Real-ClickHouse integration tests | `clickhouse-r2dbc-reactive-connector` (own classes) and `clickhouse-r2dbc-reactive-integration-tests` (whole driver, black-box via public R2DBC SPI only) | `clickhouse-r2dbc-reactive-testkit`'s `BaseClickHouseIntegrationTest` + Ability-pattern DSL over Testcontainers `ClickHouseContainer`: create data, clean up between tests (`@BeforeEach`), no mocking of ClickHouse itself. |
+| Real-ClickHouse integration tests | `clickhouse-r2dbc-reactive-connector` — including the whole-driver, black-box-via-public-R2DBC-SPI-only proof (see ROADMAP.md's module map for why a once-planned separate `integration-tests` module for this was deleted rather than kept empty) | `clickhouse-r2dbc-reactive-testkit`'s `BaseClickHouseIntegrationTest` + Ability-pattern DSL over Testcontainers `ClickHouseContainer`: create data, clean up between tests (`@BeforeEach`), no mocking of ClickHouse itself. |
 
 `clickhouse-r2dbc-reactive-testkit` exists specifically so no other module's tests need Mockito or
 ad-hoc test infrastructure of their own — it owns both halves: the controlled fake server (for
 conditions only a fake can force deterministically) and the real-ClickHouse Testcontainers DSL
 (for proving the driver decodes what an actual server actually sends). See
-[ROADMAP.md's module map](ROADMAP.md#module-map) for why both exist side by side, and why
-whole-driver black-box tests live in their own `integration-tests` module instead of inside
-`connector`.
+[ROADMAP.md's module map](ROADMAP.md#module-map) for why both exist side by side.
 
 ## Coverage
 

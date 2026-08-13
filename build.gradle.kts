@@ -35,8 +35,11 @@ allprojects {
 // reasoning, different shape: it has a public API of sorts (a REST controller), but it's not
 // meant to be a dependency of anything, just proof the driver works through Spring's own R2DBC
 // integration.
+//
+// clickhouse-r2dbc-reactive-benchmarks (Phase 5) is JMH measurement tooling, not a library either
+// - see ROADMAP.md's Phase 5 section.
 val nonPublishedModules = setOf(
-    "clickhouse-r2dbc-reactive-integration-tests",
+    "clickhouse-r2dbc-reactive-benchmarks",
     "spring-boot-webflux-demo"
 )
 

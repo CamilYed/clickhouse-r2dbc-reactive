@@ -19,6 +19,6 @@ include(
     "clickhouse-r2dbc-reactive-transport-http",
     "clickhouse-r2dbc-reactive-connector",
     "clickhouse-r2dbc-reactive-testkit",
-    "clickhouse-r2dbc-reactive-integration-tests",
+    "clickhouse-r2dbc-reactive-benchmarks",
     "examples:spring-boot-webflux-demo"
 )

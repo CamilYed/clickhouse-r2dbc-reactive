@@ -203,11 +203,13 @@ public architectural dependency.
 
 ## Modules
 
-All five modules below exist as Gradle modules today; `integration-tests` is still an empty
-scaffold (see [Roadmap](#roadmap)) — whole-driver black-box coverage currently lives inside
-`connector`'s own `*AgainstRealClickHouseTest` classes instead. Full responsibilities and the
-reasoning behind each boundary live in [ROADMAP.md's module map](ROADMAP.md#module-map) — treat
-that as authoritative and this table as a quick summary only, to avoid the two drifting apart.
+The four modules below exist as Gradle modules today; whole-driver black-box coverage (through the
+public R2DBC SPI only, against real ClickHouse) lives inside `connector`'s own
+`*AgainstRealClickHouseTest` classes — a once-planned separate `integration-tests` module for this
+was scaffolded, sat empty, and was later deleted rather than kept as a placeholder (see
+[ROADMAP.md's module map](ROADMAP.md#module-map)). Full responsibilities and the reasoning behind
+each boundary live there too — treat it as authoritative and this table as a quick summary only, to
+avoid the two drifting apart.
 
 | Module | Purpose |
 | --- | --- |
@@ -215,7 +217,6 @@ that as authoritative and this table as a quick summary only, to avoid the two d
 | `clickhouse-r2dbc-reactive-transport-http` | Non-blocking HTTP adapter (Reactor Netty), implementing `core`'s `Transport` port. No `client-v2` code. |
 | `clickhouse-r2dbc-reactive-connector` | The R2DBC SPI implementation (`ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, metadata). |
 | `clickhouse-r2dbc-reactive-testkit` | Shared test infrastructure: a fake wire-level server for deterministic transport contract tests, plus a real-ClickHouse Testcontainers DSL. |
-| `clickhouse-r2dbc-reactive-integration-tests` | Whole-driver, black-box tests through the public R2DBC SPI only, against real ClickHouse. |
 
 Module boundaries may change before the first release; this table reflects current intent, not a
 committed API.
@@ -261,11 +262,8 @@ The execution-path analysis, transport spike, transport SPI, and first R2DBC con
 (the "Near-term"/"Later" items this section used to list) are all done; what's left before a
 `0.1.0` release is closing the open gaps below, not building new surface area:
 
-- Fill in `clickhouse-r2dbc-reactive-integration-tests` — the module exists but is still an empty
-  scaffold; whole-driver black-box coverage today lives inside `connector`'s own
-  `*AgainstRealClickHouseTest` classes instead
-- Benchmarks vs. the existing R2DBC driver — deliberately not started yet, see
-  [CLAUDE.md's Performance testing section](CLAUDE.md#performance-testing)
+- Benchmarks vs. client-v2 — Phase 5, in progress; see
+  [ROADMAP.md's Phase 5 section](ROADMAP.md#phase-5-later--load-and-performance-testing)
 - Maven Central publication (`io.github.camilyed`), following the same release process used in
   [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)
 - Evaluate HTTP multiplexing / native TCP transport as a separate track

@@ -33,20 +33,30 @@ rest of this roadmap.
 | `transport-http` | `core` | The **adapter** that implements `core`'s `Transport` port over Reactor Netty. Owns the socket. Nothing here knows what a "row" is. | Yes |
 | `connector` | `core`, `transport-http` | The **adapter** that implements the R2DBC SPI (`ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, ...) on top of `core`. Thin — R2DBC-shape translation only, no protocol logic of its own. | Yes |
 | `testkit` | `core` | Shared test infrastructure, used by every other module's tests: (a) `ControlledClickHouseServer` + `ClickHouseWireFixtures` — a fake HTTP endpoint for deterministic wire-level scenarios; (b) `BaseClickHouseIntegrationTest` + an Ability-pattern DSL for real ClickHouse via Testcontainers (create data, clean up between tests). | Yes (it's a test-support *library*, other people writing ClickHouse R2DBC code could depend on it too — same reason JUnit/AssertJ/Testcontainers themselves are ordinary published artifacts) |
-| `integration-tests` | `connector`, `testkit` | Whole-driver, black-box tests: real ClickHouse via Testcontainers, exercised **only** through the public R2DBC SPI (`ConnectionFactory.create(...)` and onward) — never through `core`/`transport-http` internals. This is "one module where we run the whole thing and test it," as its own module so its (slow, Docker-backed) suite doesn't sit inside `connector`'s fast build loop. Test-only: no `src/main`. | No |
-| `benchmarks` *(not built yet — Phase 5)* | `connector` | JMH/Gatling-style throughput and latency measurement against real ClickHouse. Named here so the eventual module boundary is decided in advance; not scaffolded until Phase 5 actually starts, per [CLAUDE.md](CLAUDE.md#performance-testing). | No |
+| `benchmarks` (`clickhouse-r2dbc-reactive-benchmarks`, Phase 5, in progress) | `core`, `transport-http`, `connector`, `testkit`, client-v2 (as the comparison baseline) | JMH throughput/latency/allocation measurement, this driver vs client-v2, at multiple levels (raw transport, public R2DBC SPI) — see Phase 5 below for the full design. Not published: it's measurement tooling, not a library. | No |
 | `examples/spring-boot-webflux-demo` | `connector` (runtime-only) | A runnable Spring Boot 4.1 + WebFlux app proving the driver works end to end through Spring's R2DBC integration (`DatabaseClient`, raw SQL only — `R2dbcEntityTemplate`/`.bind(...)` don't work against this driver yet, see Phase 6), mirroring [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)'s demo. Also proves, with a real test, that Spring's declarative transaction machinery fails clearly over this driver (see Phase 6). | No |
 
-Why `integration-tests` is its own module and not just more tests inside `connector`: two
-different things were both called "integration tests" before, and conflating them was the actual
-confusion. `connector`'s own `src/test` still gets small, targeted tests for its own classes
-(parameter binding, exception mapping) — some of those may use a real ClickHouse too. But the
-suite that proves "the whole driver, used exactly the way a consumer would use it, against a real
-server" belongs in its own module: it can only ever import `connector`'s public API (never an
-internal class from `core`, because it's not even a dependency), it makes the slow Docker-backed
-suite easy to run/skip independently (`./gradlew :clickhouse-r2dbc-reactive-integration-tests:test`),
-and it's the natural home for the data-setup/cleanup Ability DSL requested below, since that DSL is
-about ClickHouse-the-database, not about any one module's internals.
+**`integration-tests` module: scaffolded in Phase 1, deleted (2026-08-13).** It was meant to hold
+whole-driver, black-box tests exercised only through the public R2DBC SPI — never `core`/
+`transport-http` internals — as its own module so that (slow, Docker-backed) suite wouldn't sit
+inside `connector`'s fast build loop. It sat empty for the entire project (`build.gradle.kts` only,
+zero source files, confirmed via `find` during the final pre-Phase-5 review pass) because its
+intended role turned out to already be covered elsewhere, spread across three places rather than
+needing a fourth: `connector`'s own
+`ClickHouseConnectionFactoryProviderTest.shouldBeDiscoverableThroughTheStandardR2dbcServiceLoaderBootstrapPath`
+(hermetic — proves `ConnectionFactories.get(options)` resolves this driver via the real
+`META-INF/services` file), `ClickHouseConnectionFactoryAgainstRealClickHouseTest` (real ClickHouse —
+proves `ClickHouseConnectionFactory.from(options)` produces a connection that validates against a
+live server), and `examples/spring-boot-webflux-demo` (real ClickHouse, and the only place the
+`r2dbc:clickhouse://...` URL *string* form gets parsed and driven end to end through
+`ConnectionFactories.get(options)`, a real pool, and `DatabaseClient`). Rather than keep an empty
+module around indefinitely as "intentional placeholder" — which reads as dead scaffolding to the
+next person, not a deliberate design — removed it outright: `clickhouse-r2dbc-reactive-integration-tests/`
+deleted, its entry removed from `settings.gradle.kts` and `build.gradle.kts`'s
+`nonPublishedModules`. If a genuine need for a single "whole driver, black box, one place" suite
+resurfaces (e.g. Phase 5's benchmarks want a shared "does the full URL-string-to-real-query chain
+work" smoke test before measuring performance), it can be rebuilt with actual content driving the
+decision, not scaffolded speculatively ahead of one.
 
 Why `testkit` keeps its name despite the expanded scope: the fake `ControlledClickHouseServer`
 and the real-ClickHouse Testcontainers DSL are still one thing — "the shared support code so no
@@ -54,7 +64,8 @@ other module's tests need Mockito or ad-hoc infrastructure of their own" — whi
 "testkit" means in other ecosystems (`kotlinx-coroutines-test`, `spring-kafka-test`). Note this is
 a different concept from Gradle's built-in `java-test-fixtures` plugin feature (a source-set
 convention for sharing test code *within* one module) — we don't need that here, a whole module is
-the right unit because multiple *other* modules (`connector`, `integration-tests`) consume it.
+the right unit because multiple *other* modules (`transport-http`, `connector`, and now
+`benchmarks` too) consume it.
 
 ### Why both a fake server and real ClickHouse — not one or the other
 
@@ -435,22 +446,24 @@ still outstanding before this driver calls itself registrable/discoverable.
   through this project's own transport, so cleanup never depends on the driver code under test.
   `transport-http`'s three real-ClickHouse test classes
   (`SelectOneAgainstRealClickHouseTest`/`QueryIdHeaderAgainstRealClickHouseTest`/
-  `RealWorldTableAgainstRealClickHouseTest`) already extend it. `connector`'s own tests and
-  `integration-tests` extend it too once they exist — no per-module reimplementation. A richer
+  `RealWorldTableAgainstRealClickHouseTest`) already extend it, and `connector`'s own tests do too
+  — no per-module reimplementation (the once-planned `integration-tests` module that would also
+  have extended it was scaffolded, sat empty, and was later deleted — see the module map). A richer
   Ability-pattern DSL for creating tables/rows (beyond the `RealClickHouseQueryAbility` already in
   `transport-http`'s tests) can grow here once `connector` actually needs one — TDD, same as
   everything else: the first test that needs it drives the method into existence, don't design the
   whole DSL up front.
 - `testkit`: `ClickHouseRowAssert` (custom assertion over a decoded row) also moved here from
-  `transport-http`'s test sources, so `connector`/`integration-tests` get it for free too. Grew
+  `transport-http`'s test sources, so `connector` gets it for free too. Grew
   `hasList`/`hasTuple`/`hasMap`/`hasEnumName`/`hasBigInteger`/`hasFloatCloseTo`/`hasInetAddress`/
   `hasUuid` alongside the original `hasValue`/`hasDecimal`/`hasNullAt`/`hasTypeAt`, so
   `RealWorldTableAgainstRealClickHouseTest` reads its assertions as domain statements instead of
   raw `assertThat((SomeType) row.get(...))` casts scattered through the test body.
 - `connector`'s own `src/test`: small, targeted tests for its own classes, extending
-  `BaseClickHouseIntegrationTest` where real ClickHouse is the simplest way to prove behavior.
-- `integration-tests`: whole-driver black-box suite through the public R2DBC SPI only — see the
-  [module map](#module-map) for why this is separate from `connector`'s own tests.
+  `BaseClickHouseIntegrationTest` where real ClickHouse is the simplest way to prove behavior —
+  including the whole-driver, public-R2DBC-SPI-only proof (`ConnectionFactories.get(...)` → real
+  connection) that a dedicated `integration-tests` module was originally meant to hold; see the
+  [module map](#module-map) for why that module was deleted rather than kept empty.
 - R2DBC TCK-style behavioral tests where applicable; ClickHouse-specific gaps documented instead of
   silently unsupported.
 
@@ -813,24 +826,10 @@ non-blocking findings, both closed or logged:
   private-helper extraction (shared state holder + a `wireTracking(...)` method) as a low-risk
   cleanup, whenever `testkit` is next touched for another reason.
 
-**`integration-tests` module status, checked directly (2026-08-13):** still a genuinely empty
-scaffold — `build.gradle.kts` only, zero source files, confirmed via `find`. Its originally-intended
-role (whole-driver black box, real ClickHouse, public R2DBC SPI only) turned out to already be
-covered, just spread across three places rather than one dedicated module: `connector`'s own
-`ClickHouseConnectionFactoryProviderTest.shouldBeDiscoverableThroughTheStandardR2dbcServiceLoaderBootstrapPath`
-(hermetic — proves `ConnectionFactories.get(options)` resolves to this driver via the real
-`META-INF/services` file, not just that `ClickHouseConnectionFactoryProvider`'s own methods behave
-correctly in isolation), `ClickHouseConnectionFactoryAgainstRealClickHouseTest` (real ClickHouse —
-proves `ClickHouseConnectionFactory.from(options)` produces a connection that actually validates
-against a live server), and `examples/spring-boot-webflux-demo` (real ClickHouse, and the only place
-the `r2dbc:clickhouse://...` URL *string* form — not just `ConnectionFactoryOptions` built
-programmatically — gets parsed via `ConnectionFactoryOptions.parse(url)` and driven end to end
-through `ConnectionFactories.get(options)`, a real pool, and `DatabaseClient`, exercised by
-`OrderEventControllerAgainstRealClickHouseTest`). No single test proves the full chain — URL string
-→ SPI discovery → real connection — in one place, but every individual link in that chain is proven
-somewhere. Leaving `integration-tests` as an intentional empty placeholder rather than deleting it
-or backfilling it now; revisit only if Phase 5/6 work exposes a scenario that genuinely needs a
-true whole-driver suite distinct from `connector`'s own tests or the demo.
+**`integration-tests` module: deleted (2026-08-13), not left as a placeholder.** Raised directly —
+an empty module sitting in the build forever reads as dead scaffolding, not deliberate design. See
+the [module map](#module-map) at the top of this file for the full reasoning and what now covers
+its originally-intended role instead.
 
 ## Non-functional requirements: logging, metrics, leaks
 
@@ -865,16 +864,216 @@ gaps" discipline already applied to R2DBC semantics and the mid-stream-error que
 
 ## Phase 5 (later) — Load and performance testing
 
-Explicitly deferred, per [CLAUDE.md](CLAUDE.md#performance-testing). Not started until Phase 4 is
-signed off. When it starts:
+**Design finalized 2026-08-13; implementation starting.** Phase 4 is signed off, `integration-tests`
+is deleted (see the module map), so this is now unblocked and starting. Explicit request driving this design: measure **this driver vs client-v2** (the same
+library `core` already reuses for row decoding, and the one anyone evaluating this driver will
+naturally compare it against), at **multiple levels**, professionally enough to trust the numbers —
+not a couple of ad hoc `SELECT 1` timings.
 
-- Throughput, p50/p95/p99 latency, time to first row.
-- Allocation/retained memory under streaming.
-- Many-small-request workloads (the original production burst scenario — ~11 concurrent queries
-  per user action) vs. large single streaming results.
-- Comparison against the existing `ClickHouse/clickhouse-java` R2DBC driver as a baseline.
-- Tooling choice (JMH for micro-benchmarks, Gatling/similar for load scenarios) decided at that
-  point — nothing added to the build now.
+**Prior art read before designing this**, not designed from scratch: `ClickHouse/clickhouse-java`'s
+own `performance` module (mounted at `/Users/kamil/Projects/clickhouse-java/performance`) is a real,
+maintained JMH suite comparing their own client V1 vs V2 vs JDBC, with a scheduled (not per-PR) GitHub
+Actions job. Reused directly: JMH itself (not Gatling — see "Tooling" below), `GCProfiler` for
+allocation, `SampleTime` mode for percentiles, `@Threads(N)` for one shape of concurrency, and the
+"don't run this on every PR" cadence. Deliberately *not* reused: their CSV-file dataset (generated
+client-side, checked into a file, then re-uploaded) — ClickHouse can generate large synthetic
+datasets server-side in seconds via `INSERT ... SELECT ... FROM numbers(N)`/`generateRandom(...)`,
+which is both faster and more "pro" than a client-side CSV round-trip.
+
+### Module
+
+New module `clickhouse-r2dbc-reactive-benchmarks` (not published — measurement tooling, not a
+library; added to `nonPublishedModules` already). Depends on `core`, `transport-http`, `connector`,
+and `testkit` (for `BaseClickHouseIntegrationTest`-style container lifecycle reuse — a benchmark run
+still needs a real ClickHouse instance and shouldn't reinvent that), plus `com.clickhouse:client-v2`
+(already in the version catalog, pinned `0.9.0` — same version `core` reuses for decoding, so the
+comparison is against the exact client-v2 build this project already depends on, not some other
+version) as the comparison baseline. Depending on `core`/`transport-http` directly (not just
+`connector`'s public SPI) is intentional and doesn't violate the Architecture rule ("a module
+should not reach into another module's internals") — `ClickHouseHttpTransport` and
+`RowBinaryDecoder` are already `public final class`, part of each module's own public API, not
+internals; benchmarking below the R2DBC SPI layer is exactly how "which level costs what" gets
+answered.
+
+**Gradle/JMH tooling**: the `me.champeau.jmh` Gradle plugin (the standard, actively-maintained
+community JMH plugin — gives a `jmh` task, JSON/text result output, and proper annotation-processor
+wiring without hand-rolling what clickhouse-java's Maven `exec-maven-plugin` setup does manually).
+**Not Gatling** — Gatling is built for HTTP/network load-testing DSLs (simulate many external
+clients hitting an API); what's being measured here is a Java library's in-process call cost and
+concurrency behavior, which is exactly JMH's problem, including its own `@Threads(N)` and
+custom-harness-inside-`@Benchmark` support for the concurrency scenario below. Nothing added to the
+main build's `check`/`build` tasks — a benchmark run is a separate, explicit `./gradlew
+:clickhouse-r2dbc-reactive-benchmarks:jmh` invocation, per CLAUDE.md's "don't gate the main loop on
+a multi-minute run."
+
+### Comparison levels ("różne poziomy")
+
+Three levels, deliberately kept as separate benchmark classes rather than one giant parameterized
+suite, so a regression at one level (e.g. "our decode got slower") isn't masked or conflated with
+another (e.g. "our connection pooling got slower"):
+
+1. **Raw transport + decode** — `ClickHouseHttpTransport.query(...)`/`RowBinaryDecoder.decode(...)`
+   directly vs client-v2's `Client.query(...)` + `ClickHouseBinaryFormatReader`. Answers: how much
+   does *this driver's own* HTTP-adapter-plus-decode pipeline cost relative to client-v2's, with the
+   R2DBC SPI layer removed from the comparison entirely.
+2. **Public R2DBC SPI** — `ClickHouseConnection`/`ClickHouseStatement`/`ClickHouseResult` (what an
+   actual driver consumer calls) vs client-v2's `Client` API directly. Answers: what does a real user
+   of this driver actually pay, R2DBC-shape translation included.
+3. **Concurrency/burst, reactive vs blocking** — the scenario that originally motivated this whole
+   project (see Phase 1: "~11 concurrent queries per user action"). Not a third *code* level so much
+   as a third *axis*: this driver's non-blocking pipeline multiplexing many logical queries over a
+   small connection pool vs client-v2's blocking `Client`, one thread per in-flight query. This is
+   where a fair comparison needs the most care — see below.
+
+A fourth level (through Spring's `DatabaseClient`, or client-v2's JDBC wrapper) is explicitly **out
+of scope for the first pass** — it would measure Spring/JDBC overhead on top of both drivers, not
+either driver itself, and can be added later as its own separate concern if real usage data ever
+asks for it.
+
+### Dataset
+
+Server-side generated, not client-side-generated-then-uploaded: `INSERT INTO t SELECT ... FROM
+numbers(N)` (cheap columns) and `generateRandom('col Type, ...', seed)` (for types `numbers()`
+can't produce directly — `String`, `UUID`, `Array`, etc.) via a `CREATE TABLE ... ENGINE =
+MergeTree` + `INSERT INTO ... SELECT * FROM generateRandom(...) LIMIT N`, run once per benchmark
+`@Setup(Level.Trial)`, timed and logged so a slow *setup* never gets misread as a slow *query*.
+Table shape reuses `RealWorldTableAgainstRealClickHouseTest`'s wide, multi-type-column shape for the
+decode-heavy benchmarks (not a narrow two-column toy table — real decode cost is dominated by column
+*variety*, not just row count) plus a narrow two/three-column table for the point-query/burst
+benchmarks (isolates connection/protocol overhead from decode cost).
+
+Row-count tiers, run via JMH's `@Param` (same mechanism clickhouse-java uses for `limit`), so a
+local dev loop and a "real" run are the same code, different parameters:
+
+| Tier | Rows | Purpose |
+| --- | --- | --- |
+| `smoke` | 10,000 | Fast local iteration while writing/debugging a benchmark itself — not a real number. |
+| `default` | 1,000,000 | The number actually reported/tracked for regressions — large enough that per-row costs dominate one-time connection setup, small enough to run in CI's time budget. |
+| `large` | 50,000,000+ | Manual/opt-in only (`-Prows=large` or similar), for a genuine "does this scale" check before a release — not run routinely, disk/time cost is real. |
+
+### Query mix
+
+Not one query shape — this driver's whole value proposition (non-blocking, streaming, backpressure)
+shows up differently depending on the shape:
+
+- **Point/trivial** — `SELECT 1`, and a parameterized single-row lookup (`SELECT ... WHERE id =
+  {id:UInt32}` for us, `client.query(...)` with the equivalent for client-v2). Measures the
+  protocol/connection-overhead floor, where decode cost is negligible and framing/header/network
+  cost dominates.
+- **Full-table streaming scan** — `SELECT * FROM t` over the `default`/`large` tier table. Measures
+  sustained throughput, time-to-first-row, and allocation under long streaming — the scenario
+  `GCProfiler` matters most for.
+- **Wide multi-type decode** — same query shape as above but against the wide `RealWorldTable`-style
+  table, to isolate "cost per row of varied-type decoding" from "cost per row of narrow decoding."
+- **Analytical aggregation** — `SELECT category, count(), avg(amount), quantile(0.95)(amount) FROM t
+  GROUP BY category ORDER BY count() DESC` (ClickHouse's actual core use case — ClickHouse does the
+  heavy lifting server-side; this mostly measures small-result-set decode + round-trip overhead, but
+  it's the shape a real analytics query actually has, not a synthetic stand-in).
+- **INSERT** — both this driver's literal-embedded small `INSERT` (`ClickHouseStatement`) and its
+  streaming `insertStreaming` vendor extension, vs client-v2's `client.insert(...)`.
+
+### Concurrency/burst — the scenario that needs the most care
+
+JMH's `@Threads(N)` (what clickhouse-java uses) models "N platform threads, each independently
+calling a blocking client" — a fair, standard way to benchmark a *blocking* client under load. It
+does not model what this driver is actually for: **one small connection pool, many logical
+concurrent queries multiplexed non-blockingly over it.** Modeling that inside one JMH thread with a
+custom harness (`Flux.range(0, N).flatMap(i -> runQuery(), concurrency).blockLast()`, `SampleTime` or
+`SingleShotTime` mode, `concurrency` = the connection pool's `maxConnections`) is what proves the
+actual claim. Both shapes get benchmarked side by side, deliberately not collapsed into one number,
+because they answer different questions:
+
+- **`@Threads(N)` shape** — client-v2 with N platform threads and N connections vs this driver with N
+  platform threads each blocking on `.block()` and a pool of N connections. A same-resources
+  comparison; expected to be roughly comparable, since neither side's concurrency model gets to use
+  its advantage here.
+- **Custom reactive-harness shape** — this driver with a *small* pool (e.g. 4–8 connections)
+  serving N=~50–100 concurrent logical queries via `flatMap` concurrency, wall-clock time to
+  complete all N, vs client-v2 needing N platform threads (or an external executor) to attempt the
+  same concurrency with N connections. This is the actual "~11 concurrent queries per user action"
+  motivating scenario from Phase 1, scaled up — the one where fewer OS threads/connections doing the
+  same logical work is the entire point, and where raw single-query latency numbers alone would
+  mislead.
+
+Per-request latency *within* one burst is recorded via `HdrHistogram` inside the benchmark method
+(JMH's own percentile machinery works at "one `@Benchmark` invocation = one op" granularity, which
+is too coarse for "N sub-operations happened inside one burst") and reported alongside JMH's own
+result JSON, not folded into it.
+
+### What's measured, and how
+
+- **Throughput / latency (p50/p95/p99/p99.9)** — JMH `SampleTime` mode for single-query benchmarks
+  (built-in percentile reporting, same as clickhouse-java's own choice); `HdrHistogram` for
+  intra-burst percentiles in the concurrency scenario (see above).
+- **Time to first row** — not something JMH measures natively: record `System.nanoTime()` at
+  subscribe and again at the first `onNext`, collect into a histogram, report as a custom metric
+  alongside the JMH result file.
+- **Allocation / retained memory under streaming** — JMH's built-in `GCProfiler`
+  (`-prof gc`), exactly as clickhouse-java uses it — `gc.alloc.rate`/`gc.alloc.rate.norm` need no
+  custom instrumentation.
+- **Connection pool behavior under the burst scenario** — log `r2dbc-pool`'s
+  `ConnectionPoolMetrics` (acquired/idle/pending count) at intervals during the benchmark; not a
+  pass/fail number, a diagnostic trend to eyeball when interpreting a burst result.
+- **Off-heap/Netty buffer usage** — `PooledByteBufAllocator.DEFAULT.metric()`'s `toString()` logged
+  periodically during a long streaming benchmark; same status — diagnostic, not an automated gate,
+  useful for spotting a leak trend during a `large`-tier run.
+- **CPU usage** — deliberately *not* built as an automated numeric pipeline for the first pass
+  (real ROI is low relative to the effort of doing it reliably in a shared CI runner). Recommended
+  as a manual, qualitative companion tool instead: run a `large`-tier benchmark under
+  `async-profiler` locally for a flame graph when investigating a specific regression, rather than
+  gating every run on a CPU-percent number.
+
+### Reporting
+
+JMH's own JSON result format (`-rf json`, or the `me.champeau.jmh` plugin's equivalent config),
+matching clickhouse-java's own convention. Raw JSON result files are **not committed to git** (they're
+noisy binary-ish artifacts, one per run) — treated as CI/local run output, uploaded as a workflow
+artifact if/when a scheduled CI job exists (see below), otherwise just inspected locally. A small
+JSON→Markdown summary script is a reasonable follow-up once the benchmark classes themselves exist
+and there's real output to summarize — not built speculatively ahead of having any numbers.
+
+### When this runs
+
+Not on every PR/push — a multi-minute-to-hour JMH run has no place in the fast feedback loop this
+project's CI otherwise protects. Matching clickhouse-java's own practice: a `workflow_dispatch`
+(manual trigger, e.g. before a release) plus an optional scheduled (nightly/weekly) job once the
+suite is stable enough to trust unattended — decided once the classes exist and a first baseline run
+has actually happened, not designed in the abstract now.
+
+### TDD note
+
+This module is measurement tooling, not driver behavior — CLAUDE.md's red-green-refactor workflow
+is scoped to production code with behavior to protect, and explicitly carves out "skeleton/plumbing
+code with no behavior yet" as the exception. A JMH `@Benchmark` method has no assertion to be red
+about; its "correctness" is that it measures the right thing, which is a design/review question
+(does this benchmark actually isolate what it claims to), not a TDD one. `BaseClickHouseIntegrationTest`-style
+setup code and any real assertions this module *does* need (e.g. "the burst benchmark actually ran N
+queries, not N-1") still follow this project's normal testing rules.
+
+### First slice, run for real (2026-08-13)
+
+`clickhouse-r2dbc-reactive-benchmarks` scaffolded (`me.champeau.jmh`, `BenchmarkEnvironment`,
+`PointQueryTable`) with one benchmark class, `PointQueryBenchmark` (Level 1 — raw transport, this
+driver vs client-v2, point lookup against the `smoke`-tier 10,000-row table). Run against real
+Docker/ClickHouse (`./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh`), not just compiled:
+
+- **Numbers (1 fork, 1×10s warmup, 3×10s measurement — a sanity check, not yet a trustworthy
+  baseline; JMH's own output explicitly warns against over-reading a single short run like this):**
+  this driver mean 1115.8 ± 3.8 µs/op vs client-v2 mean 1235.6 ± 6.6 µs/op; p99 1589 µs vs 2165 µs.
+  This driver read faster on this run through p99.9; both had noisy, low-sample tail percentiles
+  (p99.99/p100) not worth reading into yet.
+- **Real finding, not assumed: JMH forks a fresh JVM per `@Benchmark` method by default.**
+  `BenchmarkEnvironment`'s `static` container field is therefore shared only within one fork, not
+  across the whole `jmh` run — the log showed two separate `clickhouse/clickhouse-server` containers
+  starting on two different ports (one for `clientV2`, one for `ourDriver`), each paying the ~4s
+  Testcontainers startup independently. Documented in `BenchmarkEnvironment`'s own Javadoc (the
+  original version claimed "one container for the whole run," which this run proved wrong). Accepted
+  as a real, known cost for now rather than forcing everything into one fork (which would trade away
+  JMH's normal isolation between benchmark methods) — revisit if the `large` tier's repeated
+  container-plus-reseed cost per fork turns out to dominate a real run's wall time.
+
+Remaining query shapes (full table scan, wide multi-type decode, aggregation, INSERT) and the
+concurrency/burst scenario are designed above but not yet built — next.
 
 ## Phase 6 — Spring WebFlux interop demo (2026-08-13, reworked after a genuine BindMarkersFactory finding — pending green confirmation)
 

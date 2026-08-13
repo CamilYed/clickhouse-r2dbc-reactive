@@ -4,6 +4,7 @@ assertj = "3.27.7"
 reactor = "3.7.9"
 reactor-netty = "1.2.6"
 r2dbc-spi = "1.0.0.RELEASE"
+r2dbc-pool = "1.0.2.RELEASE"
 clickhouse-client-v2 = "0.9.0"
 spotless = "8.7.0"
 jacoco = "0.8.15"
@@ -13,10 +14,14 @@ awaitility = "4.3.0"
 jspecify = "1.0.0"
 slf4j = "2.0.18"
 bouncycastle = "1.85"
+jmh = "1.37"
+jmh-gradle-plugin = "0.7.3"
+hdrhistogram = "2.2.2"
 
 [plugins]
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 sonarqube = { id = "org.sonarqube", version.ref = "sonarqube" }
+jmh = { id = "me.champeau.jmh", version.ref = "jmh-gradle-plugin" }
 
 [libraries]
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
@@ -30,8 +35,11 @@ reactor-test = { module = "io.projectreactor:reactor-test", version.ref = "react
 reactor-netty-http = { module = "io.projectreactor.netty:reactor-netty-http", version.ref = "reactor-netty" }
 
 r2dbc-spi = { module = "io.r2dbc:r2dbc-spi", version.ref = "r2dbc-spi" }
+r2dbc-pool = { module = "io.r2dbc:r2dbc-pool", version.ref = "r2dbc-pool" }
 
 clickhouse-client-v2 = { module = "com.clickhouse:client-v2", version.ref = "clickhouse-client-v2" }
+
+hdrhistogram = { module = "org.hdrhistogram:HdrHistogram", version.ref = "hdrhistogram" }
 
 testcontainers-bom = { group = "org.testcontainers", name = "testcontainers-bom", version.ref = "testcontainers" }
 testcontainers-junit-jupiter = { group = "org.testcontainers", name = "testcontainers-junit-jupiter" }
