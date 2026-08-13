@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
@@ -40,18 +41,38 @@ import reactor.core.publisher.Flux;
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 public class PointQueryBenchmark {
 
+  private static final String SELECT_BY_ID_SQL =
+      "SELECT label, amount FROM " + PointQueryTable.NAME + " WHERE id = {id:UInt64}";
+
+  /**
+   * How many distinct ids {@link PointQueryTable#deterministicIds} pre-generates — large enough
+   * that a 10s measurement window cycles through it many times over without any single id being
+   * disproportionately cache-hot, small enough to build in {@code @Setup} instantly. A power of
+   * two so cycling through it is a cheap bitmask, not a division, in the benchmark hot path.
+   */
+  private static final int ID_POOL_SIZE = 1 << 16;
+
+  private static final long ID_SEED = 42L;
+
   /** Row-count tier — see ROADMAP.md's Phase 5 "Dataset" table for what each tier is for. */
   @Param({"10000"})
   public long rows;
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private long[] ids;
+  private final AtomicLong idCursor = new AtomicLong();
 
-  /** Starts the shared container and seeds {@link PointQueryTable} once per JMH trial. */
+  /**
+   * Starts the shared container, seeds {@link PointQueryTable}, and pre-generates the deterministic
+   * id pool ({@link PointQueryTable#deterministicIds}) once per JMH trial — see that method's
+   * Javadoc for why ids are never generated inside a {@code @Benchmark} method.
+   */
   @Setup(Level.Trial)
   public void setUpTrial() {
     BenchmarkEnvironment.start();
     PointQueryTable.seed(rows);
+    ids = PointQueryTable.deterministicIds(rows, ID_POOL_SIZE, ID_SEED);
     ourTransport =
         new ClickHouseHttpTransport(
             BenchmarkEnvironment.httpUrl(), BenchmarkEnvironment.username(),
@@ -71,15 +92,22 @@ public class PointQueryBenchmark {
     clientV2.close();
   }
 
-  /** This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decodeRows}. */
+  /**
+   * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decodeRows},
+   * parameterized via ClickHouse's {@code {id:UInt64}} mechanism.
+   *
+   * <p>The one remaining known asymmetry with {@link #clientV2}, deliberately not forced into
+   * false equivalence: this driver materializes each row into a {@code Map<String, Object>} (see
+   * {@link RowBinaryDecoder}'s own Javadoc for why — a lifetime-safety tradeoff, not an accident),
+   * while client-v2 reads typed values directly off its reader with no intermediate map. A future
+   * transport-only benchmark (checksumming raw bytes, no decode at all) would isolate protocol cost
+   * from this decode-shape difference — see ROADMAP.md's Phase 5 section.
+   */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
-    final String sql =
-        "SELECT label, amount FROM "
-            + PointQueryTable.NAME
-            + " WHERE id = {id:UInt64}";
+    final long id = nextId();
     final ClickHouseQuery query =
-        ClickHouseQuery.of(sql).withParameters(Map.of("id", PointQueryTable.randomId(rows)));
+        ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
     final Map<String, Object> row =
         RowBinaryDecoder.decodeRows(body).blockFirst(Duration.ofSeconds(10));
@@ -87,27 +115,35 @@ public class PointQueryBenchmark {
   }
 
   /**
-   * client-v2: {@link Client#query} + {@link ClickHouseBinaryFormatReader}.
-   *
-   * <p>Uses an inlined literal rather than client-v2's own {@code {name:Type}} parameterized-query
-   * support deliberately left out of this first slice — flagged here rather than silently glossed
-   * over: revisit before treating this benchmark's numbers as final, since a literal-embedded
-   * query and a server-side-substituted parameterized query aren't guaranteed to cost the same on
-   * ClickHouse's side.
+   * client-v2: {@link Client#query} + {@link ClickHouseBinaryFormatReader}, parameterized via the
+   * same {@code {id:UInt64}} mechanism and the same {@code query_params} wire shape this driver
+   * uses — confirmed by reading {@code Client#query(String, Map, QuerySettings)}'s own Javadoc in
+   * the mounted client-v2 source, which documents the identical {@code {name:Type}}/{@code
+   * param_<name>} contract. Fixed from an earlier version of this benchmark that inlined the id as
+   * a SQL literal for client-v2 only — a real fairness gap, not a stylistic one, since a
+   * literal-embedded query and a server-side-substituted one aren't guaranteed to cost ClickHouse
+   * the same.
    */
   @Benchmark
   public void clientV2(final Blackhole blackhole) throws Exception {
-    final String sql =
-        "SELECT label, amount FROM "
-            + PointQueryTable.NAME
-            + " WHERE id = "
-            + PointQueryTable.randomId(rows);
-    try (QueryResponse response = clientV2.query(sql).get(10, TimeUnit.SECONDS)) {
+    final long id = nextId();
+    try (QueryResponse response =
+        clientV2.query(SELECT_BY_ID_SQL, Map.of("id", id)).get(10, TimeUnit.SECONDS)) {
       final ClickHouseBinaryFormatReader reader = clientV2.newBinaryFormatReader(response);
       while (reader.next() != null) {
         blackhole.consume(reader.getString(1));
         blackhole.consume(reader.getBigDecimal(2));
       }
     }
+  }
+
+  /**
+   * Advances through the pre-generated {@link #ids} pool — deterministic and, across separate JMH
+   * forks running {@link #ourDriver} and {@link #clientV2} from the same {@link #ID_SEED}, the
+   * identical sequence for both. No RNG call in the hot path.
+   */
+  private long nextId() {
+    final int index = (int) (idCursor.getAndIncrement() & (ID_POOL_SIZE - 1));
+    return ids[index];
   }
 }

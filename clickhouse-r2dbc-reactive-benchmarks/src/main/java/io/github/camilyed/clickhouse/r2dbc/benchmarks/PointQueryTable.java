@@ -1,5 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.benchmarks;
 
+import java.util.SplittableRandom;
+
 /**
  * The narrow, two-column table the point-query and burst-concurrency benchmarks read from — see
  * ROADMAP.md's Phase 5 section ("Dataset") for why this is a separate, narrow table rather than
@@ -20,8 +22,7 @@ public final class PointQueryTable {
 
   /**
    * Drops and recreates {@link #NAME} with {@code rowCount} rows, {@code id} running from {@code 1}
-   * to {@code rowCount} so a uniformly-random point lookup (see {@link #randomId}) always hits a
-   * real row.
+   * to {@code rowCount} so any id from {@link #deterministicIds} always hits a real row.
    */
   public static void seed(final long rowCount) {
     BenchmarkEnvironment.executeAdminSql("DROP TABLE IF EXISTS " + NAME);
@@ -38,8 +39,20 @@ public final class PointQueryTable {
             + ")");
   }
 
-  /** A uniformly random {@code id} in range for a table seeded with {@code rowCount} rows. */
-  public static long randomId(final long rowCount) {
-    return 1 + (long) (Math.random() * rowCount);
+  /**
+   * A fixed-seed, pre-generated pool of valid {@code id}s for a table seeded with {@code
+   * rowCount} rows — deliberately not {@code Math.random()} called inside a benchmark's hot path
+   * (costs little relative to a real network round trip, but makes runs non-reproducible and can
+   * give client-v2 and this driver different access patterns across a run). Call once in {@code
+   * @Setup}, then cycle through the returned array during measurement; both benchmark methods
+   * built from the same {@code seed} see the identical id sequence.
+   */
+  public static long[] deterministicIds(final long rowCount, final int poolSize, final long seed) {
+    final SplittableRandom random = new SplittableRandom(seed);
+    final long[] ids = new long[poolSize];
+    for (int i = 0; i < poolSize; i++) {
+      ids[i] = 1 + random.nextLong(rowCount);
+    }
+    return ids;
   }
 }

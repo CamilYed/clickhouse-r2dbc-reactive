@@ -144,6 +144,14 @@ cancelled) still exists, just far less often than before this was implemented �
 > [`ClickHouseHttpTransport.insertWithSummary`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransport.java)'s
 > Javadoc for the full reasoning.
 
+> [!NOTE]
+> **`JSON` columns are supported, decoded as a plain `String`, with zero extra configuration.**
+> GA since ClickHouse 25.3 — no `allow_experimental_json_type` needed. This driver sends
+> `output_format_binary_write_json_as_string=1` unconditionally on every query (harmless when a
+> table has no `JSON` column), so a `JSON` column just works whether queried directly or through
+> something like Spring's `DatabaseClient`. `Dynamic`/`Variant` remain unsupported — newer, less
+> settled experimental types.
+
 ## What "fully reactive" means here
 
 Returning a reactive type is a necessary but insufficient condition. A driver is treated as

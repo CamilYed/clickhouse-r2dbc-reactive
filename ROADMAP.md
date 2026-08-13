@@ -1075,6 +1075,71 @@ Docker/ClickHouse (`./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh`), not j
 Remaining query shapes (full table scan, wide multi-type decode, aggregation, INSERT) and the
 concurrency/burst scenario are designed above but not yet built — next.
 
+### Fairness/reproducibility review of `PointQueryBenchmark` (2026-08-13)
+
+An external review of the first run (a written benchmark-strategy document, checked against this
+project's own code rather than taken at face value) confirmed the overall Level 1/2/3 design above
+independently arrived at the same shape, and caught four concrete, real problems in
+`PointQueryBenchmark` specifically — all fixed:
+
+- **Unpinned ClickHouse image (`:latest`).** A performance baseline that silently tracks whatever
+  ClickHouse changes underneath it isn't reproducible run-to-run. Pinned to
+  `clickhouse/clickhouse-server:26.7.3.19` in `BenchmarkEnvironment` — confirmed via Docker Hub that
+  `latest` currently resolves to exactly this image (same digest), so this changes nothing about
+  today's numbers, only future reproducibility.
+- **Asymmetric parameterization.** This driver used `{id:UInt64}` + ClickHouse's `param_<name>`
+  mechanism; client-v2 received a plain inlined literal. Fixed by reading client-v2's own
+  `Client#query(String, Map, QuerySettings)` Javadoc directly (in the mounted client-v2 source) and
+  confirming it documents the identical `{name:Type}`/`query_params` contract — both benchmark
+  methods now build the exact same SQL text and parameter map.
+- **`Math.random()` inside the `@Benchmark` hot path.** Not necessarily a dominant cost next to a
+  real network round trip, but non-reproducible across runs and a potential source of different
+  access patterns between the two methods. Fixed: `PointQueryTable.deterministicIds(rowCount,
+  poolSize, seed)` pre-generates a fixed pool once in `@Setup(Level.Trial)` via `SplittableRandom`;
+  the benchmark methods only advance an `AtomicLong` cursor through it.
+- **Environment/version metadata not recorded.** `BenchmarkEnvironment.start()` now logs the
+  ClickHouse server version (queried from the running container, not assumed from the image tag),
+  JDK version, and OS/arch alongside every run.
+
+**One asymmetry deliberately left as-is, not force-fit into false equivalence:** this driver
+materializes each row into a `Map<String, Object>` (see `RowBinaryDecoder`'s own Javadoc for the
+lifetime-safety reason), while client-v2 reads typed values directly off its reader with no
+intermediate map. Documented directly in `PointQueryBenchmark`'s Javadoc rather than silently
+accepted — isolating it needs a *separate* transport-only benchmark (raw bytes, checksum, no decode
+at all) sitting alongside the transport+decode one, not a rewrite of this one. Named as a concrete
+next benchmark, not yet built.
+
+**Re-run after the fixes, confirmed green (2026-08-13).** Same 1 fork/1×10s warmup/3×10s
+measurement shape as before — still a sanity check, not a trustworthy baseline (JMH's own output
+repeats that warning every run). New numbers, now on equal parameterization and a pinned server:
+
+| | client-v2 | this driver | this driver's edge |
+| --- | --- | --- | --- |
+| mean | 1142.8 µs | 1075.1 µs | 5.9% lower |
+| p50 | 1122.3 µs | 1058.8 µs | 5.7% lower |
+| p90 | 1226.8 µs | 1155.1 µs | 5.8% lower |
+| p95 | 1280.0 µs | 1189.9 µs | 7.0% lower |
+| p99 | 1577.0 µs | 1273.9 µs | 19.2% lower |
+| p99.9 | 2564.0 µs | 1904.9 µs | 25.7% lower |
+| sample count (30s) | 26,227 (≈874 ops/s) | 27,884 (≈930 ops/s) | ≈6.3% higher throughput |
+
+Notable shift from the pre-fix run: the gap **widens at the tail** (p99/p99.9) rather than staying
+flat — this driver's tail latency held closer to its own median than client-v2's did, even in this
+single-connection, zero-concurrency scenario. Consistent with, but not yet proof of, the stability-
+under-load claim the architecture is actually designed for — that needs the concurrency/burst
+benchmark (not built yet) to test directly, not inferred from a serial point-query benchmark.
+Treat this table the same way as before: one short single-fork run, not a published claim.
+
+**Recommended next benchmarks, in priority order** (per the same review, cross-checked against this
+section's own Level 1/2/3 design — nothing here contradicts what was already planned, it sharpens
+the order): `TrivialQueryBenchmark` (`SELECT 1` — the protocol/connection floor with zero storage-
+engine effects, smaller and simpler than `PointQueryBenchmark`) and `StreamingScanBenchmark`
+(`SELECT ... FROM numbers(10_000_000)`-shaped, measuring TTFR/TTLR/rows-per-second/bytes-per-second/
+allocated-bytes-per-row) before the remaining Level 1 shapes — both named explicitly in this
+section's original design, now sequenced first because they exercise this driver's actual
+architectural reasons for existing (streaming, backpressure, bounded memory) more directly than one
+more point-query variant would.
+
 ## Phase 6 — Spring WebFlux interop demo (2026-08-13, reworked after a genuine BindMarkersFactory finding — pending green confirmation)
 
 Goal: prove the driver works through Spring's own R2DBC integration (`DatabaseClient`,

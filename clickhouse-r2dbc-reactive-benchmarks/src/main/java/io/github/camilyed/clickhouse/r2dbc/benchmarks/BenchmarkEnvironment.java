@@ -39,20 +39,44 @@ public final class BenchmarkEnvironment {
 
   private static final Logger LOG = LoggerFactory.getLogger(BenchmarkEnvironment.class);
 
-  private static final ClickHouseContainer CLICK_HOUSE =
-      new ClickHouseContainer("clickhouse/clickhouse-server:latest");
+  /**
+   * Pinned, not {@code latest} — a performance baseline that silently tracks whatever ClickHouse
+   * itself changes underneath it isn't reproducible. Confirmed via Docker Hub (2026-08-13) that
+   * {@code latest} currently resolves to exactly this build (same image digest), so pinning here
+   * doesn't change today's behavior, only future reproducibility. Bump deliberately, not silently,
+   * when there's a reason to benchmark against a newer server.
+   */
+  private static final String CLICK_HOUSE_IMAGE = "clickhouse/clickhouse-server:26.7.3.19";
+
+  private static final ClickHouseContainer CLICK_HOUSE = new ClickHouseContainer(CLICK_HOUSE_IMAGE);
 
   private static final HttpClient ADMIN_HTTP_CLIENT = HttpClient.newHttpClient();
 
   private BenchmarkEnvironment() {}
 
-  /** Starts the shared container if it isn't already running. Idempotent. */
+  /**
+   * Starts the shared container if it isn't already running, then logs the environment a benchmark
+   * result should be read against — ClickHouse server version (queried from the running container,
+   * not assumed from the image tag), JDK, and OS/architecture. A benchmark number without this
+   * context isn't reproducible; see the Phase 5 fairness requirements in ROADMAP.md. Idempotent.
+   */
   public static synchronized void start() {
     if (!CLICK_HOUSE.isRunning()) {
-      LOG.info("Starting shared ClickHouse container for benchmarks...");
+      LOG.info("Starting shared ClickHouse container ({}) for benchmarks...", CLICK_HOUSE_IMAGE);
       CLICK_HOUSE.start();
       LOG.info("ClickHouse container ready at {}", CLICK_HOUSE.getHttpUrl());
+      logEnvironmentMetadata();
     }
+  }
+
+  private static void logEnvironmentMetadata() {
+    LOG.info(
+        "Benchmark environment: clickHouseImage={}, clickHouseVersion={}, jdk={}, os={}/{}",
+        CLICK_HOUSE_IMAGE,
+        queryAdminSql("SELECT version()").strip(),
+        System.getProperty("java.version"),
+        System.getProperty("os.name"),
+        System.getProperty("os.arch"));
   }
 
   /** The running container's HTTP endpoint, e.g. {@code http://localhost:32821}. */
@@ -73,10 +97,16 @@ public final class BenchmarkEnvironment {
   /**
    * Runs {@code sql} over a plain, synchronous {@link HttpClient} — never through this project's
    * own driver or client-v2 — so schema/dataset setup never depends on the very code being
-   * benchmarked. Blocks the calling thread; only ever called from JMH {@code @Setup}/{@code
-   * @TearDown} methods, never from inside a {@code @Benchmark} method itself.
+   * benchmarked. Discards the response body; use {@link #queryAdminSql} when the result is needed.
+   * Blocks the calling thread; only ever called from JMH {@code @Setup}/{@code @TearDown} methods,
+   * never from inside a {@code @Benchmark} method itself.
    */
   public static void executeAdminSql(final String sql) {
+    queryAdminSql(sql);
+  }
+
+  /** Like {@link #executeAdminSql}, but returns the response body. */
+  public static String queryAdminSql(final String sql) {
     final String credentials = username() + ":" + password();
     final String basicAuth =
         Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
@@ -94,6 +124,7 @@ public final class BenchmarkEnvironment {
         throw new IllegalStateException(
             "Admin SQL failed (" + response.statusCode() + "): " + response.body());
       }
+      return response.body();
     } catch (final IOException e) {
       throw new IllegalStateException("Admin SQL failed: " + sql, e);
     } catch (final InterruptedException e) {
