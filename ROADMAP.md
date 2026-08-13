@@ -782,10 +782,55 @@ vendor extension) — see "Fixed this pass" above. Order agreed for what's left:
    really well tested" rather than left for after publishing.
 4. Phase 5 (benchmarks) — still gated behind Phase 4 per CLAUDE.md's Performance testing section;
    the sign-off pass in step 2 is what unlocks it, not a calendar date.
-5. Maven Central publication — last, once the above hold.
+5. `JSON` type support (2026-08-13) — see "Fixed this pass" above. Done ahead of Phase 5 at the
+   user's explicit request ("Najpierw JSON").
+6. Phase 5 (benchmarks) — next, still gated behind Phase 4 (already unlocked) per CLAUDE.md's
+   Performance testing section. **Confirmed order: benchmarks before Maven Central, not after** —
+   re-confirmed directly (2026-08-13). No JMH/Gatling infrastructure and no baseline exist yet;
+   this is genuinely not started.
+7. Maven Central publication — last, once the above hold.
 
-`integration-tests` remains an empty scaffold — folded into whichever of the above steps ends up
-needing a true whole-driver black-box suite, not tracked as a separate item.
+**Final review pass before Phase 5 (2026-08-13).** A fresh, independent review of `core`,
+`transport-http`, `connector`, and `testkit` main-source (task tracked as "Full code review pass"
+in the working task list) found nothing severe — the codebase holds up against every CLAUDE.md rule
+checked (Javadoc on public members, final-by-default, no `Utils` grab-bags, no null-as-silent-
+default, records/sealed types where the shape fits, package-private-by-default). Two small, real,
+non-blocking findings, both closed or logged:
+
+- **Closed:** the JSON query-string change (`ClickHouseHttpTransport.queryWithSummary` appending
+  `output_format_binary_write_json_as_string=1`) had real-ClickHouse coverage
+  (`shouldDecodeJsonTypeAsAPlainString`) but no fast hermetic contract-test assertion that the query
+  parameter actually lands on the wire, unlike the existing `param_<name>` case
+  (`shouldSendBoundParametersAsParamQueryParameters`). Added
+  `shouldAskForJsonColumnsAsPlainStringsOnEveryQuery` to `ClickHouseHttpTransportTest`, asserting
+  `server.receivedUri()` via `ControlledClickHouseServer` — matches this project's own test-strategy
+  tiering (fast hermetic contract test first, real-ClickHouse test proves the end-to-end decode).
+- **Logged, not fixed now:** `testkit`'s `ControlledClickHouseServer` repeats an ~15-line block
+  (the `Atomic*` request-tracking field declarations and route wiring) across its 7 static factory
+  methods, differing only in response-body logic — real duplication risk (the field declarations
+  could silently drift), but not a `Utils`-grab-bag violation and not touched in this pass to avoid
+  destabilizing every test class that depends on it right before a benchmark phase. Worth a small
+  private-helper extraction (shared state holder + a `wireTracking(...)` method) as a low-risk
+  cleanup, whenever `testkit` is next touched for another reason.
+
+**`integration-tests` module status, checked directly (2026-08-13):** still a genuinely empty
+scaffold — `build.gradle.kts` only, zero source files, confirmed via `find`. Its originally-intended
+role (whole-driver black box, real ClickHouse, public R2DBC SPI only) turned out to already be
+covered, just spread across three places rather than one dedicated module: `connector`'s own
+`ClickHouseConnectionFactoryProviderTest.shouldBeDiscoverableThroughTheStandardR2dbcServiceLoaderBootstrapPath`
+(hermetic — proves `ConnectionFactories.get(options)` resolves to this driver via the real
+`META-INF/services` file, not just that `ClickHouseConnectionFactoryProvider`'s own methods behave
+correctly in isolation), `ClickHouseConnectionFactoryAgainstRealClickHouseTest` (real ClickHouse —
+proves `ClickHouseConnectionFactory.from(options)` produces a connection that actually validates
+against a live server), and `examples/spring-boot-webflux-demo` (real ClickHouse, and the only place
+the `r2dbc:clickhouse://...` URL *string* form — not just `ConnectionFactoryOptions` built
+programmatically — gets parsed via `ConnectionFactoryOptions.parse(url)` and driven end to end
+through `ConnectionFactories.get(options)`, a real pool, and `DatabaseClient`, exercised by
+`OrderEventControllerAgainstRealClickHouseTest`). No single test proves the full chain — URL string
+→ SPI discovery → real connection — in one place, but every individual link in that chain is proven
+somewhere. Leaving `integration-tests` as an intentional empty placeholder rather than deleting it
+or backfilling it now; revisit only if Phase 5/6 work exposes a scenario that genuinely needs a
+true whole-driver suite distinct from `connector`'s own tests or the demo.
 
 ## Non-functional requirements: logging, metrics, leaks
 

@@ -489,6 +489,27 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldAskForJsonColumnsAsPlainStringsOnEveryQuery() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport
+          .query(ClickHouseQuery.of("SELECT 1"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedUri()).contains("output_format_binary_write_json_as_string=1");
+    }
+  }
+
+  @Test
   void shouldSignalAServerErrorWhenTheExceptionCodeHeaderIsPresent() {
     // given
     final String errorBody = "Code: 60. DB::Exception: Table default.missing doesn't exist";
