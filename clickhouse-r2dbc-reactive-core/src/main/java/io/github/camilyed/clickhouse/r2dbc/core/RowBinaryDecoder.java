@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.core;
 
 import com.clickhouse.client.api.data_formats.RowBinaryWithNamesAndTypesFormatReader;
 import com.clickhouse.client.api.data_formats.internal.BinaryStreamReader;
+import com.clickhouse.client.api.internal.ServerSettings;
 import com.clickhouse.client.api.metadata.TableSchema;
 import com.clickhouse.client.api.query.QuerySettings;
 import com.clickhouse.data.ClickHouseColumn;
@@ -96,7 +97,14 @@ public final class RowBinaryDecoder {
   private static RowBinaryWithNamesAndTypesFormatReader newReader(final Flux<ByteBuffer> source) {
     return new ListDecodingRowBinaryReader(
         FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND),
-        new QuerySettings().setUseTimeZone("UTC"),
+        new QuerySettings()
+            .setUseTimeZone("UTC")
+            // Matches ClickHouseHttpTransport#JSON_AS_STRING_QUERY_PARAM, sent unconditionally on
+            // every query: the server sends JSON columns back as a plain string when that query
+            // parameter is set, so this local reader must be told to expect the same thing, or a
+            // JSON column would decode via client-v2's complex .internal JSON object
+            // representation instead of a plain String.
+            .serverSetting(ServerSettings.OUTPUT_FORMAT_BINARY_WRITE_JSON_AS_STRING, "1"),
         new BinaryStreamReader.DefaultByteBufferAllocator());
   }
 

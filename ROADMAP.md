@@ -327,7 +327,7 @@ for, not something to infer from the one spike test passing.
 | Nullable and optional | ✅ `Nullable` covered (including an actual `NULL` value across rows); `LowCardinality` covered too — confirmed against client-v2's own test suite (`DataTypeTests`, our pinned `v0.9.0`) that it's a "virtual type" there (wrapper stripped, dispatches to the underlying type, same shape as `Nullable`), then proven end to end through our own pipeline, not just assumed from client-v2's tests |
 | Specialized | ⚠️ `UUID` and `Enum8`/`Enum16` covered; geo types, vector-search (`QBit`), domains not attempted |
 | Composite (`Array`/`Tuple`/`Map`/`Nested`) | ✅ `Map`/`Tuple`/`Array`/`Nested` all covered — `Nested` flattens into one `Array(...)` column per sub-field by default (`flatten_nested=1`), so on the wire it's indistinguishable from ordinary `Array` columns, same mechanism, confirmed directly |
-| Semi-structured (`JSON`/`Dynamic`/`Variant`) | 🚫 not attempted, still experimental in ClickHouse itself |
+| Semi-structured (`JSON`/`Dynamic`/`Variant`) | ⚠️ `JSON` covered (GA since ClickHouse 25.3, no `allow_experimental_json_type` needed) — decoded as a plain `String`: `ClickHouseHttpTransport` sends `output_format_binary_write_json_as_string=1` unconditionally on every query (a no-op when there's no JSON column, so no opt-in `ConnectionFactoryOptions` needed), and `core`'s `RowBinaryDecoder#newReader` sets the matching local `QuerySettings` flag so client-v2 decodes it the same way instead of into its complex `.internal` JSON object representation; `Dynamic`/`Variant` still not attempted, newer and less settled |
 | Aggregate function (`AggregateFunction`/`SimpleAggregateFunction`) | 🚫 not attempted — these hold intermediate aggregation state, not literal-insertable values, so proving them needs insert-via-aggregate-query, not `INSERT ... VALUES` |
 | Special Data Types (`Expression`/`Interval`/`Nothing`/`Set`) | N/A — query-intermediate constructs, not column/storage types |
 
@@ -724,6 +724,22 @@ fixed, not just documented.
   not just accepted-and-discarded). `ClickHouseStatement`/`ClickHouseBatch` themselves are
   unchanged and still URL-encode their data — correct for small inserts, `insertStreaming` is the
   opt-in path for large ones. Silent risk — fixed.
+- **`JSON` type support (2026-08-13).** Was entirely untested; tracing client-v2's
+  `BinaryStreamReader`/`AbstractBinaryFormatReader` showed a `JSON` column decodes either as a
+  plain `String` or into a complex `.internal` object tree, controlled by the
+  `output_format_binary_write_json_as_string` server setting baked into the reader at construction
+  time — off by default, so a `JSON` column would have decoded into the `.internal` representation
+  with no supported way to read it back out. Fixed by having `ClickHouseHttpTransport` append
+  `output_format_binary_write_json_as_string=1` to every `queryWithSummary` request
+  unconditionally (a no-op for a result set with no `JSON` column, so this needed no new
+  `ConnectionFactoryOptions`/`Option` — a caller such as Spring's `DatabaseClient` gets working
+  `JSON` columns with zero extra configuration), matched on the decode side by `core`'s
+  `RowBinaryDecoder#newReader` setting the same flag on its local `QuerySettings` so client-v2's
+  reader expects the same wire shape it's actually getting. `JSON` is GA since ClickHouse 25.3, so
+  no `allow_experimental_json_type` setting is needed (and was deliberately not added, since a
+  removed experimental flag risks an "Unknown setting" error against a current server). Proven by
+  `shouldDecodeJsonTypeAsAPlainString` in `RealWorldTableAgainstRealClickHouseTest`. `Dynamic`/
+  `Variant` remain untested — newer, less settled experimental types. Silent risk — fixed.
 
 ### Open gaps, not yet addressed
 

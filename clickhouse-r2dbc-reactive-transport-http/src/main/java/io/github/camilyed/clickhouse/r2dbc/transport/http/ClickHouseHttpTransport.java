@@ -41,6 +41,19 @@ public final class ClickHouseHttpTransport {
   private static final Pattern WRITTEN_ROWS_PATTERN =
       Pattern.compile("\"written_rows\"\\s*:\\s*\"(\\d+)\"");
 
+  /**
+   * Appended unconditionally to every {@link #queryWithSummary} request so a {@code JSON} column,
+   * if the result set has one, comes back as a plain string rather than ClickHouse's default binary
+   * encoding for the type — matched on the decode side by {@code core}'s {@code
+   * RowBinaryDecoder#newReader}, which sets the corresponding local {@code QuerySettings} flag so
+   * client-v2's reader expects the same thing. Harmless (a no-op) for queries with no JSON column,
+   * so this is sent unconditionally rather than exposed as an opt-in {@code
+   * ConnectionFactoryOptions} setting — no extra configuration for a caller (e.g. Spring's {@code
+   * DatabaseClient}) that just wants JSON columns to work.
+   */
+  private static final String JSON_AS_STRING_QUERY_PARAM =
+      "&output_format_binary_write_json_as_string=1";
+
   private final HttpClient httpClient;
   private final Authentication authentication;
   private final RetryPolicy retryPolicy;
@@ -341,7 +354,11 @@ public final class ClickHouseHttpTransport {
                 })
             .doAfterRequest((request, connection) -> requestSent.set(true))
             .post()
-            .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
+            .uri(
+                "/?query="
+                    + encode(query.sql())
+                    + parameterQueryString(query)
+                    + JSON_AS_STRING_QUERY_PARAM)
             .response(
                 (httpResponse, content) ->
                     receiveOrFail(httpResponse, content, query.queryId(), writtenRows));

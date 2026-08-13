@@ -56,8 +56,15 @@ import org.junit.jupiter.api.Test;
  *       {@code Array(...)} column per sub-field by default ({@code flatten_nested=1}), so on the
  *       wire it's indistinguishable from ordinary {@code Array} columns — same mechanism, no new
  *       code needed, just confirmed directly rather than assumed.
- *   <li><b>Semi-structured</b> ({@code JSON}/{@code Dynamic}/{@code Variant}) — not attempted; all
- *       still experimental/evolving in ClickHouse itself.
+ *   <li><b>Semi-structured</b> ({@code JSON}/{@code Dynamic}/{@code Variant}) — {@code JSON}
+ *       covered ({@link #shouldDecodeJsonTypeAsAPlainString()}): GA since ClickHouse 25.3, no
+ *       {@code allow_experimental_json_type} needed. Decoded as a plain {@code String} — {@link
+ *       ClickHouseHttpTransport} appends {@code output_format_binary_write_json_as_string=1} to
+ *       every query unconditionally (harmless when a table has no JSON column), and {@code core}'s
+ *       {@code RowBinaryDecoder#newReader} sets the matching local {@code QuerySettings} flag so
+ *       client-v2's reader decodes it the same way instead of into its complex {@code .internal}
+ *       JSON object representation. {@code Dynamic}/{@code Variant} still not attempted — newer,
+ *       less settled experimental types.
  *   <li><b>Nullable and optional</b> — {@code Nullable} covered ({@link
  *       #shouldDecodeAMultiTypeMultiRowTable()}, both a present and an actually-{@code NULL} value
  *       across multiple rows); {@code LowCardinality} now covered too ({@link
@@ -257,6 +264,20 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0))
         .hasUuid("uuid_val", UUID.fromString("61f0c404-5cb3-11e7-907b-a6006ad3dba0"));
+  }
+
+  @Test
+  void shouldDecodeJsonTypeAsAPlainString() {
+    // given
+    execute("CREATE TABLE json_types (id UInt32, payload_val JSON) ENGINE = MergeTree ORDER BY id");
+    execute("INSERT INTO json_types VALUES (1, '{\"a\":\"1\"}')");
+
+    // when
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM json_types");
+
+    // then
+    assertThat(rows).hasSize(1);
+    assertThatRow(rows.get(0)).hasValue("payload_val", "{\"a\":\"1\"}");
   }
 
   @Test
