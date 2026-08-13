@@ -30,10 +30,9 @@ dependencies {
     implementation(platform(libs.testcontainers.bom))
     implementation(libs.testcontainers.clickhouse)
 
-    // Intra-burst latency percentiles for the concurrency/burst benchmark - see Phase 5's "What's
-    // measured, and how" section in ROADMAP.md for why JMH's own SampleTime mode isn't enough
-    // there (it measures per-@Benchmark-invocation latency, not per-sub-operation latency inside
-    // one burst of N concurrent queries).
+    // Sub-operation latency percentiles JMH's own SampleTime mode can't give us: time-to-first-row
+    // inside StreamingScanBenchmark today, intra-burst per-query latency inside the not-yet-built
+    // concurrency/burst benchmark next - see Phase 5's "What's measured, and how" in ROADMAP.md.
     implementation(libs.hdrhistogram)
 
     compileOnly(libs.jspecify)

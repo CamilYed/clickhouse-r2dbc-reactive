@@ -24,19 +24,26 @@ To run one benchmark class only:
 
 ## Status
 
-Two Level 1 classes so far, both run for real against Docker/ClickHouse (see ROADMAP.md's Phase 5
-section for numbers):
+Two Level 1 classes run for real against Docker/ClickHouse (see ROADMAP.md's Phase 5 section for
+numbers):
 
 - `PointQueryBenchmark` — a real single-row lookup against a seeded table.
 - `TrivialQueryBenchmark` — `SELECT 1`, no table at all; isolates protocol/connection overhead from
   the storage-engine lookup `PointQueryBenchmark` also pays for.
 
-Next up (recommended order, per ROADMAP.md's Phase 5 "Recommended next benchmarks"):
-`StreamingScanBenchmark` (TTFR/TTLR/rows-per-second/bytes-per-second over a large streamed result —
-the highest-value benchmark for this project's actual architecture). After that: wide multi-type
-decode, aggregation, INSERT, the reactive-vs-blocking concurrency burst scenario, and the
-backpressure/pool-saturation/cancellation benchmarks — all designed in ROADMAP.md, not yet built.
-Same `BenchmarkEnvironment`/dataset-table pattern `PointQueryBenchmark` established.
+A third, `StreamingScanBenchmark`, is now run for real too — full-table scan over the same seeded
+table (no `WHERE`), measuring both JMH's own SampleTime (effectively time-to-last-row) and a
+separate `HdrHistogram`-backed time-to-first-row per driver, logged at the end of each trial rather
+than folded into JMH's own result (JMH has no built-in TTFR metric — see its own Javadoc and
+ROADMAP.md's "What's measured, and how"). **This is the first benchmark in the suite where this
+driver is slower than client-v2** — leading hypothesis is the per-row `Map` allocation cost that's
+negligible at one row and isn't at ten thousand; see ROADMAP.md's Phase 5 section for the numbers
+and the recommended `-prof gc` follow-up to confirm before changing any production code.
+
+After that: wide multi-type decode, aggregation, INSERT, the reactive-vs-blocking concurrency burst
+scenario, and the backpressure/pool-saturation/cancellation benchmarks — all designed in
+ROADMAP.md, not yet built. Same `BenchmarkEnvironment`/dataset-table pattern `PointQueryBenchmark`
+established.
 
 **Fairness fixes applied after the first run** (a real run surfaced real gaps — not designed away
 in the abstract): the ClickHouse image is now version-pinned rather than `latest`; client-v2 now

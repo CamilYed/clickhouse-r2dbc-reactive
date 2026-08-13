@@ -1173,12 +1173,52 @@ warning about, so there's no concrete reason yet to believe this warning explain
 finding above. Worth revisiting with actual profiling evidence before spending a dependency-version
 matching exercise on a hunch.
 
-**Recommended next benchmark:** `StreamingScanBenchmark` (`SELECT ... FROM
-numbers(10_000_000)`-shaped, measuring TTFR/TTLR/rows-per-second/bytes-per-second/allocated-bytes-
-per-row) — both `TrivialQueryBenchmark` and the `PointQueryBenchmark` fairness pass are done now, so
-this is next in this section's original priority order. After that: `ConcurrencyBenchmark` (Level
-3, reactive-vs-blocking under concurrent load) — the architecturally most important benchmark for
-this driver, per this section's original design.
+### `StreamingScanBenchmark`, run for real (2026-08-13) — first result where this driver is slower
+
+Full scan (`SELECT id, label, amount FROM benchmark_point_query`, `smoke` tier, 10,000 rows), no
+`WHERE`. Same run also re-executed `PointQueryBenchmark`/`TrivialQueryBenchmark` (a third
+confirmation of both — same shape as the tables above, exact numbers below), from the JSON result
+file (`-rf json`), not a console paste, so every figure here is exact:
+
+| | client-v2 | this driver | this driver's edge |
+| --- | --- | --- | --- |
+| mean | 3946.5 µs | 4460.8 µs | **13.0% higher** |
+| p50 | 3846.1 µs | 4366.3 µs | **13.5% higher** |
+| p90 | 4816.9 µs | 5210.1 µs | **8.2% higher** |
+| p95 | 5103.6 µs | 5390.3 µs | **5.6% higher** |
+| p99 | 5513.2 µs | 5857.3 µs | **6.2% higher** |
+| p99.9 | 6363.9 µs | 8266.1 µs | **29.9% higher** |
+| p99.99 / p100 (max) | 21266.4 µs | 26247.2 µs | **23.4% higher** |
+| sample count (30s) | 7,597 (≈253 ops/s) | 6,723 (≈224 ops/s) | **11.5% lower throughput** |
+
+**This driver is slower here, at every percentile, not just the tail — the first benchmark in this
+suite where that's true.** Not glossed over: `PointQueryBenchmark`/`TrivialQueryBenchmark` both
+decode exactly *one* row per operation; `StreamingScanBenchmark` decodes 10,000. Leading hypothesis,
+not yet confirmed: the per-row `LinkedHashMap` allocation `RowBinaryDecoder.emitNextRow` does for
+every row (documented as a known, deliberate asymmetry in `PointQueryBenchmark`'s own Javadoc,
+tolerable at n=1 row) stops being negligible at n=10,000 rows per operation — 10,000 map allocations
+(plus their internal `Node` entries) is a plausible dominant cost that a single-row benchmark simply
+can't surface. `client-v2`'s `ClickHouseBinaryFormatReader` reads typed values off its reader
+directly, no intermediate collection per row.
+
+**Not yet confirmed, and deliberately not acted on until it is** — per this project's own testing
+discipline (assert on behavior/measurements, not assumptions): the next concrete step is re-running
+`StreamingScanBenchmark` with JMH's `GCProfiler` (`-Pjmh.profilers=gc` / `-prof gc` — already named
+in this section's own "What's measured, and how" design for exactly this scenario) to check
+`gc.alloc.rate.norm` for `ourDriver` vs `clientV2` directly, rather than inferring allocation cost
+from latency numbers alone. If allocation rate confirms the hypothesis, a follow-up benchmark
+variant that reuses/pools row objects (or a decode path that never materializes a
+`Map<String,Object>` at all) becomes a concrete, evidence-backed thing to try — not before.
+
+Time-to-first-row (the `HdrHistogram`-based custom metric `StreamingScanBenchmark` also records)
+isn't in this run's JSON — that's logged to the console via SLF4J at trial teardown, not into JMH's
+own result file. Not captured this run; worth asking for the console log (or re-running with
+`tee`) next time TTFR specifically matters.
+
+**Recommended next benchmarks:** re-run `StreamingScanBenchmark` with `-prof gc` to test the
+allocation hypothesis above (cheap, no code change, directly answers the open question). In
+parallel or after: `ConcurrencyBenchmark` (Level 3, reactive-vs-blocking under concurrent load) —
+the architecturally most important benchmark for this driver, per this section's original design.
 
 ## Phase 6 — Spring WebFlux interop demo (2026-08-13, reworked after a genuine BindMarkersFactory finding — pending green confirmation)
 
