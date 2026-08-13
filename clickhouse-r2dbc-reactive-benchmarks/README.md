@@ -22,6 +22,18 @@ To run one benchmark class only:
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=PointQueryBenchmark
 ```
 
+To run with a JMH profiler (e.g. the GC profiler for allocation numbers):
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
+```
+
+**Both flags only work as of the `build.gradle.kts` fix below — before that, they were silently
+ignored and every `jmh` invocation ran the entire suite with no profiler, regardless of what was
+passed on the command line.** The me.champeau.jmh plugin doesn't read `-P` project properties on
+its own; `includes`/`profilers` had to be explicitly wired from `project.property(...)` in the
+build script for these flags to do anything.
+
 ## Status
 
 Two Level 1 classes run for real against Docker/ClickHouse (see ROADMAP.md's Phase 5 section for

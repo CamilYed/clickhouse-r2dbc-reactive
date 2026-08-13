@@ -40,11 +40,29 @@ dependencies {
 
 jmh {
     // Kept modest by default so a local "does this still compile and run" pass is fast; the
-    // `default`/`large` dataset tiers (see ROADMAP.md) are opted into via -Pjmh.rows, not by
-    // raising these.
+    // `default`/`large` dataset tiers (see ROADMAP.md) are set directly on each benchmark class's
+    // `@Param` array today - there's no `-Pjmh.rows` override wired here (unlike `includes`/
+    // `profilers` below), since the me.champeau.jmh plugin's `benchmarkParameters` shape wasn't
+    // confirmed against a real build before this comment was corrected. Don't trust a `-Pjmh.rows`
+    // flag until this comment says otherwise.
     warmupIterations.set(1)
     iterations.set(3)
     fork.set(1)
     resultFormat.set("JSON")
     failOnError.set(true)
+
+    // The me.champeau.jmh plugin does NOT read `-P` project properties automatically - `includes`/
+    // `profilers` are plain Gradle extension properties, configured only in this build script,
+    // never from the command line, unless a project explicitly wires that itself (as below). Every
+    // earlier `-Pjmh.includes=X`/`-Pjmh.profilers=gc` instruction given before this was added was a
+    // silent no-op: the property was set but nothing in this file ever read it, so every `jmh` run
+    // executed the entire benchmark suite with no profiler regardless of what was passed on the
+    // command line. Caught when a run that should have taken seconds (one class) instead ran
+    // everything (~17 minutes). Fixed here, not worked around by asking for different flags.
+    if (project.hasProperty("jmh.includes")) {
+        includes.set(listOf(project.property("jmh.includes") as String))
+    }
+    if (project.hasProperty("jmh.profilers")) {
+        profilers.set((project.property("jmh.profilers") as String).split(","))
+    }
 }

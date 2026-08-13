@@ -1451,17 +1451,28 @@ combined `StreamingScanBenchmark` number, and the gap itself differs by driver:*
 client-v2's combined number is close to (even slightly under, at 1M — within sampling noise) the
 sum of its own parts, consistent with its simple blocking "read network, then decode" sequencing.
 This driver's combined number runs a consistent 22–28% **above** the sum of its own parts — a real,
-separate cost the two isolation benchmarks don't capture individually. This is exactly H2's
-signature: `FluxInputStreamBridge`'s queue/wakeup hand-off between the Netty event loop and the
-blocking decode thread. Secondary to H0/H1 (which account for the large majority of the gap), but
-real and now measured, not just theorized.
+separate cost the two isolation benchmarks don't capture individually.
 
-**Conclusion, stated plainly: this driver's non-blocking transport is not the bottleneck — it's
-this driver's best-measured strength, and the combined `StreamingScanBenchmark` number was hiding
-that fact. The entire streaming regression lives in decode/materialization (H0 + H1), with a smaller
-secondary contribution from the transport-to-decode bridge hand-off (H2).** This rules out H3
-(`ByteBuf`→`byte[]` copying) as a meaningful contributor — the transport benchmark that pays that
-exact cost is the one where this driver wins by up to 4.6x.
+**Correction (2026-08-13, caught by a follow-up review before this was overstated further): that
+22–28% gap is not proven to be `FluxInputStreamBridge` specifically.** `StreamingScanBenchmark` and
+`TransportOnlyStreamingBenchmark`/`DecoderOnlyBenchmark` are not mathematically equivalent —
+the live combined pipeline also has network chunking, producer/consumer overlap, decoder demand,
+and scheduling effects that summing two separately-run isolated benchmarks doesn't reproduce; on
+top of that, `DecoderOnlyBenchmark` decodes one aggregated in-memory payload, not the same fragmented
+stream a live network response actually arrives as. Correct framing: this is **additional
+live-pipeline integration cost** — `FluxInputStreamBridge`'s queue/wakeup hand-off is a strong
+candidate for it, given the class's own design, but it is not yet isolated as *the* cause the way
+H0/H1 now are. A future benchmark that replays a captured payload through the same chunk boundaries
+and timing a live response would have would be needed to actually attribute this delta.
+
+**Conclusion, stated with the confidence the data actually supports: this driver's non-blocking
+transport is not the bottleneck — it's this driver's best-measured strength, and the combined
+`StreamingScanBenchmark` number was hiding that fact. The large majority of the streaming regression
+lives in decode/materialization (H0 + H1), with a smaller, not-yet-precisely-attributed
+live-pipeline integration cost on top.** H3 (`ByteBuf`→`byte[]` copying) is **ruled out as the
+primary/dominant cause** — the transport benchmark that pays that exact cost is the one where this
+driver wins by up to 4.6x — but not proven to contribute zero cost; `TransportOnlyStreamingBenchmark`
+demonstrates it isn't dominant, not that it's free.
 
 **Caveats carried over from JMH's own output, not glossed over:** this run's JMH reported it used
 an *experimental* "Compiler Blackholes" mode and explicitly warned to "exercise extra caution when
