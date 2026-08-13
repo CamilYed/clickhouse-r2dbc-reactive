@@ -3,9 +3,11 @@ package io.github.camilyed.clickhouse.r2dbc.transport.http;
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelOption;
 import java.io.ByteArrayInputStream;
 import java.net.URLEncoder;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -353,6 +355,73 @@ public final class ClickHouseHttpTransport {
     final ByteBufFlux body =
         ByteBufFlux.fromInbound(
             rawBody.doOnCancel(
+                () -> {
+                  if (requestSent.get()) {
+                    killQueryBestEffort(query.queryId());
+                  }
+                }));
+    return Mono.just(new ClickHouseQueryResponse(writtenRows::get, body));
+  }
+
+  /**
+   * Sends {@code query} (an {@code INSERT}) with {@code data} streamed as the HTTP request body,
+   * rather than embedded in the URL the way {@link #queryWithSummary} sends {@code query.sql()} —
+   * the pattern ClickHouse's own HTTP interface documents as preferred for inserts, since it avoids
+   * both loading the entire payload into memory and URL length limits (see
+   * clickhouse.com/docs/interfaces/http, the {@code curl --data-binary @-} example). {@code data}
+   * is bridged onto Reactor Netty's {@code Publisher<ByteBuf>} via {@link Unpooled#wrappedBuffer(
+   * ByteBuffer)} with no copying or aggregation — chunks are written to the socket as they're
+   * emitted, so this supports streaming an arbitrarily large insert without buffering it all
+   * client-side first. As with {@link #queryWithSummary}, the input format defaults to {@code
+   * RowBinaryWithNamesAndTypes} via the {@code X-ClickHouse-Format} header; a caller that wants a
+   * different input format (e.g. {@code TabSeparated}, {@code CSV}) supplies an explicit {@code
+   * FORMAT} clause in {@code query.sql()} itself, which ClickHouse treats as taking precedence over
+   * the header (see {@code docs/CLIENT_V2_HTTP_REFERENCE.md}).
+   *
+   * <p><b>Never retried, unconditionally — this is the important difference from {@link
+   * #queryWithSummary}.</b> That method's retry safety rests entirely on {@code requestSent}
+   * (driven by Reactor Netty's {@code doAfterRequest}/{@code REQUEST_SENT} signal) meaning "zero
+   * bytes of this attempt reached the server yet" for a request with no body — true because for a
+   * bodyless request, flushing the headers <em>is</em> sending the whole request. That equivalence
+   * breaks the moment a request has a body: {@code REQUEST_SENT} most likely only fires once the
+   * entire request — headers <em>and</em> body — has been fully written to the socket, so there is
+   * a window during body transmission where some of {@code data} may have already reached the
+   * server while {@code requestSent} still reads {@code false}. Retrying in that window on a
+   * connection-level failure could resend a partially-delivered insert, silently duplicating rows.
+   * Rather than trying to track exactly how many bytes made it out (fragile, and not something
+   * Reactor Netty exposes), this method disables retrying entirely for the streaming-body path — a
+   * caller that wants insert-level retry safety should make its own {@code INSERT} idempotent (e.g.
+   * via a distinct {@code query_id}-based dedup strategy, or by using a table engine that make
+   * duplicates harmless) and retry at that level instead. See {@link RetryPolicy}'s Javadoc for why
+   * the pre-send-only retry {@link #queryWithSummary} performs is safe for that method
+   * specifically.
+   *
+   * <p>Cancellation triggers the same best-effort {@code KILL QUERY} as {@link #queryWithSummary}
+   * once the request has been sent — see that method's Javadoc for the full reasoning and limits.
+   */
+  public Mono<ClickHouseQueryResponse> insertWithSummary(
+      final ClickHouseQuery query, final Publisher<ByteBuffer> data) {
+    final AtomicLong writtenRows = new AtomicLong();
+    final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final Publisher<ByteBuf> requestBody = Flux.from(data).map(Unpooled::wrappedBuffer);
+    final Flux<ByteBuf> response =
+        httpClient
+            .headers(
+                headers -> {
+                  headers.set(FORMAT_HEADER, "RowBinaryWithNamesAndTypes");
+                  headers.set(QUERY_ID_HEADER, query.queryId());
+                  authentication.addTo(headers);
+                })
+            .doAfterRequest((request, connection) -> requestSent.set(true))
+            .post()
+            .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
+            .send(requestBody)
+            .response(
+                (httpResponse, content) ->
+                    receiveOrFail(httpResponse, content, query.queryId(), writtenRows));
+    final ByteBufFlux body =
+        ByteBufFlux.fromInbound(
+            response.doOnCancel(
                 () -> {
                   if (requestSent.get()) {
                     killQueryBestEffort(query.queryId());

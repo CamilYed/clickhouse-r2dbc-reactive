@@ -10,12 +10,12 @@ import java.util.ServiceLoader;
 /**
  * R2DBC service-provider entry point for the ClickHouse driver.
  *
- * <p>Discovered via {@link ServiceLoader} once registered in {@code
- * META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider} — not registered yet. {@link
- * #create(ConnectionFactoryOptions)} now returns a working {@link ClickHouseConnectionFactory}, but
- * {@code Statement.execute()} still isn't implemented (see {@code ClickHouseStatement}), so a
- * consumer discovering this driver via {@code ServiceLoader} today could open a connection but not
- * run a single query. The SPI file is added once that's no longer true.
+ * <p>Discovered via {@link ServiceLoader}, registered in {@code
+ * META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider} — a consumer using the standard
+ * bootstrap path ({@code io.r2dbc.spi.ConnectionFactories#get(ConnectionFactoryOptions)}) finds
+ * this provider with no direct dependency on this class. Verified, not just declared: {@code
+ * ClickHouseConnectionFactoryProviderTest
+ * .shouldBeDiscoverableThroughTheStandardR2dbcServiceLoaderBootstrapPath}.
  */
 public final class ClickHouseConnectionFactoryProvider implements ConnectionFactoryProvider {
 

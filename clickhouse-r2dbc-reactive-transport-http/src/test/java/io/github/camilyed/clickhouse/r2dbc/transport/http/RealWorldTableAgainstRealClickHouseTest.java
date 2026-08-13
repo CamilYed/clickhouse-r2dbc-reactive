@@ -51,14 +51,20 @@ import org.junit.jupiter.api.Test;
  *       BinaryStreamReader.convertArray()} already knows how to honor — avoiding the {@code
  *       .internal} {@code ArrayValue} client-v2 returns otherwise. Same shape of compromise as the
  *       Phase 0 {@code InputStream} bridge: one narrow, documented, tested dependency on
- *       client-v2's {@code .internal} package, not a general one. {@code Nested} uses the exact
- *       same mechanism (also routes through {@code convertArray()}) but doesn't have a
- *       real-ClickHouse test of its own yet — a quick, low-risk follow-up, not a design gap.
+ *       client-v2's {@code .internal} package, not a general one. {@code Nested} now also covered
+ *       ({@link #shouldDecodeNestedType()}): ClickHouse flattens {@code Nested(...)} into one
+ *       {@code Array(...)} column per sub-field by default ({@code flatten_nested=1}), so on the
+ *       wire it's indistinguishable from ordinary {@code Array} columns — same mechanism, no new
+ *       code needed, just confirmed directly rather than assumed.
  *   <li><b>Semi-structured</b> ({@code JSON}/{@code Dynamic}/{@code Variant}) — not attempted; all
  *       still experimental/evolving in ClickHouse itself.
  *   <li><b>Nullable and optional</b> — {@code Nullable} covered ({@link
  *       #shouldDecodeAMultiTypeMultiRowTable()}, both a present and an actually-{@code NULL} value
- *       across multiple rows); {@code LowCardinality} not attempted.
+ *       across multiple rows); {@code LowCardinality} now covered too ({@link
+ *       #shouldDecodeLowCardinalityType()}) — confirmed against client-v2's own test suite that
+ *       it's a "virtual type" there (the wrapper is stripped, decoding dispatches to the underlying
+ *       type), the same shape as {@code Nullable}, so this proves the unwrapping works end to end
+ *       rather than assuming client-v2's own tests are enough.
  *   <li><b>Specialized</b> — {@code UUID} covered ({@link #shouldDecodeSpecializedTypes()}); {@code
  *       Enum8}/{@code Enum16} covered ({@link #shouldDecodeEnumTypes()}): the returned value is
  *       still an {@code .internal} {@code EnumValue} instance, but it publicly overrides {@code
@@ -312,5 +318,48 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     // then
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0)).hasList("array_val", 10, 20, 30);
+  }
+
+  @Test
+  void shouldDecodeNestedType() {
+    // given - ClickHouse flattens Nested(...) into one Array(...) column per sub-field by default
+    // (flatten_nested=1), addressed as "<nested_col>.<sub_field>" in both INSERT and SELECT * -
+    // so on the wire this is indistinguishable from two ordinary Array columns, exercising the
+    // exact same ListDecodingRowBinaryReader/convertArray() path as shouldDecodeArrayType().
+    execute(
+        "CREATE TABLE nested_types (id UInt32, items Nested(name String, quantity Int32)) "
+            + "ENGINE = MergeTree ORDER BY id");
+    execute(
+        "INSERT INTO nested_types (id, items.name, items.quantity) VALUES "
+            + "(1, ['apple', 'banana'], [3, 5])");
+
+    // when
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM nested_types");
+
+    // then
+    assertThat(rows).hasSize(1);
+    assertThatRow(rows.get(0))
+        .hasList("items.name", "apple", "banana")
+        .hasList("items.quantity", 3, 5);
+  }
+
+  @Test
+  void shouldDecodeLowCardinalityType() {
+    // given - confirmed directly against client-v2's own test suite (DataTypeTests, our pinned
+    // v0.9.0) rather than assumed: LowCardinality is a "virtual type" there, meaning
+    // ClickHouseColumn strips the wrapper and dispatches to the underlying type's reader, the same
+    // way Nullable(...) already does - so no new decode path is exercised here, just confirming
+    // that unwrapping actually happens end to end through our own pipeline.
+    execute(
+        "CREATE TABLE low_cardinality_types (id UInt32, category LowCardinality(String)) "
+            + "ENGINE = MergeTree ORDER BY id");
+    execute("INSERT INTO low_cardinality_types VALUES (1, 'electronics')");
+
+    // when
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM low_cardinality_types");
+
+    // then
+    assertThat(rows).hasSize(1);
+    assertThatRow(rows.get(0)).hasValue("category", "electronics");
   }
 }

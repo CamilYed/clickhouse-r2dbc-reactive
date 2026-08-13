@@ -324,9 +324,9 @@ for, not something to infer from the one spike test passing.
 | String (`String`, `FixedString`) | ✅ covered |
 | Network (`IPv4`, `IPv6`) | ✅ covered |
 | Date and time | ⚠️ `Date`/`Date32`/`DateTime`/`DateTime64` covered; `Time`/`Time64` **not supported by our pinned client-v2 at all** — confirmed no case for them in `BinaryStreamReader.readValue`'s switch. A real client-v2-version gap, not a test gap. |
-| Nullable and optional | ⚠️ `Nullable` covered (including an actual `NULL` value across rows); `LowCardinality` not attempted |
+| Nullable and optional | ✅ `Nullable` covered (including an actual `NULL` value across rows); `LowCardinality` covered too — confirmed against client-v2's own test suite (`DataTypeTests`, our pinned `v0.9.0`) that it's a "virtual type" there (wrapper stripped, dispatches to the underlying type, same shape as `Nullable`), then proven end to end through our own pipeline, not just assumed from client-v2's tests |
 | Specialized | ⚠️ `UUID` and `Enum8`/`Enum16` covered; geo types, vector-search (`QBit`), domains not attempted |
-| Composite (`Array`/`Tuple`/`Map`/`Nested`) | ✅ `Map`/`Tuple`/`Array` covered; `Nested` uses the same mechanism as `Array` but has no dedicated real-ClickHouse test yet (low-risk follow-up) |
+| Composite (`Array`/`Tuple`/`Map`/`Nested`) | ✅ `Map`/`Tuple`/`Array`/`Nested` all covered — `Nested` flattens into one `Array(...)` column per sub-field by default (`flatten_nested=1`), so on the wire it's indistinguishable from ordinary `Array` columns, same mechanism, confirmed directly |
 | Semi-structured (`JSON`/`Dynamic`/`Variant`) | 🚫 not attempted, still experimental in ClickHouse itself |
 | Aggregate function (`AggregateFunction`/`SimpleAggregateFunction`) | 🚫 not attempted — these hold intermediate aggregation state, not literal-insertable values, so proving them needs insert-via-aggregate-query, not `INSERT ... VALUES` |
 | Special Data Types (`Expression`/`Interval`/`Nothing`/`Set`) | N/A — query-intermediate constructs, not column/storage types |
@@ -468,6 +468,23 @@ not just an API shape that implies it. Concretely, a checklist pass over:
   the same way Phase 0's finding is written up here.
 
 This is the gate before spending time on Maven Central publishing polish or performance work.
+
+### Sign-off (2026-08-13)
+
+Every property in [README.md's table](README.md#what-fully-reactive-means-here) mapped to a named
+test that would fail if that property regressed — not just an API shape that implies it:
+
+| Property | Evidence |
+| --- | --- |
+| Deferred execution | `ClickHouseHttpTransportTest.shouldNotSendTheRequestBeforeSubscription` — awaits 200ms after calling `query()` with nothing subscribed, asserts the fake server never received a request. |
+| Non-blocking I/O | No `.block()`/`.blockFirst()`/`.blockLast()`/`Future#get()` anywhere in any module's `src/main` (checked directly, not assumed — `grep -rn "\.block(" .../src/main` across `core`/`transport-http`/`connector` returns nothing). One deliberate, documented exception: `RowBinaryDecoder.decode` constructs client-v2's reader (which blocks reading the RowBinary header) via `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())` — isolating a genuinely blocking client-v2 API off Reactor Netty's event loop, not hiding a fake-reactive network call. This is the one case "No scheduler workaround" (below) explicitly distinguishes from a workaround. |
+| Stream-oriented consumption | `ClickHouseHttpTransportTest.shouldEmitEachChunkSeparatelyInsteadOfAggregating` — asserts chunks arrive as separate emissions, not one aggregated buffer. |
+| Backpressure-aware delivery | `FluxInputStreamBridgeTest.shouldOnlyRequestAsManyItemsAsTheConfiguredDemand` (upstream demand is bounded by the bridge's credit, not unlimited) and `ClickHouseHttpTransportTest.shouldNotDeliverDataBeforeTheSubscriberRequestsIt`. |
+| Cancellation propagation | `QueryCancellationAgainstRealClickHouseTest.shouldStopTheQueryServerSideWhenTheClientCancelsTheSubscription` (real ClickHouse, proves the server-side `KILL QUERY` actually stops execution) plus the hermetic `ClickHouseHttpTransportTest.shouldCloseTheConnectionWhenTheSubscriptionIsCancelled` / `.shouldSendABestEffortKillQueryWhenCancelledAfterTheRequestWasSent` / `.shouldSendABestEffortKillQueryEvenWhenCancelledBeforeAnyResponseArrives`. |
+| Bounded concurrency | `ClickHouseHttpTransportTest.shouldNotStartASecondRequestUntilAConnectionIsFree` (pool size 1, second request queues rather than opening a second connection) and `.shouldNotReachTheServerWhenAQueuedRequestIsCancelledBeforeAConnectionIsAcquired` (a queued-but-not-yet-acquired request that's cancelled never reaches the server at all). |
+| Deterministic cleanup | `FluxInputStreamBridgeTest.shouldCancelTheUpstreamSubscriptionWhenClosed` and `ClickHouseHttpTransportTest.shouldCloseTheConnectionWhenTheSubscriptionIsCancelled` (`activeConnectionCount()` returns to 0 after cancellation). |
+| Reactive error signalling | `ClickHouseHttpTransportTest.shouldSignalAServerErrorWhenTheExceptionCodeHeaderIsPresent` (transport-level: a ClickHouse error surfaces as `onError`, not a `200`-with-error-body silently treated as success) and `ClickHouseStatementErrorMappingTest.shouldFailWithAnR2dbcExceptionCarryingTheServersErrorCode` (R2DBC-level: wrapped into `io.r2dbc.spi.R2dbcException`, catchable via standard R2DBC error handling). |
+| No scheduler workaround | Same evidence as "Non-blocking I/O" above: the only `boundedElastic`/`publishOn`/`subscribeOn` usage in any module's `src/main` is the one documented, narrow case in `RowBinaryDecoder.decode`, isolating a blocking client-v2 API call — not moving an otherwise-blocking network call off-thread to disguise it as reactive. |
 
 ## Production readiness review
 
@@ -618,6 +635,25 @@ fixed, not just documented.
   reuses this same code path — now also benefits from pre-send retry (see the "known, documented"
   entry on it below). Silent risk — fixed, deliberately narrower in scope than client-v2's own
   default to close off the exact collision risk raised during design.
+- **Follow-up question raised directly: what if a retried `INSERT` hits a row that already exists
+  — does that surface as a key-collision error, and could retry make it worse?** Researched rather
+  than assumed: ClickHouse's `MergeTree` family (the standard, non-experimental engine family) has
+  **no unique-key/primary-key constraint enforced at insert time at all** — a duplicate `ORDER BY`
+  key is silently accepted, not rejected. `ReplacingMergeTree` deduplicates matching keys, but only
+  lazily during background merges, never synchronously on `INSERT`. A true `UNIQUE KEY` constraint
+  is a proposed, not-yet-shipped ClickHouse feature (tracked upstream as
+  [ClickHouse/ClickHouse#70589](https://github.com/ClickHouse/ClickHouse/issues/70589)). So the
+  specific failure mode the question describes — an `INSERT` bouncing off a key-collision error —
+  does not exist for ClickHouse's standard engines the way it would for Postgres/MySQL; there is no
+  new server-side error case for `RetryPolicy` to special-case. The real risk this question was
+  actually pointing at — retrying an `INSERT` that already reached the server and silently
+  duplicating the row (ClickHouse would just accept it twice, no error either way) — is exactly
+  what `RetryPolicy`'s pre-send-only scope already prevents by construction (see the bullet above),
+  and `ClickHouseStatement.execute()`/`ClickHouseBatch` route through the identical
+  `ClickHouseHttpTransport.queryWithSummary` path as every other query with no `INSERT`-specific
+  branching, so the existing
+  `ClickHouseHttpTransportTest.shouldNotRetryAFailureThatHappensAfterTheRequestWasSent` guarantee
+  already covers `INSERT` — it isn't a separate code path that could silently diverge.
 
 ### Known, documented, safe limitations (not fixed — deliberate)
 
@@ -656,6 +692,33 @@ fixed, not just documented.
   positive case now that `sslRootCert`/`trustedCertificatePem` exists (see "Fixed this pass" above):
   the same self-signed certificate, supplied as a trusted certificate, lets the handshake succeed and
   a real response come back.
+- **Every `INSERT`'s data went through the URL query string, same as any `SELECT`** —
+  `ClickHouseHttpTransport.queryWithSummary` never attached a request body (`RequestSender.send`
+  was never called), so a batch `INSERT ... VALUES (...), (...), ...` had its entire row data
+  URL-encoded into `?query=...`. Correct for small inserts, but not what ClickHouse's own HTTP
+  docs recommend for anything large (clickhouse.com/docs/interfaces/http describes `POST
+  /?query=INSERT INTO t FORMAT TabSeparated` with the data streamed as the request body, e.g.
+  `curl --data-binary @-`, specifically to avoid URL length limits and loading the whole payload
+  into memory) — a real risk for "wiele insertów"/large-batch workloads. Fixed: new
+  `ClickHouseHttpTransport.insertWithSummary(ClickHouseQuery, Publisher<ByteBuffer>)` streams
+  `data` straight onto the socket via `RequestSender.send(Publisher<ByteBuf>)`, no aggregation, no
+  copying beyond `Unpooled.wrappedBuffer`. Deliberately **never retried**, unconditionally, even
+  when `RetryPolicy` is configured: `queryWithSummary`'s pre-send-only retry safety relies on
+  `requestSent` (`doAfterRequest`/`REQUEST_SENT`) meaning "zero bytes of this attempt reached the
+  server" — true for a bodyless request, since flushing the headers *is* sending the whole request,
+  but not provably true once a body is being streamed (there is a window where part of `data` may
+  have already reached the server while `requestSent` still reads `false`); retrying there could
+  silently resend a partially-delivered insert. Proven hermetically:
+  `shouldStreamTheRequestBodyToTheServerForAnInsert` (body arrives byte-for-byte via a new
+  `ControlledClickHouseServer.startAcceptingInsertsAndRespondingWithSummary` body-capturing
+  factory) and `shouldNeverRetryAnInsertEvenOnAConnectionLevelFailureBeforeTheRequestWasSent`
+  (proves no retry happens even with `RetryPolicy(20, 200ms)` configured, by asserting the failure
+  surfaces in well under the time 20 retries would take). **Not yet wired to the connector/R2DBC
+  level** — `ClickHouseStatement`/`ClickHouseBatch` still only call `queryWithSummary`; exposing
+  `insertWithSummary` through the public R2DBC API (a vendor extension, since `Statement`/`Batch`
+  have no standard streaming-body concept) is a separate, not-yet-made design decision. Silent risk
+  (URL-based inserts still work correctly, just don't scale) — transport-level fix done, connector
+  wiring open.
 
 ### Open gaps, not yet addressed
 
@@ -672,10 +735,38 @@ fixed, not just documented.
   `ClickHouseHttpTransport` directly. `CONNECT_TIMEOUT` is now wired (this pass); pool sizing isn't a
   well-known R2DBC `Option`, so this would need a driver-specific custom `Option`. Configurability
   gap, not a correctness bug.
+- **`insertWithSummary`'s streamed-body path is not reachable through the public R2DBC API yet** —
+  `ClickHouseStatement`/`ClickHouseBatch` both still call `queryWithSummary` only, so every insert
+  going through the standard R2DBC `Statement`/`Batch` surface still URL-encodes its data (correct,
+  but not the streaming path a heavy-insert workload wants). `Statement`/`Batch` have no standard
+  concept of a streamed request body, so exposing this needs a driver-specific vendor extension —
+  shape not yet decided. `Statement.add()` (bound-parameter batching) is a related, separately
+  tracked gap: still `UnsupportedOperationException` in `ClickHouseStatement`; making it genuinely
+  performant would mean coalescing N bound-parameter sets into one multi-row `INSERT` (ClickHouse's
+  `{name:Type}` mechanism only binds one value per name per request) rather than N sequential
+  round-trips.
 
-Next to check (session close, 2026-08-13): the `integration-tests` module is still an empty
-scaffold, and Maven Central publishing/benchmarks haven't been started — see README's Roadmap
-section for the current punch-list.
+**Confirmed plan and order (2026-08-13), before Maven Central publishing:** raised directly —
+INSERT correctness is already implemented and tested against real ClickHouse
+(`ClickHouseStatementAgainstRealClickHouseTest`, `ClickHouseBatchAgainstRealClickHouseTest`); this
+pass additionally closed the *performance* gap for large inserts (streamed request body, see
+"Fixed this pass" above), so the remaining connector-level gap is exposing that path through a
+vendor-extension API, not INSERT support itself. Order agreed:
+
+1. Fill in the realistically-closable type-coverage gaps first: a dedicated real-ClickHouse test
+   for `Nested` (mechanism already works via `Array`'s `ListDecodingRowBinaryReader`, just
+   untested directly), and a first attempt at `LowCardinality` (currently not attempted at all).
+2. A short, mostly-documentation Phase 4 sign-off pass — the tests already exist, this is writing
+   down which named test proves which "fully reactive" property.
+3. `examples/spring-boot-webflux-demo` (Phase 6) — a real Spring Boot + WebFlux app through
+   `DatabaseClient`/`R2dbcEntityTemplate`, explicitly requested as part of "this has to be really
+   well tested" rather than left for after publishing.
+4. Phase 5 (benchmarks) — still gated behind Phase 4 per CLAUDE.md's Performance testing section;
+   the sign-off pass in step 2 is what unlocks it, not a calendar date.
+5. Maven Central publication — last, once the above hold.
+
+`integration-tests` remains an empty scaffold — folded into whichever of the above steps ends up
+needing a true whole-driver black-box suite, not tracked as a separate item.
 
 ## Non-functional requirements: logging, metrics, leaks
 

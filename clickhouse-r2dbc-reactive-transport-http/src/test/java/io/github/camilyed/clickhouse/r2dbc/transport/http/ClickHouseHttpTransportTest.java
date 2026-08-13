@@ -10,6 +10,7 @@ import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.ToByteArrayAbility;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import java.net.ServerSocket;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.netty.DisposableServer;
@@ -614,6 +616,76 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
       await().atMost(Duration.ofSeconds(2)).until(() -> lateServer.get() != null);
       lateServer.get().disposeNow();
     }
+  }
+
+  @Test
+  void shouldStreamTheRequestBodyToTheServerForAnInsert() {
+    // given
+    final byte[] rowData = "1\tAda\n2\tGrace\n".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    final ClickHouseQueryResponse received;
+    final byte[] receivedBody;
+    try (final var server =
+        ControlledClickHouseServer.startAcceptingInsertsAndRespondingWithSummary(
+            "{\"written_rows\":\"2\"}")) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      received =
+          transport
+              .insertWithSummary(
+                  ClickHouseQuery.of("INSERT INTO t FORMAT TabSeparated"),
+                  Flux.just(ByteBuffer.wrap(rowData)))
+              .block(Duration.ofSeconds(5));
+      received.body().aggregate().asByteArray().block(Duration.ofSeconds(5));
+      receivedBody = server.receivedRequestBody();
+    }
+
+    // then
+    assertThat(receivedBody).isEqualTo(rowData);
+    assertThat(received.writtenRows().getAsLong()).isEqualTo(2L);
+  }
+
+  @Test
+  void shouldNeverRetryAnInsertEvenOnAConnectionLevelFailureBeforeTheRequestWasSent()
+      throws Exception {
+    // given - retry is deliberately disabled for insertWithSummary: unlike queryWithSummary's
+    // requestSent flag (safe because flushing the headers of a bodyless request IS sending the
+    // whole request), a streaming insert body can be partially transmitted while requestSent is
+    // still false, so "not sent yet" can no longer be trusted to mean "zero bytes reached the
+    // server" - see insertWithSummary's Javadoc. Nobody is listening on this port at all, so every
+    // connection attempt fails immediately; if retrying happened, 20 attempts 200ms apart would
+    // take at least 4 seconds.
+    final int port;
+    try (final ServerSocket portProbe = new ServerSocket(0)) {
+      port = portProbe.getLocalPort();
+    }
+    final var transport =
+        new ClickHouseHttpTransport(
+            "http://localhost:" + port,
+            Authentication.none(),
+            null,
+            null,
+            null,
+            new RetryPolicy(20, Duration.ofMillis(200)));
+    final Instant start = Instant.now();
+
+    // when - insertWithSummary is lazy the same way queryWithSummary is (see that method's
+    // Javadoc): the outer Mono resolves synchronously without touching the network, so the
+    // failure only surfaces once the returned response's body is actually subscribed to.
+    final Throwable thrown =
+        catchThrowable(
+            () ->
+                transport
+                    .insertWithSummary(
+                        ClickHouseQuery.of("INSERT INTO t FORMAT TabSeparated"),
+                        Flux.just(ByteBuffer.wrap("1\tAda\n".getBytes(StandardCharsets.UTF_8))))
+                    .flatMap(response -> response.body().aggregate().asByteArray())
+                    .block(Duration.ofSeconds(5)));
+
+    // then
+    assertThat(thrown).isNotNull();
+    assertThat(Duration.between(start, Instant.now())).isLessThan(Duration.ofSeconds(2));
   }
 
   private static DisposableServer startServerRespondingOnPort(final int port, final byte[] body) {

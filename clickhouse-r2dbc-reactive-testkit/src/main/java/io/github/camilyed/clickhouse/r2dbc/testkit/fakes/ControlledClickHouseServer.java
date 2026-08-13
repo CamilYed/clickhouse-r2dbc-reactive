@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.testkit.fakes;
 
 import io.netty.handler.codec.http.HttpHeaders;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,6 +28,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
   private final AtomicInteger totalRequestsReceived;
   private final AtomicReference<HttpHeaders> receivedHeaders;
   private final AtomicReference<String> receivedUri;
+  private final AtomicReference<byte[]> receivedBody;
 
   private ControlledClickHouseServer(
       final DisposableServer server,
@@ -35,7 +37,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
       final AtomicInteger activeConnections,
       final AtomicInteger totalRequestsReceived,
       final AtomicReference<HttpHeaders> receivedHeaders,
-      final AtomicReference<String> receivedUri) {
+      final AtomicReference<String> receivedUri,
+      final AtomicReference<byte[]> receivedBody) {
     this.server = server;
     this.requestReceived = requestReceived;
     this.connectionClosed = connectionClosed;
@@ -43,6 +46,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     this.totalRequestsReceived = totalRequestsReceived;
     this.receivedHeaders = receivedHeaders;
     this.receivedUri = receivedUri;
+    this.receivedBody = receivedBody;
   }
 
   /** Responds to every request with {@code responseBody} in a single chunk, immediately. */
@@ -78,6 +82,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -112,7 +117,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         activeConnections,
         totalRequestsReceived,
         receivedHeaders,
-        receivedUri);
+        receivedUri,
+        receivedBody);
   }
 
   /**
@@ -128,6 +134,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -162,7 +169,71 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         activeConnections,
         totalRequestsReceived,
         receivedHeaders,
-        receivedUri);
+        receivedUri,
+        receivedBody);
+  }
+
+  /**
+   * Accepts a request WITH a streamed body (an INSERT), buffers the received body bytes so a test
+   * can assert on exactly what was streamed (see {@link #receivedRequestBody()}), then responds
+   * with {@code summaryJson} as the {@code X-ClickHouse-Summary} header — the same summary
+   * mechanism {@link #startRespondingToSelectOneWithSummary} uses for reads, since ClickHouse sends
+   * {@code written_rows} back for INSERTs the same way it sends {@code read_rows} back for SELECTs
+   * (see clickhouse.com/docs/interfaces/http).
+   */
+  public static ControlledClickHouseServer startAcceptingInsertsAndRespondingWithSummary(
+      final String summaryJson) {
+    final AtomicBoolean requestReceived = new AtomicBoolean(false);
+    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
+    final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
+    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
+    final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final DisposableServer started =
+        HttpServer.create()
+            .port(0)
+            .route(
+                routes ->
+                    routes.post(
+                        "/",
+                        (request, response) -> {
+                          requestReceived.set(true);
+                          activeConnections.incrementAndGet();
+                          totalRequestsReceived.incrementAndGet();
+                          receivedHeaders.set(request.requestHeaders());
+                          receivedUri.set(request.uri());
+                          response.withConnection(
+                              conn ->
+                                  conn.onDispose(
+                                      () -> {
+                                        connectionClosed.set(true);
+                                        activeConnections.decrementAndGet();
+                                      }));
+                          return request
+                              .receive()
+                              .aggregate()
+                              .asByteArray()
+                              .defaultIfEmpty(new byte[0])
+                              .flatMap(
+                                  bytes -> {
+                                    receivedBody.set(bytes);
+                                    return response
+                                        .header("X-ClickHouse-Summary", summaryJson)
+                                        .sendByteArray(Mono.just(new byte[0]))
+                                        .then();
+                                  });
+                        }))
+            .bindNow();
+    return new ControlledClickHouseServer(
+        started,
+        requestReceived,
+        connectionClosed,
+        activeConnections,
+        totalRequestsReceived,
+        receivedHeaders,
+        receivedUri,
+        receivedBody);
   }
 
   private static ControlledClickHouseServer startRespondingWith(final Flux<byte[]> body) {
@@ -172,6 +243,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -205,7 +277,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         activeConnections,
         totalRequestsReceived,
         receivedHeaders,
-        receivedUri);
+        receivedUri,
+        receivedBody);
   }
 
   /** Accepts the connection and reads the request, but never sends any response at all. */
@@ -216,6 +289,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -246,7 +320,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         activeConnections,
         totalRequestsReceived,
         receivedHeaders,
-        receivedUri);
+        receivedUri,
+        receivedBody);
   }
 
   /**
@@ -261,6 +336,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -294,7 +370,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         activeConnections,
         totalRequestsReceived,
         receivedHeaders,
-        receivedUri);
+        receivedUri,
+        receivedBody);
   }
 
   /** Sends {@code firstChunk}, then resets the TCP connection after {@code beforeReset}. */
@@ -306,6 +383,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
+    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -342,7 +420,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         activeConnections,
         totalRequestsReceived,
         receivedHeaders,
-        receivedUri);
+        receivedUri,
+        receivedBody);
   }
 
   /** Whether this server has received at least one request since it started. */
@@ -382,6 +461,24 @@ public final class ControlledClickHouseServer implements AutoCloseable {
   public @Nullable String receivedHeader(final String name) {
     final HttpHeaders headers = receivedHeaders.get();
     return headers == null ? null : headers.get(name);
+  }
+
+  /**
+   * The full request body bytes received from the most recent request, if any was received and this
+   * server was started via a factory that captures the body (currently only {@link
+   * #startAcceptingInsertsAndRespondingWithSummary}); {@code null} otherwise.
+   */
+  public byte @Nullable [] receivedRequestBody() {
+    return receivedBody.get();
+  }
+
+  /**
+   * {@link #receivedRequestBody()} decoded as UTF-8 text, for asserting on human-readable insert
+   * payloads (e.g. {@code TabSeparated}/{@code CSV}) without the caller handling byte arrays.
+   */
+  public @Nullable String receivedRequestBodyAsString() {
+    final byte[] bytes = receivedBody.get();
+    return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
   }
 
   /** The random free port this server bound to. */
