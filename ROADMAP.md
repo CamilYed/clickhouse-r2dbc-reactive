@@ -1493,6 +1493,163 @@ bytes/row to H0 vs H1 without any transport noise in the way:
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
 ```
 
+### `-prof gc` on `DecoderOnlyBenchmark`, run for real (2026-08-13) — H1 confirmed dominant, H0 minor
+
+First real payoff of fixing `-Pjmh.includes`/`-Pjmh.profilers` (see the build.gradle.kts fix above,
+also committed) — this run took 4m33s and executed only `DecoderOnlyBenchmark`, not the whole suite.
+`gc.alloc.rate.norm` (bytes allocated per operation, JMH's own metric) ÷ `rows` gives allocated
+bytes/row directly:
+
+| rows | client-v2 B/row | this driver B/row | ratio | extra B/row (this driver) |
+| --- | --- | --- | --- | --- |
+| 10,000 | 296.1 | 835.7 | 2.82x | +539.6 (high error bars this tier — noisiest sample count) |
+| 100,000 | 296.0 | 872.1 | 2.95x | +576.0 |
+| 1,000,000 | 296.0 | 872.0 | 2.95x | +576.0 |
+
+**client-v2 allocates a remarkably stable ~296 bytes/row at every tier — this driver allocates a
+remarkably stable ~872 bytes/row at 100k/1M (872.1 and 872.0 — agreement to three significant
+figures across a 10x row-count difference is strong evidence this is a real, structural per-row
+cost, not noise).** The allocation ratio (≈2.95x) tracks the latency ratio measured earlier
+(≈2.7–2.9x) closely — allocation pressure is very likely the direct mechanical cause of the latency
+gap, not a coincidental correlation with some unrelated CPU cost.
+
+**Attributing the extra ≈576 bytes/row to H0 vs H1, from what the code actually does:**
+`RowBinaryDecoder.emitNextRow` calls `reader.next()` (client-v2's own decode — the same ~296
+bytes/row client-v2's own benchmark pays) and *then* wraps that result in `new LinkedHashMap<>(...)`
+— this driver structurally pays client-v2's entire cost first, plus its own map materialization on
+top. A `byte[1]` allocation (H0) is a small, fixed ~24 bytes (a 1-byte array's header/padding on a
+typical 64-bit JVM with compressed oops) and fires once per row for this table (one varint length
+prefix, for the `label` String column) — accounting for roughly 4% of the extra 576 bytes, at most.
+
+**Correction (2026-08-13, caught before this was overstated further): the remaining ≈552 bytes/row
+is not proven to be the `LinkedHashMap` copy specifically — that number was derived by subtracting
+H0's estimate from the total, which silently folds in every other difference between the two
+decode paths too: `FluxInputStreamBridge`'s own `StreamSignal`/`BlockingQueue` machinery (present in
+this driver's path, absent from client-v2's baseline, which reads a plain `ByteArrayInputStream`
+with no bridge at all), `Flux.generate`'s per-row Reactor state, and `ListDecodingRowBinaryReader`
+vs. the base reader class. Subtraction across a multi-variable difference isn't attribution — it's
+a total.** H1 is still the strongest candidate (matches the ranked-hypothesis reasoning and the
+external review's own read of the code), but **not yet quantified**. Quantifying it needs a
+single-variable-change benchmark — see `ourDriverWithoutMapCopy` below — not more arithmetic on the
+existing numbers.
+
+One more supporting observation: `gc.alloc.rate` (MB/sec, not bytes/op) came out similar for both
+drivers (≈3.1–3.8 GB/sec, all tiers, both drivers) — consistent with both drivers running against
+roughly the same machine-level allocation/GC throughput ceiling, which means bytes-per-row is
+functioning as a direct, near-linear lever on this driver's own latency here, not a number that's
+disconnected from what's actually slow.
+
+**What this changes about the plan:** H0 is real, cheap, and safe to fix immediately — a reusable
+single-element buffer in `FluxInputStreamBridge.read()` instead of `new byte[1]` every call, no
+design decision involved, easy to verify in isolation. H1 is not a quick fix — it means either
+changing what `RowBinaryDecoder.decodeRows`/`RowBinaryDecoder.decode` hand back (today's public
+`Flux<Map<String, Object>>` / `DecodedResult` shape) or adding a leaner internal path underneath it,
+and needs to account for every caller of that API (`connector`'s `ClickHouseResult`/`ClickHouseRow`,
+this benchmark module) before anything changes — a real design task, not a one-line fix. Sequencing:
+fix and verify H0 first (isolated, low-risk, real but modest win — expect `DecoderOnlyBenchmark` to
+drop by roughly the ~24-bytes-of-576 share, a few percent, not a game-changer on its own), *then*
+scope the `LinkedHashMap`-avoidance design for H1 with the full picture of what depends on the
+current row shape.
+
+**H0 fixed and confirmed by a real re-run (2026-08-13).** `FluxInputStreamBridge` now has a
+`private final byte[] singleByteReadBuffer = new byte[1]` field, reused by `read()` instead of
+allocated per call — safe because this class's own Javadoc already establishes it's read by exactly
+one dedicated worker thread, never concurrently. Also closed a real black-box test gap while here: no
+existing `FluxInputStreamBridgeTest` test exercised the single-byte `read()` overload at all
+(`readAllBytes()`, used by every existing test, only calls the bulk `read(byte[], int, int)` overload
+internally) — added `shouldReadOneByteAtATimeViaTheSingleByteReadOverload`.
+
+Re-running `DecoderOnlyBenchmark -Pjmh.profilers=gc` after the fix:
+
+| rows | this driver B/row, before H0 | this driver B/row, after H0 | reduction |
+| --- | --- | --- | --- |
+| 100,000 | 872.1 | 848.05 | −24.0 |
+| 1,000,000 | 872.0 | 848.01 | −24.0 |
+
+A clean, reproducible ~24 bytes/row reduction at both tiers — matches the predicted fixed cost of one
+`byte[1]` header exactly. Latency barely moved (≈227ms → ≈226ms at 1M), confirming H0 was real but
+never the dominant term. **H0 is closed.**
+
+**`DecoderOnlyBenchmark.ourDriverWithoutMapCopy` run for real (2026-08-13) — H1 confirmed, not just
+suspected.** Same `FluxInputStreamBridge` (with the H0 fix), same
+`RowBinaryWithNamesAndTypesFormatReader` settings, same `Flux.generate` per-row emission shape as
+`ourDriver` — the *only* difference is that `reader.next()` is still called (client-v2's own per-row
+cost is still paid, unchanged) but its result is discarded instead of copied into
+`new LinkedHashMap<>(...)`. A genuine single-variable-change isolation, not a subtraction.
+
+| rows | `ourDriver` B/row | `ourDriverWithoutMapCopy` B/row | H1 cost (B/row) | `ourDriver` latency | `ourDriverWithoutMapCopy` latency |
+| --- | --- | --- | --- | --- | --- |
+| 100,000 | 848.05 | 272.05 | 576.0 | 22.71 ms | 5.27 ms |
+| 1,000,000 | 848.01 | 272.01 | 576.0 | 224.98 ms | 51.31 ms |
+
+**H1 = 576.0 bytes/row, agreeing to four significant figures across a 10x row-count change — as clean
+an isolation result as this investigation has produced.** That's the entire original ≈576 bytes/row
+gap this investigation started from: H0's ~24 B/row plus H1's ~576 B/row account for essentially all
+of the allocation difference between this driver and client-v2, with nothing large left unattributed.
+Latency: removing the map copy cuts `ourDriver`'s decode time by ~77% (4.38x) at 1M rows — H1 is not
+just an allocation cost, it's the dominant CPU cost in the decode path.
+
+**Mechanically confirmed against the actual `clickhouse-java` source (read directly, not taken from
+the external review at face value) — `AbstractBinaryFormatReader.RecordWrapper`:**
+
+```java
+// RecordWrapper — private static nested class
+private final WeakReference<Object[]> recordRef;
+private final WeakReference<TableSchema> schemaRef;
+
+@Override
+public Set<Entry<String, Object>> entrySet() {
+  int i = 0;
+  Set<Entry<String, Object>> entrySet = new HashSet<>();
+  for (ClickHouseColumn column : schemaRef.get().getColumns()) {
+    entrySet.add(new AbstractMap.SimpleImmutableEntry(column.getColumnName(), recordRef.get()[i++]));
+  }
+  return entrySet;
+}
+```
+
+`reader.next()` itself is cheap — it swaps the reused `currentRecord`/`nextRecord` `Object[]` buffers
+(allocated once, not per row) and wraps whichever is current in one `RecordWrapper`. But
+`new LinkedHashMap<>(reader.next())` runs `HashMap.putMapEntries`, which iterates
+`recordWrapper.entrySet()` — and that method allocates a fresh `HashSet` plus one
+`SimpleImmutableEntry` per column on *every single call*, which `LinkedHashMap`'s own constructor
+then copies into a second hash table (one `LinkedHashMap.Entry` per column). For this three-column
+table, one row emission is: `RecordWrapper` + 2×`WeakReference` + `HashSet` + 3×`SimpleImmutableEntry`
++ `LinkedHashMap` + 3×`LinkedHashMap.Entry` — eight-plus objects to move three already-decoded values
+into a map client-v2 never needed to build in the first place. The measured 576 bytes/row is fully
+explained by real, read source code, not inference.
+
+**H1 is closed — confirmed both experimentally and mechanically. Full decomposition, now measured end
+to end:**
+
+| stage | B/row |
+| --- | --- |
+| pre-H0 driver | 872.0 |
+| − H0 (`byte[1]`) | −24.0 |
+| post-H0 driver | 848.0 |
+| − H1 (`LinkedHashMap` copy) | −576.0 |
+| without map copy | 272.0 |
+
+**One caveat, important not to overstate:** `ourDriverWithoutMapCopy` (272 B/row, ~51.3ms at 1M) comes
+in *below* client-v2's own baseline (296 B/row, ~88.1ms) — but the two benchmark bodies aren't doing
+equivalent work. `clientV2` calls `getLong`/`getString`/`getBigDecimal` per row (materializing and
+consuming three typed values); `ourDriverWithoutMapCopy` calls `reader.next()` and discards the result
+without touching any column value. **This does not yet mean "our decode is faster than client-v2"** —
+it means the bridge/Reactor/`Flux.generate` machinery isn't itself responsible for the regression,
+which is the question this diagnostic was built to answer. A fair speed claim needs the actual
+production replacement (compact row, real per-value access) benchmarked against client-v2's
+getter-based access, not this discard-only diagnostic.
+
+**Architectural implication, now evidence-backed rather than inspection-only:** the fix is not
+`sink.next(reader.next())` — `RecordWrapper` holds its row through `WeakReference`s into client-v2's
+*reused* `currentRecord`/`nextRecord` buffers, so exposing it downstream would hand callers a view
+that can change or go stale as decoding continues. What this data supports: replace
+`Flux<Map<String, Object>>` with a compact per-row `Object[]` snapshot (one copy, no hash table) plus
+once-per-result shared column-name→index metadata, matching R2DBC's index/name row-access shape
+directly instead of routing through a `Map`. Not yet built — next step is a small production-shaped
+prototype benchmarked with real value access (not a discard-only diagnostic) before committing to the
+full redesign.
+
 **Guardrail, explicit:** every future change from this investigation reruns
 `TrivialQueryBenchmark`/`PointQueryBenchmark` alongside `StreamingScanBenchmark`'s three tiers — a
 streaming fix that regresses the fixed-request path (this driver's genuine current strength) is not

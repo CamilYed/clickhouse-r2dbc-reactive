@@ -50,6 +50,28 @@ class FluxInputStreamBridgeTest {
   }
 
   @Test
+  void shouldReadOneByteAtATimeViaTheSingleByteReadOverload() throws IOException {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap("hi".getBytes(StandardCharsets.UTF_8)));
+
+    // when
+    final int first;
+    final int second;
+    final int end;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      first = bridge.read();
+      second = bridge.read();
+      end = bridge.read();
+    }
+
+    // then
+    assertThat(first).isEqualTo('h');
+    assertThat(second).isEqualTo('i');
+    assertThat(end).isEqualTo(-1);
+  }
+
+  @Test
   void shouldThrowWhenTheUpstreamFluxSignalsAnError() throws IOException {
     // given
     final RuntimeException upstreamError = new RuntimeException("boom");

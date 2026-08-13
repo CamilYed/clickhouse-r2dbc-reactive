@@ -69,17 +69,38 @@ hand-off (sum of the two isolated numbers runs 22–28% under the combined `Stre
 figure for this driver, near-zero for client-v2). Full tables and reasoning: ROADMAP.md's Phase 5
 "Optimization phase" section.
 
-Next: `-prof gc` on `DecoderOnlyBenchmark` specifically (no network involved, so allocation numbers
-attribute cleanly to decode) to split the cost between the per-row `LinkedHashMap` rehash and a
-newly-found `InputStream.read()`-allocates-`byte[1]`-per-call issue in `FluxInputStreamBridge`,
-before any production `RowBinaryDecoder` change:
+`-prof gc` on `DecoderOnlyBenchmark`, **run for real, H0 and H1 both confirmed**: client-v2 allocates
+a remarkably stable ~296 bytes/row at every tier; this driver allocated ~872 bytes/row before any
+fixes. **H0** (the `byte[1]` per single-byte `read()` call) is fixed and confirmed by a real
+re-benchmark: a clean, reproducible ~24 bytes/row reduction at both 100k/1M (872 → 848), matching the
+predicted cost exactly — real, but only ~4% of the gap. **H1** (the per-row
+`new LinkedHashMap<>(reader.next())` copy) is now confirmed too, via a genuine single-variable
+diagnostic (`ourDriverWithoutMapCopy`, below): **576.0 bytes/row and ~77% of decode latency at 1M
+rows, agreeing to four significant figures across a 10x row-count change.** H0 + H1 account for
+essentially the entire original allocation gap. Mechanically explained by reading client-v2's actual
+source: `new LinkedHashMap<>(...)` triggers `RecordWrapper.entrySet()`, which allocates a fresh
+`HashSet` plus one `SimpleImmutableEntry` per column on every call — real, measured, and now
+source-confirmed, not inferred. Full reasoning, numbers, and the exact quoted source: ROADMAP.md's
+Phase 5 "Optimization phase" section.
 
-```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
-```
+**H0 fixed and confirmed**: `FluxInputStreamBridge` now reuses a single-element buffer instead of
+allocating `new byte[1]` per call — plus a new black-box test for the single-byte `read()` overload,
+which had zero test coverage before this (every existing test only exercised the bulk
+`read(byte[], int, int)` path via `readAllBytes()`).
 
-Wide multi-type decode, aggregation, INSERT, and the reactive-vs-blocking concurrency burst scenario
-stay queued behind this investigation — all designed in ROADMAP.md, not yet built.
+**H1 confirmed via `DecoderOnlyBenchmark.ourDriverWithoutMapCopy`**: identical to `ourDriver` — same
+bridge, same reader settings, same `Flux.generate` shape — except the final `LinkedHashMap` copy is
+skipped. A single-variable change against `ourDriver`, isolating H1's cost directly: 576.0 bytes/row,
+~173.7ms of the 1M-row decode time. One caveat: this diagnostic comes in *below* client-v2's own
+baseline (272 vs 296 B/row), but the two aren't doing equivalent work — the diagnostic discards each
+row without calling any getter, while client-v2's benchmark calls three. Not yet a "faster than
+client-v2" result; that needs a production-shaped prototype with real value access.
+
+Next: still not yet started — a compact `Object[]`-per-row prototype (replacing
+`Flux<Map<String, Object>>`) with once-per-result shared column metadata, benchmarked with equivalent
+per-value access against client-v2's getters, before committing to the full `RowBinaryDecoder`
+redesign. Wide multi-type decode, aggregation, INSERT, and the reactive-vs-blocking concurrency burst
+scenario stay queued behind this — all designed in ROADMAP.md, not yet built.
 
 **Fairness fixes applied after the first run** (a real run surfaced real gaps — not designed away
 in the abstract): the ClickHouse image is now version-pinned rather than `latest`; client-v2 now

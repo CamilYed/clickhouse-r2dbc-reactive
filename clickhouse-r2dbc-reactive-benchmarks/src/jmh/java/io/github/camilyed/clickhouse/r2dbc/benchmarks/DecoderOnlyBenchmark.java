@@ -5,6 +5,7 @@ import com.clickhouse.client.api.data_formats.internal.BinaryStreamReader;
 import com.clickhouse.client.api.internal.ServerSettings;
 import com.clickhouse.client.api.query.QuerySettings;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.FluxInputStreamBridge;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.io.ByteArrayInputStream;
@@ -22,6 +23,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.infra.Blackhole;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.SynchronousSink;
 
 /**
  * Diagnostic isolation benchmark for {@link StreamingScanBenchmark}'s confirmed, growing regression
@@ -46,6 +48,14 @@ public class DecoderOnlyBenchmark {
 
   private static final String SELECT_ALL_SQL =
       "SELECT id, label, amount FROM " + PointQueryTable.NAME;
+
+  /**
+   * Mirrors {@code RowBinaryDecoder.RESPONSE_CHUNK_DEMAND} (a private constant there) so {@link
+   * #ourDriverWithoutMapCopy} feeds {@link FluxInputStreamBridge} identically to production — kept
+   * in sync manually since there's no shared constant to reference across modules; revisit if that
+   * value ever changes.
+   */
+  private static final int RESPONSE_CHUNK_DEMAND = 4;
 
   /** Row-count tiers — same shape as {@link StreamingScanBenchmark}'s, for a like-for-like split. */
   @Param({"10000", "100000", "1000000"})
@@ -79,6 +89,47 @@ public class DecoderOnlyBenchmark {
   public void ourDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body = Flux.just(ByteBuffer.wrap(capturedResponseBytes));
     final long rowCount = RowBinaryDecoder.decodeRows(body).count().block(Duration.ofSeconds(60));
+    blackhole.consume(rowCount);
+  }
+
+  /**
+   * Diagnostic-only — never used in production. Identical to {@link #ourDriver} in every respect
+   * (same {@link FluxInputStreamBridge}, same reader settings, same {@code Flux.generate} per-row
+   * emission shape) except the final {@code new LinkedHashMap<>(reader.next())} copy is skipped:
+   * {@code reader.next()} is still called (client-v2's own per-row cost is still paid, unchanged),
+   * but nothing is copied out of it — a constant is emitted downstream instead. A single-variable
+   * change against {@link #ourDriver}, added specifically so H1's cost can be measured directly
+   * rather than inferred by subtracting client-v2's baseline from this driver's total, which folds
+   * in every other difference between the two paths (the bridge's own queue/{@code StreamSignal}
+   * machinery, {@code Flux.generate}'s state, the reader subclass) along with the map copy — see
+   * ROADMAP.md's Phase 5 "Optimization phase" section for why that subtraction wasn't rigorous
+   * enough to attribute a bytes/row number to H1.
+   */
+  @Benchmark
+  public void ourDriverWithoutMapCopy(final Blackhole blackhole) {
+    final RowBinaryWithNamesAndTypesFormatReader reader =
+        new RowBinaryWithNamesAndTypesFormatReader(
+            FluxInputStreamBridge.subscribeTo(
+                Flux.just(ByteBuffer.wrap(capturedResponseBytes)), RESPONSE_CHUNK_DEMAND),
+            new QuerySettings()
+                .setUseTimeZone("UTC")
+                .serverSetting(ServerSettings.OUTPUT_FORMAT_BINARY_WRITE_JSON_AS_STRING, "1"),
+            new BinaryStreamReader.DefaultByteBufferAllocator());
+    final long rowCount =
+        Flux.generate(
+                () -> reader,
+                (final RowBinaryWithNamesAndTypesFormatReader r,
+                    final SynchronousSink<Boolean> sink) -> {
+                  if (r.hasNext()) {
+                    r.next();
+                    sink.next(Boolean.TRUE);
+                  } else {
+                    sink.complete();
+                  }
+                  return r;
+                })
+            .count()
+            .block(Duration.ofSeconds(60));
     blackhole.consume(rowCount);
   }
 

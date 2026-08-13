@@ -61,6 +61,17 @@ public final class FluxInputStreamBridge extends InputStream {
   private ByteBuffer current = ByteBuffer.allocate(0);
   private boolean finished;
 
+  /**
+   * Reused across every {@link #read()} call rather than allocated fresh each time — this class is
+   * read by exactly one dedicated worker thread per its own class-level Javadoc, so a single mutable
+   * field is safe here. Measured, not assumed: {@code DecoderOnlyBenchmark}'s {@code -prof gc} run
+   * (see ROADMAP.md's Phase 5 "Optimization phase" section) found this driver allocating roughly 3x
+   * more bytes/row than client-v2 while decoding the same payload, and every {@code String} column's
+   * length-prefix varint is read one byte at a time via this exact overload — a real, confirmed,
+   * per-row allocation this field removes entirely.
+   */
+  private final byte[] singleByteReadBuffer = new byte[1];
+
   private FluxInputStreamBridge(final Flux<ByteBuffer> source, final int demand) {
     this.queue = new LinkedBlockingQueue<>(demand + 1);
     this.subscriber = new QueueingSubscriber(queue, demand);
@@ -74,9 +85,8 @@ public final class FluxInputStreamBridge extends InputStream {
 
   @Override
   public int read() throws IOException {
-    final byte[] singleByte = new byte[1];
-    final int bytesRead = read(singleByte, 0, 1);
-    return bytesRead == -1 ? -1 : singleByte[0] & 0xFF;
+    final int bytesRead = read(singleByteReadBuffer, 0, 1);
+    return bytesRead == -1 ? -1 : singleByteReadBuffer[0] & 0xFF;
   }
 
   @Override
