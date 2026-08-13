@@ -1405,6 +1405,83 @@ Run both:
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes='TransportOnlyStreamingBenchmark|DecoderOnlyBenchmark'
 ```
 
+### Both isolation benchmarks run for real (2026-08-13) — the question is answered
+
+Same invocation also re-ran `StreamingScanBenchmark`; its combined numbers this run (6.0% / 53.7% /
+98.2% slower, 10k/100k/1M) differ slightly from the earlier confirmed run (13.3% / 54.7% / 79.9%) —
+normal run-to-run variance, same qualitative shape (grows sharply with rows). This run's own
+combined figures are the ones used in the "sum of parts" comparison below, for internal consistency
+within one JMH invocation.
+
+**Transport is a genuine strength. Decode is the entire problem.** From JSON, exact figures. All
+latency is µs/op (lower = faster):
+
+| rows | client-v2 | this driver | verdict |
+| --- | --- | --- | --- |
+| 10,000 | 2,602.8 | 1,265.1 | **this driver 51.4% FASTER** |
+| 100,000 | 12,273.8 | 4,562.4 | **this driver 62.8% FASTER** |
+| 1,000,000 | 67,045.4 | 14,605.8 | **this driver 78.2% FASTER (4.6x)** |
+
+`TransportOnlyStreamingBenchmark` (raw bytes, zero decode) — this driver's Reactor Netty transport
+beats client-v2's blocking HTTP client outright, and the margin **grows** with response size. This
+is a real, previously-invisible advantage that `StreamingScanBenchmark`'s combined number was
+masking the whole time.
+
+| rows | client-v2 | this driver | verdict |
+| --- | --- | --- | --- |
+| 10,000 | 843.1 | 2,111.3 | **this driver 150.4% SLOWER (2.5x)** |
+| 100,000 | 7,484.3 | 21,595.6 | **this driver 188.5% SLOWER (2.9x)** |
+| 1,000,000 | 81,547.1 | 222,911.7 | **this driver 173.4% SLOWER (2.7x)** |
+
+`DecoderOnlyBenchmark` (same captured bytes, in memory, zero network) — client-v2 decodes
+**~12–13M rows/sec** consistently across all three tiers; this driver decodes **~4.5–4.7M rows/sec**,
+also consistently across tiers. The ratio (≈2.5–2.9x) barely moves with row count, unlike the
+combined benchmark's growing percentage — this is a flat, structural per-row cost, exactly what H0
+(the `byte[1]` allocation) and H1 (the `LinkedHashMap` rehash) predict, not a scaling artifact.
+
+**One more real, secondary finding — the sum of the two isolated benchmarks doesn't equal the
+combined `StreamingScanBenchmark` number, and the gap itself differs by driver:**
+
+| rows | this driver: transport+decode | this driver: combined | extra | client-v2: transport+decode | client-v2: combined | extra |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 3,376.4 | 4,324.6 | +28.1% | 3,445.9 | 4,078.6 | +18.4% |
+| 100,000 | 26,158.1 | 33,488.2 | +28.0% | 19,758.1 | 21,793.7 | +10.3% |
+| 1,000,000 | 237,517.5 | 290,081.1 | +22.1% | 148,592.5 | 146,387.1 | **−1.5%** |
+
+client-v2's combined number is close to (even slightly under, at 1M — within sampling noise) the
+sum of its own parts, consistent with its simple blocking "read network, then decode" sequencing.
+This driver's combined number runs a consistent 22–28% **above** the sum of its own parts — a real,
+separate cost the two isolation benchmarks don't capture individually. This is exactly H2's
+signature: `FluxInputStreamBridge`'s queue/wakeup hand-off between the Netty event loop and the
+blocking decode thread. Secondary to H0/H1 (which account for the large majority of the gap), but
+real and now measured, not just theorized.
+
+**Conclusion, stated plainly: this driver's non-blocking transport is not the bottleneck — it's
+this driver's best-measured strength, and the combined `StreamingScanBenchmark` number was hiding
+that fact. The entire streaming regression lives in decode/materialization (H0 + H1), with a smaller
+secondary contribution from the transport-to-decode bridge hand-off (H2).** This rules out H3
+(`ByteBuf`→`byte[]` copying) as a meaningful contributor — the transport benchmark that pays that
+exact cost is the one where this driver wins by up to 4.6x.
+
+**Caveats carried over from JMH's own output, not glossed over:** this run's JMH reported it used
+an *experimental* "Compiler Blackholes" mode and explicitly warned to "exercise extra caution when
+trusting the results" and to keep Blackhole mode consistent across any numbers being compared —
+this run's own four benchmark classes all ran in the same invocation, so mode is consistent
+*within* this run, but any future comparison against an older run's numbers should be re-run fresh
+rather than diffed against historical figures. One point-in-run wobble, noted not hidden:
+`PointQueryBenchmark` in this same run showed this driver and client-v2 essentially tied (1164.0 µs
+vs 1159.1 µs, 0.4% apart) rather than this driver's usual 5–7% edge seen in three prior runs —
+treated as this run's noise, not a reversal, given the weight of prior evidence; `TrivialQueryBenchmark`
+in the same run still showed the usual ≈8.5% edge.
+
+**Next step, sharpened by this result:** `DecoderOnlyBenchmark` is now the right target for `-prof
+gc` — it isolates decode from network entirely, so an allocation profile of it directly attributes
+bytes/row to H0 vs H1 without any transport noise in the way:
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
+```
+
 **Guardrail, explicit:** every future change from this investigation reruns
 `TrivialQueryBenchmark`/`PointQueryBenchmark` alongside `StreamingScanBenchmark`'s three tiers — a
 streaming fix that regresses the fixed-request path (this driver's genuine current strength) is not

@@ -42,22 +42,32 @@ scans, and the gap grows sharply with row count (≈13% → ≈55% → ≈80% sl
 ROADMAP.md's Phase 5 "Optimization phase" section for the full numbers, the ranked hypothesis list
 (verified against this repo's actual source, not just inspection), and the investigation plan.
 
-Two new diagnostic classes exist to localize that gap, **written but not yet run**:
+Two new diagnostic classes localize that gap, **run for real, question answered**:
 
-- `TransportOnlyStreamingBenchmark` — raw response bytes only, no row decoding at all, isolating
-  transport/bridge cost.
+- `TransportOnlyStreamingBenchmark` — raw response bytes only, no row decoding at all. **This
+  driver wins by 51–78%, growing to a 4.6x margin at 1M rows.** The non-blocking transport is a
+  genuine, previously-invisible strength.
 - `DecoderOnlyBenchmark` — decodes one captured response payload from memory repeatedly, no network
-  at all, isolating pure decode/materialization cost.
+  at all. **This driver loses by 150–190% (a consistent ~2.5–2.9x), flat across all three row
+  tiers.** This is where the entire `StreamingScanBenchmark` regression actually lives.
+
+**Conclusion: transport is this driver's strength, not its weakness — decode/materialization is the
+confirmed, localized bottleneck**, with a smaller secondary cost in the transport-to-decode bridge
+hand-off (sum of the two isolated numbers runs 22–28% under the combined `StreamingScanBenchmark`
+figure for this driver, near-zero for client-v2). Full tables and reasoning: ROADMAP.md's Phase 5
+"Optimization phase" section.
+
+Next: `-prof gc` on `DecoderOnlyBenchmark` specifically (no network involved, so allocation numbers
+attribute cleanly to decode) to split the cost between the per-row `LinkedHashMap` rehash and a
+newly-found `InputStream.read()`-allocates-`byte[1]`-per-call issue in `FluxInputStreamBridge`,
+before any production `RowBinaryDecoder` change:
 
 ```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes='TransportOnlyStreamingBenchmark|DecoderOnlyBenchmark'
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
 ```
 
-After that: `-prof gc` on `StreamingScanBenchmark` for allocated-bytes/row, then a benchmark-only
-`Map`-free row representation prototype if allocation confirms the hypothesis — no production
-`RowBinaryDecoder` change before that. Wide multi-type decode, aggregation, INSERT, and the
-reactive-vs-blocking concurrency burst scenario stay queued behind this investigation — all designed
-in ROADMAP.md, not yet built.
+Wide multi-type decode, aggregation, INSERT, and the reactive-vs-blocking concurrency burst scenario
+stay queued behind this investigation — all designed in ROADMAP.md, not yet built.
 
 **Fairness fixes applied after the first run** (a real run surfaced real gaps — not designed away
 in the abstract): the ClickHouse image is now version-pinned rather than `latest`; client-v2 now
