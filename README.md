@@ -62,52 +62,46 @@ not been run against a production workload.
 Before relying on this in production, read
 [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) — an explicit,
 honestly-triaged list of what's fixed, what's a documented safe limitation, and what's still an
-open gap (currently: `ssl=true` is untested, there's no retry/reconnect policy, and — see
-[Known limitations](#known-limitations) below — cancelling a subscription does not stop a query on
-the ClickHouse server). That page is the actual source of truth for "is this safe to depend on
-today", kept up to date as things are found and fixed — treat this README as a summary of it, not
-the other way around.
+open gap (currently: `ssl=true` is untested and there's no retry/reconnect policy — see
+[Known limitations](#known-limitations) below for the cancellation/`KILL QUERY` caveat, which *is*
+handled but on a best-effort basis). That page is the actual source of truth for "is this safe to
+depend on today", kept up to date as things are found and fixed — treat this README as a summary of
+it, not the other way around.
 
 Expect breaking changes at every stage before a `0.1.0` release.
 
 ## Known limitations
 
-> [!WARNING]
-> **Cancelling a subscription does not stop the query on the ClickHouse server.** This is a
-> ClickHouse HTTP interface limitation, not a bug in this driver — verified against a real server,
-> not assumed. See
+> [!IMPORTANT]
+> **Cancelling a subscription stops the query on the ClickHouse server via a best-effort `KILL
+> QUERY` this driver sends itself — not via ClickHouse's own connection-close detection, which
+> doesn't work.** Verified against a real server, not assumed. See
 > [ROADMAP.md's writeup](ROADMAP.md#production-readiness-review) (search "Cancelling a client-side
 > subscription") and the regression test that proves it,
 > [`QueryCancellationAgainstRealClickHouseTest`](clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/QueryCancellationAgainstRealClickHouseTest.java).
 
 Disposing a `Flux`/`Mono` subscription (`.take(n)`, a timeout operator, an upstream cancel) makes
 this driver stop reading the response and closes its HTTP connection — that part is fully reactive
-and tested. What it does **not** do is stop ClickHouse itself from continuing to execute the query.
-ClickHouse's own HTTP interface docs say so directly: *"Running requests don't stop automatically
-if the HTTP connection is lost"* (clickhouse.com/docs/interfaces/http). The one setting meant to
-close this gap, `cancel_http_readonly_queries_on_client_close`, is itself unreliable — a query kept
-running after client disconnect even with that setting enabled was reproduced against a recent
-ClickHouse release and closed by ClickHouse's own maintainers as
+and tested. On its own, though, that would **not** stop ClickHouse itself from continuing to
+execute the query: ClickHouse's own HTTP interface docs say so directly, *"Running requests don't
+stop automatically if the HTTP connection is lost"* (clickhouse.com/docs/interfaces/http), and the
+one setting meant to close that gap, `cancel_http_readonly_queries_on_client_close`, is itself
+unreliable — a query kept running after client disconnect even with that setting enabled was
+reproduced against a recent ClickHouse release and closed by ClickHouse's own maintainers as
 ["not planned"](https://github.com/ClickHouse/ClickHouse/issues/92786).
 
-**Why this matters for a reactive stack specifically:** the whole premise of this driver is that
-`.timeout(...)`, `.take(n)`, backpressure-driven early completion, and request cancellation on
-client disconnect are meant to bound resource usage end to end. For every other property in the
-["fully reactive" table](#what-fully-reactive-means-here) below, that premise holds all the way to
-the server. For query cancellation specifically, it currently does not: a cancelled slow `SELECT`
-gives the caller their thread/subscription back immediately, but ClickHouse keeps the query running
-server-side for as long as it would have taken to finish anyway — consuming real CPU, memory, and
-query-slots the whole time. Under a pattern like "timeout and retry", that can quietly pile up
-concurrent, unkillable queries on the server even though the client-side code looks correctly
-bounded.
-
-**What you can do about it today:** this driver always sends `query_id` as the
-`X-ClickHouse-Query-Id` request header, specifically so a caller can issue
-`KILL QUERY WHERE query_id = '<id>'` themselves (over any ClickHouse client, including this one) to
-actually stop a query it cancelled. Whether this driver should do that automatically on
-cancellation is an open design question — tracked in
-[ROADMAP.md's open gaps](ROADMAP.md#production-readiness-review) — not implemented silently, since
-it needs its own error handling and relies on the connecting user having `KILL QUERY` privilege.
+**What this driver does about it:** on cancellation, `ClickHouseHttpTransport` sends an explicit
+`KILL QUERY WHERE query_id = '<id>' ASYNC` over a separate request — but only once the original
+request had actually reached the server (cancelling before that means there's nothing to kill yet).
+It reuses the same authenticated user as the original query, since ClickHouse lets a user stop
+their own queries without a separate `KILL QUERY` privilege grant. This is genuinely **best-effort,
+not a guarantee**: if the kill request itself fails — most plausibly the connecting user turns out
+to lack the privilege after all under a restricted RBAC setup, or the server is simply unreachable
+at that moment — the failure is logged at `WARN` and otherwise swallowed; it never surfaces on the
+caller's already-cancelled subscription, and the kill itself is not retried. Under a pattern like
+"timeout and retry" against a server where this occasionally fails, that residual risk (a query
+that keeps running despite being cancelled) still exists, just far less often than before this was
+implemented — watch for the `WARN` log if that matters to you.
 
 ## What "fully reactive" means here
 
@@ -120,7 +114,7 @@ reactive end to end only if it satisfies all of the following:
 | Non-blocking I/O | No `Future#get()`, `CompletableFuture#join()`, `block()`, blocking semaphore, or thread-per-request wrapper on the query path. |
 | Stream-oriented consumption | Responses are decoded incrementally; large results are not aggregated in memory before rows are emitted. |
 | Backpressure-aware delivery | Downstream demand influences upstream work and buffering; intermediate queues stay bounded and documented. |
-| Cancellation propagation | Cancelling a subscription removes a queued request or aborts an active exchange, and releases buffers and connections. Every query carries a `query_id` a caller can use to cancel it server-side via `KILL QUERY` — but cancellation does not (yet) reach the server automatically; see [Known limitations](#known-limitations). |
+| Cancellation propagation | Cancelling a subscription removes a queued request or aborts an active exchange, releases buffers and connections, and — once the request has reached the server — sends a best-effort `KILL QUERY` so the server stops too; see [Known limitations](#known-limitations) for why that's "best-effort" rather than a hard guarantee. |
 | Bounded concurrency | Maximum active requests, maximum pending requests, and pending-acquire timeout are explicit; overload produces a predictable error, not an invisible queue. |
 | Deterministic cleanup | Connections, response bodies, buffers, and decoder state are released on completion, error, timeout, and cancellation. |
 | Reactive error signalling | Transport and ClickHouse errors surface through `onError` with proper R2DBC exception mapping. |
@@ -226,8 +220,6 @@ The execution-path analysis, transport spike, transport SPI, and first R2DBC con
 (the "Near-term"/"Later" items this section used to list) are all done; what's left before a
 `0.1.0` release is closing the open gaps below, not building new surface area:
 
-- Decide whether cancellation should send an explicit `KILL QUERY` server-side (see
-  [Known limitations](#known-limitations))
 - Test `ssl=true` end to end against a real or self-signed-cert server
 - Decide whether a retry/reconnect policy belongs in this driver at all before designing one
 - Fill in `clickhouse-r2dbc-reactive-integration-tests` — the module exists but is still an empty

@@ -11,6 +11,7 @@ sonarqube = "7.3.1.8318"
 testcontainers = "2.0.5"
 awaitility = "4.3.0"
 jspecify = "1.0.0"
+slf4j = "2.0.18"
 
 [plugins]
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
@@ -38,3 +39,6 @@ testcontainers-clickhouse = { group = "org.testcontainers", name = "testcontaine
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 
 jspecify = { module = "org.jspecify:jspecify", version.ref = "jspecify" }
+
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }

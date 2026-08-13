@@ -151,6 +151,55 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldSendABestEffortKillQueryWhenCancelledAfterTheRequestWasSent() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport
+          .query(ClickHouseQuery.of("SELECT 1", "the-cancelled-query-id"))
+          .take(1)
+          .blockLast(Duration.ofSeconds(5));
+
+      // then
+      await()
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(
+              () ->
+                  assertThat(server.receivedUri())
+                      .contains("KILL")
+                      .contains("the-cancelled-query-id"));
+    }
+  }
+
+  @Test
+  void shouldSendABestEffortKillQueryEvenWhenCancelledBeforeAnyResponseArrives() {
+    // given
+    // when
+    try (final var server = ControlledClickHouseServer.startAcceptingButNeverResponding()) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      final var subscription =
+          transport.query(ClickHouseQuery.of("SELECT 1", "the-unanswered-query-id")).subscribe();
+      await().atMost(Duration.ofSeconds(2)).until(server::hasReceivedRequest);
+      subscription.dispose();
+
+      // then
+      await()
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(
+              () ->
+                  assertThat(server.receivedUri())
+                      .contains("KILL")
+                      .contains("the-unanswered-query-id"));
+    }
+  }
+
+  @Test
   void shouldStillReturnTheBodyWhenHeadersAreDelayed() {
     // given
     final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();

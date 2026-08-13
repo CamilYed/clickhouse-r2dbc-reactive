@@ -528,6 +528,41 @@ fixed, not just documented.
   thread-safety.** Not a bug — this matches `java.sql.PreparedStatement` and every other R2DBC
   driver's statement type (bind on one thread, then execute once) — but was silently assumed rather
   than stated. Added explicit "not thread-safe" Javadoc. Safe, now-documented limitation.
+- **Cancelling a client-side subscription now sends an explicit, best-effort `KILL QUERY` —
+  because ClickHouse's own connection-close detection for HTTP queries turned out not to work.**
+  Initially assumed (per ClickHouse's HTTP docs describing a "Cancel HTTP Request" mechanism) that
+  closing the connection would be enough to stop server-side execution; verified against a real
+  server that it is not — see `QueryCancellationAgainstRealClickHouseTest`'s Javadoc and
+  `ClickHouseHttpTransport.queryWithSummary`'s Javadoc for the full trail (matches ClickHouse's own
+  docs verbatim, "Running requests don't stop automatically if the HTTP connection is lost", and a
+  ClickHouse issue reproducing the same gap even with `cancel_http_readonly_queries_on_client_close
+  = 1` enabled, closed "not planned" by ClickHouse's own maintainers:
+  [ClickHouse/ClickHouse#92786](https://github.com/ClickHouse/ClickHouse/issues/92786)). Fixed:
+  `ClickHouseHttpTransport` now sends `KILL QUERY WHERE query_id = '...' ASYNC` on a separate
+  request whenever a subscription is cancelled *after* the original request was actually sent
+  (cancelling before that means there's nothing running server-side to kill yet). Caught a real bug
+  while building this: the first version gated the kill on *response headers having arrived* rather
+  than *the request having been sent* — which passed every hermetic test (fast fixtures) but failed
+  against a real slow query in `QueryCancellationAgainstRealClickHouseTest`, because a query whose
+  entire result is one big block (as this test's is, deliberately) may not send anything back —
+  not even headers — until it's nearly done, long after it's already running server-side and long
+  after a caller might reasonably cancel it. Fixed by gating on Reactor Netty's `doAfterRequest`
+  hook (`HttpClientState.REQUEST_SENT`) instead, which fires once the request itself is flushed to
+  the socket, independent of whether or when a response ever comes back — re-verified against real
+  ClickHouse afterward, and locked in hermetically too via a new
+  `ClickHouseHttpTransportTest.shouldSendABestEffortKillQueryEvenWhenCancelledBeforeAnyResponseArrives`
+  test (a fake server that accepts the request but never responds at all). The existing
+  cancellation-before-acquire hermetic tests (proving "cancelling before the server sees anything
+  sends nothing") still pass unmodified either way, since in those scenarios the request is never
+  actually sent under either gating signal. The kill reuses the same authenticated user as the
+  original query — ClickHouse lets a user stop their own queries without a separate `KILL QUERY`
+  privilege grant — and is genuinely best-effort: if it fails (most likely the connecting user lacks
+  the privilege after all, e.g. under a restricted RBAC setup), the failure is logged at `WARN` via
+  a newly added `slf4j-api` dependency and otherwise swallowed; it never surfaces on the caller's
+  already-cancelled subscription, and there is no retry of the kill itself.
+  `QueryCancellationAgainstRealClickHouseTest` was rewritten to prove the fixed behavior end to end
+  (query now stops within ~5s of cancellation, not just "closes the connection and hopes"). Silent
+  risk — fixed, with an honest best-effort caveat documented rather than claimed as a hard guarantee.
 
 ### Known, documented, safe limitations (not fixed — deliberate)
 
@@ -544,33 +579,15 @@ fixed, not just documented.
 - **Transactions/savepoints are unimplemented**, matching ClickHouse's HTTP interface having no real
   session affinity for its experimental transaction feature (see `ClickHouseConnection`'s class
   Javadoc for the full, checked-against-docs reasoning). Fails loudly.
+- **The best-effort `KILL QUERY` on cancellation only fires once per cancelled subscription and is
+  never retried** if that kill request itself fails for a transient reason (as opposed to a
+  privilege problem) — e.g. the server briefly unreachable at the exact moment of cancellation.
+  Logged at `WARN` either way; deliberately not retried, to avoid open-ended retry logic on what is
+  already a best-effort cleanup path (see the open retry-policy question below, which is a separate,
+  broader decision).
 
 ### Open gaps, not yet addressed
 
-- **Cancelling a client-side subscription does not stop the query executing server-side —
-  verified against a real ClickHouse server, and this is a genuine, unfixed silent risk, not a
-  safe limitation.** Initially assumed (per ClickHouse's HTTP docs describing a "Cancel HTTP
-  Request" mechanism) that closing the connection would be enough; empirically it is not.
-  `QueryCancellationAgainstRealClickHouseTest` (transport-http) runs a query engineered to take
-  ~10 seconds server-side (`sleepEachRow(0.1)` over `numbers(100)`, small enough to run as a
-  single serial stream), disposes the Reactor subscription partway through — even with
-  `cancel_http_readonly_queries_on_client_close = 1` explicitly set on the query, the one setting
-  meant to enable this — and proves via `system.processes` that the query is *still running* a
-  full 3 seconds later (well inside its ~10 second natural runtime, so this isn't just a slow
-  teardown race). This matches ClickHouse's own docs verbatim ("Running requests don't stop
-  automatically if the HTTP connection is lost", clickhouse.com/docs/interfaces/http) and a
-  still-open ClickHouse issue reproducing the same thing against a recent release
-  (ClickHouse/ClickHouse#92786, closed "not planned" by ClickHouse's own maintainers). A caller
-  who cancels a slow `SELECT` today gets their client back immediately but the query keeps
-  consuming server CPU/memory/threads for as long as it would have taken to finish — a real
-  resource-exhaustion risk under e.g. a request-timeout-and-retry pattern. `query_id` is already
-  sent as `X-ClickHouse-Query-Id` on every request and `BaseClickHouseIntegrationTest.killQuery`
-  proves an explicit `KILL QUERY WHERE query_id = ...` reliably does work — so the fix, if one is
-  wanted, is for this driver to send that itself when a subscription is cancelled mid-query, not
-  to keep relying on connection-close. Not implemented yet: doing so needs a design decision (a
-  fire-and-forget follow-up HTTP call from a `doOnCancel`/`doFinally` hook, needing its own
-  administrative HTTP call, error handling if the kill itself fails, and a check for whether the
-  authenticated user has `KILL QUERY` privilege) — deliberately not implemented silently.
 - **`ssl=true` is completely untested.** `ClickHouseConnectionFactory.from` builds an `https://`
   base URL and hands it to Reactor Netty's `HttpClient`, expected to auto-negotiate TLS from the URI
   scheme — but no test constructs a transport with `ssl=true` or exercises HTTPS end to end. Genuine
@@ -586,8 +603,7 @@ fixed, not just documented.
   well-known R2DBC `Option`, so this would need a driver-specific custom `Option`. Configurability
   gap, not a correctness bug.
 
-Next to check (session close, 2026-08-13): decide whether this driver should send an explicit
-`KILL QUERY` on cancellation (see above), decide on the `ssl=true` test approach, and reassess
+Next to check (session close, 2026-08-13): decide on the `ssl=true` test approach, and reassess
 whether a retry policy belongs in this driver at all before designing one.
 
 ## Non-functional requirements: logging, metrics, leaks

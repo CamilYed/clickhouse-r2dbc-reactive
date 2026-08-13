@@ -7,11 +7,14 @@ import io.netty.channel.ChannelOption;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.netty.ByteBufFlux;
 import reactor.netty.http.client.HttpClient;
@@ -22,6 +25,8 @@ import reactor.netty.resources.ConnectionProvider;
  * Non-blocking HTTP transport for ClickHouse queries, built on Reactor Netty's {@link HttpClient}.
  */
 public final class ClickHouseHttpTransport {
+
+  private static final Logger LOG = LoggerFactory.getLogger(ClickHouseHttpTransport.class);
 
   private static final String FORMAT_HEADER = "X-ClickHouse-Format";
   private static final String QUERY_ID_HEADER = "X-ClickHouse-Query-Id";
@@ -148,12 +153,14 @@ public final class ClickHouseHttpTransport {
    *
    * <p>Nothing is sent over the network until the returned {@link ByteBufFlux} is subscribed to.
    * Chunks are emitted as they arrive, never aggregated into a single buffer; cancelling the
-   * subscription closes the underlying connection. The result format is fixed to {@code
-   * RowBinaryWithNamesAndTypes} — the one shape {@code core}'s decoder currently understands — via
-   * the {@code X-ClickHouse-Format} header, so a bare query with no {@code FORMAT} clause doesn't
-   * fall back to ClickHouse's default {@code TabSeparated}. {@link ClickHouseQuery#queryId()} is
-   * sent as {@code X-ClickHouse-Query-Id}, confirmed against a real server to be sufficient on its
-   * own (see {@code docs/CLIENT_V2_HTTP_REFERENCE.md}).
+   * subscription closes the underlying connection <b>and</b>, if the request had already been sent,
+   * best-effort sends an explicit {@code KILL QUERY WHERE query_id = '...' ASYNC} on a separate
+   * request — see {@link #queryWithSummary}'s Javadoc for why this exists and its limits. The
+   * result format is fixed to {@code RowBinaryWithNamesAndTypes} — the one shape {@code core}'s
+   * decoder currently understands — via the {@code X-ClickHouse-Format} header, so a bare query
+   * with no {@code FORMAT} clause doesn't fall back to ClickHouse's default {@code TabSeparated}.
+   * {@link ClickHouseQuery#queryId()} is sent as {@code X-ClickHouse-Query-Id}, confirmed against a
+   * real server to be sufficient on its own (see {@code docs/CLIENT_V2_HTTP_REFERENCE.md}).
    *
    * <p>A response carrying {@code X-ClickHouse-Exception-Code}, or any HTTP status {@code >= 400},
    * is never handed to the caller as if it were a valid body — client-v2's own {@code
@@ -197,10 +204,30 @@ public final class ClickHouseHttpTransport {
    * yet, same as {@link #query(ClickHouseQuery)}) and wraps it in {@link Mono#just}, so the
    * <em>caller's own later subscription to {@code body}</em> is the one and only subscription to
    * the underlying HTTP response, exactly as in {@link #query(ClickHouseQuery)}.
+   *
+   * <p><b>Cancellation and {@code KILL QUERY}.</b> ClickHouse's own HTTP interface does not stop a
+   * running query when the client's connection closes — verified against a real server, not assumed
+   * (see {@code QueryCancellationAgainstRealClickHouseTest} and ROADMAP.md's Production readiness
+   * review). To compensate, cancelling {@code body}'s subscription after the request has actually
+   * been sent (via Reactor Netty's {@code doAfterRequest} hook — deliberately <em>not</em> gated on
+   * a response ever arriving, since a slow query may not send any response bytes back for a long
+   * time even though it is already running server-side; cancelling before the request is even sent
+   * means there is nothing running server-side yet to kill) fires a best-effort, fire-and-forget
+   * {@code KILL QUERY WHERE query_id = '...' ASYNC} over a separate request, reusing this
+   * transport's own {@code authentication} — deliberately the same user as the original query,
+   * since ClickHouse lets any user stop their own queries without a separate {@code KILL QUERY}
+   * grant (see clickhouse.com/docs/reference/statements/kill, "Read-only users can only stop their
+   * own queries"). If that kill attempt itself fails — most commonly because the connecting user
+   * lacks the privilege, but also possibly a transport error — it is logged at {@code WARN} and
+   * otherwise swallowed; it never surfaces as an error on the (already cancelled) original
+   * subscription. This is best-effort, not a guarantee: if the kill request itself cannot reach the
+   * server (e.g. the server is unreachable at all), the original query keeps running with no
+   * further retry.
    */
   public Mono<ClickHouseQueryResponse> queryWithSummary(final ClickHouseQuery query) {
     final AtomicLong writtenRows = new AtomicLong();
-    final ByteBufFlux body =
+    final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final ByteBufFlux rawBody =
         ByteBufFlux.fromInbound(
             httpClient
                 .headers(
@@ -209,12 +236,42 @@ public final class ClickHouseHttpTransport {
                       headers.set(QUERY_ID_HEADER, query.queryId());
                       authentication.addTo(headers);
                     })
+                .doAfterRequest((request, connection) -> requestSent.set(true))
                 .post()
                 .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
                 .response(
                     (response, content) ->
                         receiveOrFail(response, content, query.queryId(), writtenRows)));
+    final ByteBufFlux body =
+        ByteBufFlux.fromInbound(
+            rawBody.doOnCancel(
+                () -> {
+                  if (requestSent.get()) {
+                    killQueryBestEffort(query.queryId());
+                  }
+                }));
     return Mono.just(new ClickHouseQueryResponse(writtenRows::get, body));
+  }
+
+  private void killQueryBestEffort(final String queryId) {
+    final String killSql =
+        "KILL QUERY WHERE query_id = '" + escapeForSingleQuotedSql(queryId) + "' ASYNC";
+    query(ClickHouseQuery.of(killSql))
+        .aggregate()
+        .asByteArray()
+        .subscribe(
+            ignored -> {},
+            error ->
+                LOG.warn(
+                    "Best-effort KILL QUERY failed for cancelled query_id={} - ClickHouse may keep "
+                        + "running it server-side. This commonly means the connecting user lacks "
+                        + "the KILL QUERY privilege for its own queries.",
+                    queryId,
+                    error));
+  }
+
+  private static String escapeForSingleQuotedSql(final String value) {
+    return value.replace("'", "''");
   }
 
   private static String parameterQueryString(final ClickHouseQuery query) {

@@ -10,43 +10,28 @@ import org.junit.jupiter.api.Test;
 import reactor.core.Disposable;
 
 /**
- * Documents, against a real ClickHouse server, that cancelling a client-side subscription to {@link
- * ClickHouseHttpTransport#query} does <b>not</b> stop the query executing server-side — despite
- * ClickHouse's own HTTP interface docs describing a "Cancel HTTP Request" mechanism.
+ * Proves, against a real ClickHouse server, that cancelling a client-side subscription to {@link
+ * ClickHouseHttpTransport#query} now actually stops the query executing server-side — via this
+ * driver's own best-effort {@code KILL QUERY}, not via ClickHouse's connection-close detection.
  *
- * <p>This was expected to work and is <em>not</em> a bug in this driver to fix; it's a documented,
- * long-standing ClickHouse HTTP interface limitation, verified here rather than assumed:
- *
- * <ul>
- *   <li>ClickHouse's own docs (clickhouse.com/docs/interfaces/http, "Using ClickHouse sessions in
- *       the HTTP protocol" section) state plainly: <em>"Running requests don't stop automatically
- *       if the HTTP connection is lost."</em>
- *   <li>The opt-in setting meant to fix this, {@code cancel_http_readonly_queries_on_client_close},
- *       is itself unreliable — ClickHouse/ClickHouse#92786 reproduces a query that keeps running
- *       after the client disconnects even with that setting enabled, against the then-latest
- *       release (25.6.2), and was closed by ClickHouse's own maintainers as "not planned".
- * </ul>
- *
- * <p>Practical consequence for callers of this driver: disposing a {@code Flux}/{@code Mono}
- * subscription stops <em>this driver</em> from reading further response bytes and closes its HTTP
- * connection (proven client-side by {@link
- * ClickHouseHttpTransportTest#shouldCloseTheConnectionWhenTheSubscriptionIsCancelled}), but a
- * caller that needs the query itself to actually stop running on the server must send an explicit
- * {@code KILL QUERY WHERE query_id = '...'} — this driver already sends {@code query_id} as {@code
- * X-ClickHouse-Query-Id} on every request precisely so a caller has the means to do that (see
- * {@link BaseClickHouseIntegrationTest#killQuery}, used below purely to clean up after this test
- * rather than leave the query running for the rest of the shared container's lifetime).
+ * <p>ClickHouse's HTTP interface does not do this on its own: closing the connection alone leaves
+ * the query running (see clickhouse.com/docs/interfaces/http, <em>"Running requests don't stop
+ * automatically if the HTTP connection is lost"</em>, and ClickHouse/ClickHouse#92786, where even
+ * the opt-in {@code cancel_http_readonly_queries_on_client_close} setting is shown not to reliably
+ * help). {@link ClickHouseHttpTransport#queryWithSummary}'s Javadoc has the full writeup of why
+ * this driver now sends an explicit {@code KILL QUERY WHERE query_id = '...' ASYNC} itself on
+ * cancellation, reusing the same authenticated user as the original query (ClickHouse lets a user
+ * stop their own queries without a separate privilege).
  *
  * <p>Verified from entirely outside this driver, by polling ClickHouse's own {@code
- * system.processes} table (via {@link BaseClickHouseIntegrationTest#isQueryRunning}) — proving a
- * negative ("still running") this way, over a window comfortably shorter than the query's own ~10
- * second natural runtime, is real evidence the query didn't stop, not just a race that hasn't
- * resolved yet.
+ * system.processes} table (via {@link BaseClickHouseIntegrationTest#isQueryRunning}) — proving the
+ * query disappears within a window much shorter than its own ~10 second natural runtime is real
+ * evidence of an actual, driver-triggered kill, not a race with normal completion.
  */
 class QueryCancellationAgainstRealClickHouseTest extends BaseClickHouseIntegrationTest {
 
   @Test
-  void shouldNotStopTheQueryServerSideWhenTheClientCancelsTheSubscription() {
+  void shouldStopTheQueryServerSideWhenTheClientCancelsTheSubscription() {
     // given
     final ClickHouseHttpTransport transport =
         new ClickHouseHttpTransport(
@@ -55,8 +40,7 @@ class QueryCancellationAgainstRealClickHouseTest extends BaseClickHouseIntegrati
     final ClickHouseQuery slowQuery =
         ClickHouseQuery.of(
             "SELECT sleepEachRow(0.1) FROM numbers(100) "
-                + "SETTINGS function_sleep_max_microseconds_per_block = 60000000, "
-                + "cancel_http_readonly_queries_on_client_close = 1",
+                + "SETTINGS function_sleep_max_microseconds_per_block = 60000000",
             queryId);
     final Disposable subscription = transport.query(slowQuery).subscribe();
     await().atMost(Duration.ofSeconds(10)).until(() -> isQueryRunning(queryId));
@@ -65,11 +49,6 @@ class QueryCancellationAgainstRealClickHouseTest extends BaseClickHouseIntegrati
     subscription.dispose();
 
     // then
-    await()
-        .during(Duration.ofSeconds(3))
-        .atMost(Duration.ofSeconds(4))
-        .until(() -> isQueryRunning(queryId));
-
-    killQuery(queryId);
+    await().atMost(Duration.ofSeconds(5)).until(() -> !isQueryRunning(queryId));
   }
 }

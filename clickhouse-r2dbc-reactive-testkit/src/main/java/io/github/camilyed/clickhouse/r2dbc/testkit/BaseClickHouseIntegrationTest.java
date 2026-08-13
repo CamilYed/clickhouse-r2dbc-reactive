@@ -85,19 +85,6 @@ public abstract class BaseClickHouseIntegrationTest {
     return !counts.isEmpty() && !"0".equals(counts.get(0));
   }
 
-  /**
-   * Administratively stops a still-running query by {@code query_id}, via ClickHouse's own {@code
-   * KILL QUERY} statement — the one cancellation mechanism that reliably works over the HTTP
-   * interface (see {@link #isQueryRunning}'s Javadoc for why merely closing the HTTP connection
-   * does not). Tests use this to clean up a query they intentionally left running server-side after
-   * only cancelling it client-side, so it doesn't keep consuming server resources for the rest of
-   * the shared container's lifetime.
-   */
-  protected static void killQuery(final String queryId) {
-    final String escaped = queryId.replace("'", "''");
-    executeAdminSql("KILL QUERY WHERE query_id = '" + escaped + "' SYNC");
-  }
-
   private static List<String> queryColumn(final String sql) {
     return sendAdminRequest(sql).lines().filter(line -> !line.isBlank()).toList();
   }
