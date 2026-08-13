@@ -9,12 +9,18 @@ import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.ToByteArrayAbility;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+import reactor.netty.DisposableServer;
+import reactor.netty.http.server.HttpServer;
 import reactor.test.StepVerifier;
 
 class ClickHouseHttpTransportTest implements ToByteArrayAbility {
@@ -529,5 +535,99 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
       assertThat(server.receivedHeader("X-ClickHouse-User")).isEqualTo("alice");
       assertThat(server.receivedHeader("X-ClickHouse-Key")).isEqualTo("secret-key");
     }
+  }
+
+  @Test
+  void shouldNotRetryAFailureThatHappensAfterTheRequestWasSent() {
+    // given - the connection is reset only after the request already reached the server, so
+    // requestSent is true by the time the failure happens; RetryPolicy must not retry this,
+    // regardless of how many attempts it's configured to allow.
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingThenResettingConnection(
+            firstChunk, Duration.ofMillis(200))) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(),
+              Authentication.none(),
+              null,
+              null,
+              null,
+              new RetryPolicy(5, Duration.ofMillis(20)));
+
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT 1"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(5)));
+
+      // then
+      assertThat(thrown).isNotNull();
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.totalRequestsReceived()).isEqualTo(1));
+    }
+  }
+
+  @Test
+  void shouldRetryAConnectionLevelFailureThatHappensBeforeTheRequestWasSentUntilItSucceeds()
+      throws Exception {
+    // given - nobody is listening on this port yet, so every connection attempt fails before any
+    // request bytes can be sent; a real server starts accepting on that exact port shortly after,
+    // simulating a transient "server not reachable yet" condition RetryPolicy should ride out.
+    final int port;
+    try (final ServerSocket portProbe = new ServerSocket(0)) {
+      port = portProbe.getLocalPort();
+    }
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    final AtomicReference<DisposableServer> lateServer = new AtomicReference<>();
+    Mono.delay(Duration.ofMillis(300))
+        .publishOn(Schedulers.boundedElastic())
+        .subscribe(ignored -> lateServer.set(startServerRespondingOnPort(port, configuredBody)));
+    final var transport =
+        new ClickHouseHttpTransport(
+            "http://localhost:" + port,
+            Authentication.none(),
+            null,
+            null,
+            null,
+            new RetryPolicy(20, Duration.ofMillis(50)));
+
+    try {
+      // when
+      final byte[] receivedBody =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .aggregate()
+              .asByteArray()
+              .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(receivedBody).isEqualTo(configuredBody);
+    } finally {
+      await().atMost(Duration.ofSeconds(2)).until(() -> lateServer.get() != null);
+      lateServer.get().disposeNow();
+    }
+  }
+
+  private static DisposableServer startServerRespondingOnPort(final int port, final byte[] body) {
+    return HttpServer.create()
+        .port(port)
+        .route(
+            routes ->
+                routes.post(
+                    "/",
+                    (request, response) ->
+                        response
+                            .header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
+                            .header("Content-Type", "application/octet-stream")
+                            .sendByteArray(Mono.just(body))))
+        .bindNow();
   }
 }

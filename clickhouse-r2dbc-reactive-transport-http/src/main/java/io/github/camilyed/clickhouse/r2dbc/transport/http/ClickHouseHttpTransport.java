@@ -4,6 +4,7 @@ import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelOption;
+import java.io.ByteArrayInputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -15,11 +16,14 @@ import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.ByteBufFlux;
+import reactor.netty.http.Http11SslContextSpec;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.http.client.HttpClientResponse;
 import reactor.netty.resources.ConnectionProvider;
+import reactor.util.retry.Retry;
 
 /**
  * Non-blocking HTTP transport for ClickHouse queries, built on Reactor Netty's {@link HttpClient}.
@@ -37,6 +41,7 @@ public final class ClickHouseHttpTransport {
 
   private final HttpClient httpClient;
   private final Authentication authentication;
+  private final RetryPolicy retryPolicy;
 
   public ClickHouseHttpTransport(final String baseUrl) {
     this(
@@ -44,7 +49,9 @@ public final class ClickHouseHttpTransport {
         Authentication.none(),
         ConnectionProvider.create("clickhouse-http-transport"),
         null,
-        null);
+        null,
+        null,
+        RetryPolicy.defaultPolicy());
   }
 
   public ClickHouseHttpTransport(final String baseUrl, final int maxConnections) {
@@ -53,7 +60,9 @@ public final class ClickHouseHttpTransport {
         Authentication.none(),
         ConnectionProvider.create("clickhouse-http-transport", maxConnections),
         null,
-        null);
+        null,
+        null,
+        RetryPolicy.defaultPolicy());
   }
 
   /**
@@ -66,7 +75,9 @@ public final class ClickHouseHttpTransport {
         Authentication.basic(user, password),
         ConnectionProvider.create("clickhouse-http-transport"),
         null,
-        null);
+        null,
+        null,
+        RetryPolicy.defaultPolicy());
   }
 
   /**
@@ -79,7 +90,9 @@ public final class ClickHouseHttpTransport {
         authentication,
         ConnectionProvider.create("clickhouse-http-transport"),
         null,
-        null);
+        null,
+        null,
+        RetryPolicy.defaultPolicy());
   }
 
   /**
@@ -104,7 +117,9 @@ public final class ClickHouseHttpTransport {
         authentication,
         ConnectionProvider.create("clickhouse-http-transport"),
         responseTimeout,
-        null);
+        null,
+        null,
+        RetryPolicy.defaultPolicy());
   }
 
   /**
@@ -128,7 +143,68 @@ public final class ClickHouseHttpTransport {
         authentication,
         ConnectionProvider.create("clickhouse-http-transport"),
         responseTimeout,
-        connectTimeout);
+        connectTimeout,
+        null,
+        RetryPolicy.defaultPolicy());
+  }
+
+  /**
+   * The general entry point for configuring a custom trusted certificate for TLS handshakes against
+   * an {@code https://} {@code baseUrl} — e.g. a self-signed or internal-CA certificate a
+   * Kubernetes/service-mesh deployment (Tanzu and similar) commonly uses, which the JVM's default
+   * trust store has no way to know about. {@code trustedCertificatePem} is raw PEM-encoded
+   * certificate bytes (a single certificate or a chain); {@code null} via every other constructor,
+   * which means "use the JVM's default trust store" — see {@code ClickHouseHttpTransportTlsTest}
+   * for what a handshake against an untrusted self-signed certificate looks like in that case.
+   *
+   * <p>Passing a non-{@code null} certificate together with a {@code baseUrl} that isn't {@code
+   * https://} is rejected eagerly with {@link IllegalArgumentException}: there is no TLS handshake
+   * to trust a certificate for over plain HTTP, so silently ignoring the certificate would hide a
+   * configuration mistake rather than surface it. Wired from the R2DBC-facing {@code sslRootCert}
+   * connection option by {@code ClickHouseConnectionFactory.from}, modeled on r2dbc-postgresql's
+   * {@code sslRootCert} option (classpath-resource-or-filesystem-path resolution happens there, not
+   * here — this constructor only ever deals in already-resolved bytes, keeping this module free of
+   * classpath/filesystem concerns).
+   */
+  public ClickHouseHttpTransport(
+      final String baseUrl,
+      final Authentication authentication,
+      final @Nullable Duration responseTimeout,
+      final @Nullable Duration connectTimeout,
+      final byte @Nullable [] trustedCertificatePem) {
+    this(
+        baseUrl,
+        authentication,
+        ConnectionProvider.create("clickhouse-http-transport"),
+        responseTimeout,
+        connectTimeout,
+        trustedCertificatePem,
+        RetryPolicy.defaultPolicy());
+  }
+
+  /**
+   * The general entry point for configuring this transport's {@link RetryPolicy} — see that type's
+   * Javadoc for exactly what gets retried and why it's safe to do so unconditionally, regardless of
+   * whether a query is a {@code SELECT} or an {@code INSERT}. {@link RetryPolicy#defaultPolicy()}
+   * via every other constructor; pass {@link RetryPolicy#disabled()} to turn retrying off entirely.
+   * Wired from the R2DBC-facing {@code retryMaxAttempts}/{@code retryDelay} connection options by
+   * {@code ClickHouseConnectionFactory.from}.
+   */
+  public ClickHouseHttpTransport(
+      final String baseUrl,
+      final Authentication authentication,
+      final @Nullable Duration responseTimeout,
+      final @Nullable Duration connectTimeout,
+      final byte @Nullable [] trustedCertificatePem,
+      final RetryPolicy retryPolicy) {
+    this(
+        baseUrl,
+        authentication,
+        ConnectionProvider.create("clickhouse-http-transport"),
+        responseTimeout,
+        connectTimeout,
+        trustedCertificatePem,
+        retryPolicy);
   }
 
   private ClickHouseHttpTransport(
@@ -136,7 +212,13 @@ public final class ClickHouseHttpTransport {
       final Authentication authentication,
       final ConnectionProvider connectionProvider,
       final @Nullable Duration responseTimeout,
-      final @Nullable Duration connectTimeout) {
+      final @Nullable Duration connectTimeout,
+      final byte @Nullable [] trustedCertificatePem,
+      final RetryPolicy retryPolicy) {
+    if (trustedCertificatePem != null && !baseUrl.startsWith("https://")) {
+      throw new IllegalArgumentException(
+          "trustedCertificatePem can only be used with an https:// baseUrl, got: " + baseUrl);
+    }
     HttpClient client = HttpClient.create(connectionProvider).baseUrl(baseUrl);
     if (responseTimeout != null) {
       client = client.responseTimeout(responseTimeout);
@@ -144,8 +226,20 @@ public final class ClickHouseHttpTransport {
     if (connectTimeout != null) {
       client = client.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis());
     }
+    if (trustedCertificatePem != null) {
+      client =
+          client.secure(
+              spec ->
+                  spec.sslContext(
+                      Http11SslContextSpec.forClient()
+                          .configure(
+                              builder ->
+                                  builder.trustManager(
+                                      new ByteArrayInputStream(trustedCertificatePem)))));
+    }
     this.httpClient = client;
     this.authentication = authentication;
+    this.retryPolicy = retryPolicy;
   }
 
   /**
@@ -223,25 +317,39 @@ public final class ClickHouseHttpTransport {
    * subscription. This is best-effort, not a guarantee: if the kill request itself cannot reach the
    * server (e.g. the server is unreachable at all), the original query keeps running with no
    * further retry.
+   *
+   * <p><b>Retry.</b> A failure that happens strictly <em>before</em> the request has been fully
+   * sent — the same {@code doAfterRequest}-driven signal the cancellation/kill logic above already
+   * relies on — is retried according to this transport's {@link RetryPolicy}, since the server
+   * never received any bytes of that attempt and retrying it cannot make the query run twice
+   * server-side; see {@link RetryPolicy}'s Javadoc for the full reasoning and how this compares to
+   * client-v2's own default retry behavior. A failure after the request was sent is never retried
+   * here, for the same non-idempotency reason.
    */
   public Mono<ClickHouseQueryResponse> queryWithSummary(final ClickHouseQuery query) {
     final AtomicLong writtenRows = new AtomicLong();
     final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final Flux<ByteBuf> response =
+        httpClient
+            .headers(
+                headers -> {
+                  headers.set(FORMAT_HEADER, "RowBinaryWithNamesAndTypes");
+                  headers.set(QUERY_ID_HEADER, query.queryId());
+                  authentication.addTo(headers);
+                })
+            .doAfterRequest((request, connection) -> requestSent.set(true))
+            .post()
+            .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
+            .response(
+                (httpResponse, content) ->
+                    receiveOrFail(httpResponse, content, query.queryId(), writtenRows));
     final ByteBufFlux rawBody =
         ByteBufFlux.fromInbound(
-            httpClient
-                .headers(
-                    headers -> {
-                      headers.set(FORMAT_HEADER, "RowBinaryWithNamesAndTypes");
-                      headers.set(QUERY_ID_HEADER, query.queryId());
-                      authentication.addTo(headers);
-                    })
-                .doAfterRequest((request, connection) -> requestSent.set(true))
-                .post()
-                .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
-                .response(
-                    (response, content) ->
-                        receiveOrFail(response, content, query.queryId(), writtenRows)));
+            retryPolicy.isEnabled()
+                ? response.retryWhen(
+                    Retry.fixedDelay(retryPolicy.maxAttempts(), retryPolicy.delay())
+                        .filter(error -> !requestSent.get()))
+                : response);
     final ByteBufFlux body =
         ByteBufFlux.fromInbound(
             rawBody.doOnCancel(

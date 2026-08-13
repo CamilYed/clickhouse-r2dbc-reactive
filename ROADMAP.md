@@ -563,6 +563,61 @@ fixed, not just documented.
   `QueryCancellationAgainstRealClickHouseTest` was rewritten to prove the fixed behavior end to end
   (query now stops within ~5s of cancellation, not just "closes the connection and hopes"). Silent
   risk — fixed, with an honest best-effort caveat documented rather than claimed as a hard guarantee.
+- **No way to configure a custom trust store for `ssl=true`, so a self-signed or internal-CA
+  certificate — which real ClickHouse deployments commonly use — could not be connected to at all.**
+  Previously an open gap: a caller on a self-signed or internal-CA certificate — plausibly the more
+  common case for a database that usually isn't exposed to the public internet — got a hard
+  `SSLHandshakeException` with no way to work around it short of importing the certificate into the
+  whole JVM's default trust store (`-Djavax.net.ssl.trustStore`), outside the driver entirely. Fixed,
+  per explicit direction to make this "wygodne, elastyczne, latwo konfigurowalne" for a
+  Kubernetes/Tanzu-style deployment: `ClickHouseHttpTransport` gained a constructor overload
+  accepting raw `byte[]` PEM-encoded certificate bytes, wired into Reactor Netty via
+  `Http11SslContextSpec.forClient().configure(builder -> builder.trustManager(...))`; passing a
+  non-null certificate together with a non-`https://` base URL is rejected eagerly with
+  `IllegalArgumentException` rather than silently ignored. `ClickHouseConnectionFactory.from` exposes
+  this as a new `sslRootCert` `ConnectionFactoryOptions` (`ClickHouseConnectionFactoryProvider
+  .SSL_ROOT_CERT`), resolved first as a classpath resource then as a filesystem path — the same
+  two-step resolution r2dbc-postgresql's own `sslRootCert` option uses, chosen deliberately to match
+  a convention other R2DBC drivers already use rather than invent a new one; setting it without
+  `ssl=true` fails fast with `IllegalArgumentException`. Verified hermetically against a real
+  self-signed-certificate TLS server: `ClickHouseHttpTransportTlsTest
+  .shouldSucceedTheHandshakeWhenTheServerCertificateIsExplicitlyTrusted` proves the handshake now
+  succeeds and a real response comes back, in contrast to the existing untrusted-certificate test in
+  the same class. Silent risk (no supported way to reach a large class of real deployments) — fixed.
+- **No retry/reconnect policy of any kind — a transient connection-level failure (a dropped
+  request before it reached the server, a momentary "connection refused" while a server restarts)
+  surfaced directly to the caller with no automatic retry.** Researched client-v2's own retry
+  behavior first rather than guessing (checked our exact pinned version, `v0.9.0`, in source):
+  it retries by default (3 attempts) but *only* for failures classified as happening before a
+  response was received — `NoHttpResponse`, `ConnectTimeout`, `ConnectionRequestTimeout`,
+  `SocketTimeout` — with no retry based on ClickHouse's own server-side retryable error codes in
+  that version (`ServerException.isRetryable()` doesn't exist yet at `v0.9.0`). Explicit concern
+  raised during design: retrying an `INSERT` that actually reached the server risks applying it
+  twice (e.g. a unique-key collision on retry). Fixed with a narrower, more conservative rule than
+  client-v2's own: the new `RetryPolicy` (`transport-http`) retries a query only when the failure
+  happened *strictly before* the request had been fully sent — reusing the exact same
+  `doAfterRequest`-driven `requestSent` signal the `KILL QUERY`-on-cancel feature above already
+  relies on, rather than classifying by exception type the way client-v2 does. Since the server
+  never received any bytes of a pre-send-failed attempt, retrying it cannot make the query run
+  twice server-side by construction — no per-query idempotency flag, no SQL-shape guessing (`SELECT`
+  vs. `INSERT`), and no risk of the exact collision scenario raised during design. A failure after
+  the request was sent (including a mid-write socket timeout, which client-v2 *does* retry by
+  default — a deliberate divergence, chosen to be conservative) is never retried here. Configurable
+  via `RetryPolicy(maxAttempts, delay)` — `RetryPolicy.defaultPolicy()` (3 attempts, 50ms fixed
+  delay, matching client-v2's attempt count) applied via every `ClickHouseHttpTransport` constructor
+  that doesn't take one explicitly; `RetryPolicy.disabled()` turns it off. Wired into the R2DBC
+  bootstrap path as two independently-defaulted `ConnectionFactoryOptions`,
+  `ClickHouseConnectionFactoryProvider.RETRY_MAX_ATTEMPTS`/`RETRY_DELAY` (`retryMaxAttempts=0`
+  disables). Implemented via `Flux.retryWhen(Retry.fixedDelay(...).filter(...))`, gated on the same
+  `requestSent` flag; verified hermetically both ways —
+  `ClickHouseHttpTransportTest.shouldNotRetryAFailureThatHappensAfterTheRequestWasSent` (a
+  connection reset mid-response must not trigger a second request) and
+  `.shouldRetryAConnectionLevelFailureThatHappensBeforeTheRequestWasSentUntilItSucceeds` (a
+  real "nobody listening yet" port that only starts accepting after a delay, proving retries
+  actually bridge that gap). As a side effect, the best-effort `KILL QUERY` on cancel — which
+  reuses this same code path — now also benefits from pre-send retry (see the "known, documented"
+  entry on it below). Silent risk — fixed, deliberately narrower in scope than client-v2's own
+  default to close off the exact collision risk raised during design.
 
 ### Known, documented, safe limitations (not fixed — deliberate)
 
@@ -579,53 +634,48 @@ fixed, not just documented.
 - **Transactions/savepoints are unimplemented**, matching ClickHouse's HTTP interface having no real
   session affinity for its experimental transaction feature (see `ClickHouseConnection`'s class
   Javadoc for the full, checked-against-docs reasoning). Fails loudly.
-- **The best-effort `KILL QUERY` on cancellation only fires once per cancelled subscription and is
-  never retried** if that kill request itself fails for a transient reason (as opposed to a
-  privilege problem) — e.g. the server briefly unreachable at the exact moment of cancellation.
-  Logged at `WARN` either way; deliberately not retried, to avoid open-ended retry logic on what is
-  already a best-effort cleanup path (see the open retry-policy question below, which is a separate,
-  broader decision).
-- **`ssl=true` was completely untested — the TLS auto-negotiation half of that is now verified.**
-  `ClickHouseConnectionFactory.from` builds an `https://` base URL and hands it to Reactor Netty's
-  `HttpClient`, which its own docs say auto-applies a default `SslProvider` when the URI scheme is
-  `https`, with no explicit `.secure(...)` call needed — previously trusted on faith, not checked.
-  Fixed: `ClickHouseHttpTransportTlsTest` starts a real (self-signed-cert) TLS server via Reactor
-  Netty and connects `ClickHouseHttpTransport` to it unmodified over `https://`; since the client
-  doesn't trust that certificate, a successful handshake attempt is provable by the *kind* of
-  failure it gets — an `SSLException` somewhere in the cause chain, categorically different from
-  what would happen if the `https://` scheme were silently ignored and plaintext HTTP sent to a
-  TLS-only port instead (a hang, reset, or garbled response, not a clean TLS alert). This closes
-  the "does `https://` even trigger TLS" half of the question. It deliberately does **not** close
-  the other half — see below.
+- **The best-effort `KILL QUERY` on cancellation is not retried if it fails *after* being sent** —
+  e.g. the kill request reached the server but the response was lost, or the server itself rejects
+  it for a non-connection reason. Logged at `WARN` either way. Note this is now narrower than it
+  used to be: since `killQueryBestEffort` goes through the same `queryWithSummary` path as any other
+  query (see "Fixed this pass" above, `RetryPolicy`), a kill request that fails *before* being sent
+  — a transient pool/connect hiccup at the exact moment of cancellation — is now retried
+  automatically like any other query. Only the post-send case remains an intentionally
+  non-retried, best-effort cleanup path.
+- **`ssl=true` was completely untested — both the TLS auto-negotiation half and the trust half are
+  now verified.** `ClickHouseConnectionFactory.from` builds an `https://` base URL and hands it to
+  Reactor Netty's `HttpClient`, which its own docs say auto-applies a default `SslProvider` when the
+  URI scheme is `https`, with no explicit `.secure(...)` call needed — previously trusted on faith,
+  not checked. Fixed: `ClickHouseHttpTransportTlsTest` starts a real (self-signed-cert) TLS server via
+  Reactor Netty and connects `ClickHouseHttpTransport` to it unmodified over `https://`; since the
+  client doesn't trust that certificate, a successful handshake attempt is provable by the *kind* of
+  failure it gets — an `SSLException` somewhere in the cause chain, categorically different from what
+  would happen if the `https://` scheme were silently ignored and plaintext HTTP sent to a TLS-only
+  port instead (a hang, reset, or garbled response, not a clean TLS alert). A second test in the same
+  class, `shouldSucceedTheHandshakeWhenTheServerCertificateIsExplicitlyTrusted`, then proves the
+  positive case now that `sslRootCert`/`trustedCertificatePem` exists (see "Fixed this pass" above):
+  the same self-signed certificate, supplied as a trusted certificate, lets the handshake succeed and
+  a real response come back.
 
 ### Open gaps, not yet addressed
 
-- **No way to configure a custom trust store for `ssl=true`, so a self-signed or internal-CA
-  certificate — which real ClickHouse deployments commonly use — cannot be connected to at all.**
-  `ClickHouseHttpTransport` has no constructor accepting a custom `SslContext`/trust
-  store/`InsecureTrustManagerFactory`-equivalent; `ClickHouseConnectionFactory.from` has no
-  corresponding `ConnectionFactoryOptions` for it either. A caller whose ClickHouse server uses a
-  publicly-CA-signed certificate is unaffected (the JVM's default trust store already covers that
-  case, no driver code needed); a caller on a self-signed or internal-CA certificate — plausibly the
-  more common case for a database that usually isn't exposed to the public internet — gets a hard
-  `SSLHandshakeException` with no way to work around it short of importing the certificate into the
-  whole JVM's default trust store (`-Djavax.net.ssl.trustStore`), which is a real but heavyweight,
-  outside-the-driver workaround. Whether this driver should grow its own trust-configuration surface
-  (a custom `Option`, a constructor overload) is a genuine design decision, not a small fix — not
-  designed yet.
-- **No retry/reconnect policy of any kind.** A transient failure (connection reset, one dropped
-  request) surfaces directly to the caller as an error; there is no automatic retry, and none should
-  be added silently (retrying a non-idempotent `INSERT` automatically would be its own silent risk)
-  — but a documented, opt-in retry policy for idempotent reads is plausible future work, not designed
-  yet.
+- **No server-error-code-aware retry** — `RetryPolicy` (see "Fixed this pass" above) only retries
+  failures that happened before the request was sent; it does not retry based on ClickHouse's own
+  retryable server error codes the way client-v2's `ServerRetryable` cause (added after our pinned
+  `v0.9.0`) does. Deliberately deferred: our pinned client-v2's `ServerException` has no
+  `isRetryable()` yet to model this against, and doing it well would need to distinguish
+  retry-safe-regardless-of-idempotency server errors from ones that aren't — a genuine design
+  question, not a small addition. `RetryPolicy`'s record shape was chosen to leave room to grow a
+  second mode later without a breaking change.
 - **No way to configure the transport's HTTP connection-pool size (`maxConnections`) through the
   standard R2DBC `ConnectionFactoryOptions` bootstrap path** — only through constructing
   `ClickHouseHttpTransport` directly. `CONNECT_TIMEOUT` is now wired (this pass); pool sizing isn't a
   well-known R2DBC `Option`, so this would need a driver-specific custom `Option`. Configurability
   gap, not a correctness bug.
 
-Next to check (session close, 2026-08-13): decide on the `ssl=true` test approach, and reassess
-whether a retry policy belongs in this driver at all before designing one.
+Next to check (session close, 2026-08-13): the `integration-tests` module is still an empty
+scaffold, and Maven Central publishing/benchmarks haven't been started — see README's Roadmap
+section for the current punch-list.
 
 ## Non-functional requirements: logging, metrics, leaks
 

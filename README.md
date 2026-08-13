@@ -62,12 +62,12 @@ not been run against a production workload.
 Before relying on this in production, read
 [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) — an explicit,
 honestly-triaged list of what's fixed, what's a documented safe limitation, and what's still an
-open gap (currently: `ssl=true` correctly triggers TLS but there's no way to configure a custom
-trust store, so a self-signed or internal-CA certificate can't be connected to at all; and there's
-no retry/reconnect policy — see [Known limitations](#known-limitations) below for the
-cancellation/`KILL QUERY` caveat, which *is* handled but on a best-effort basis). That page is the
-actual source of truth for "is this safe to depend on today", kept up to date as things are found
-and fixed — treat this README as a summary of it, not the other way around.
+open gap (currently: no retry based on ClickHouse's own server-side retryable error codes — see
+[Known limitations](#known-limitations) below for what retry behavior *does* exist, the
+cancellation/`KILL QUERY` caveat, which *is* handled but on a best-effort basis, and the
+`sslRootCert` custom trust-store option). That page is the actual source of truth for "is this safe
+to depend on today", kept up to date as things are found and fixed — treat this README as a summary
+of it, not the other way around.
 
 Expect breaking changes at every stage before a `0.1.0` release.
 
@@ -99,21 +99,37 @@ their own queries without a separate `KILL QUERY` privilege grant. This is genui
 not a guarantee**: if the kill request itself fails — most plausibly the connecting user turns out
 to lack the privilege after all under a restricted RBAC setup, or the server is simply unreachable
 at that moment — the failure is logged at `WARN` and otherwise swallowed; it never surfaces on the
-caller's already-cancelled subscription, and the kill itself is not retried. Under a pattern like
-"timeout and retry" against a server where this occasionally fails, that residual risk (a query
-that keeps running despite being cancelled) still exists, just far less often than before this was
-implemented — watch for the `WARN` log if that matters to you.
+caller's already-cancelled subscription. Under a pattern like "timeout and retry" against a server
+where this occasionally fails, that residual risk (a query that keeps running despite being
+cancelled) still exists, just far less often than before this was implemented — watch for the
+`WARN` log if that matters to you.
 
 > [!NOTE]
-> **`ssl=true` works, but only against a publicly-CA-signed certificate.** TLS auto-negotiation
-> from the `https://` scheme is verified (see
+> **Every query is automatically retried, but only for failures that happen before any bytes were
+> sent to the server.** A connection-level hiccup (connect refused, a momentary pool exhaustion) is
+> retried up to `retryMaxAttempts` times (default 3, matching client-v2's own default retry count for
+> the same class of failure — verified against our pinned client-v2 version's source), each separated
+> by `retryDelay` (default 50ms). Deliberately scoped to pre-send failures only, regardless of whether
+> the query is a `SELECT` or an `INSERT`: since the server never received any bytes of a pre-send-
+> failed attempt, retrying it cannot make the query run twice server-side, so no idempotency guessing
+> is needed. A failure *after* the request was sent — a connection reset mid-response, a server error
+> — is never retried, precisely to avoid the risk of applying a non-idempotent statement twice. Set
+> `retryMaxAttempts=0` to disable entirely. See
+> [`RetryPolicy`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java)'s
+> Javadoc for the full reasoning.
+
+> [!NOTE]
+> **`ssl=true` supports a custom trust store via `sslRootCert`, for self-signed/internal-CA
+> certificates.** TLS auto-negotiation from the `https://` scheme is verified (see
 > [`ClickHouseHttpTransportTlsTest`](clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransportTlsTest.java)),
-> but there is currently no way to configure a custom trust store, so a self-signed or internal-CA
-> certificate — common for a database that usually isn't exposed to the public internet — cannot be
-> connected to. The only workaround today is importing the certificate into the JVM's own default
-> trust store (`-Djavax.net.ssl.trustStore`), outside this driver entirely. Whether to add
-> trust-store configuration to this driver is an open design question, tracked in
-> [ROADMAP.md's open gaps](ROADMAP.md#production-readiness-review).
+> and connecting to a server presenting a self-signed or internal-CA certificate — common for a
+> database that usually isn't exposed to the public internet — no longer requires importing anything
+> into the JVM's own default trust store. Set the `sslRootCert` connection option
+> (`ClickHouseConnectionFactoryProvider.SSL_ROOT_CERT`) to either a classpath resource path or a
+> filesystem path pointing at a PEM-encoded certificate; it's resolved as a classpath resource first,
+> then as a filesystem path, mirroring r2dbc-postgresql's own `sslRootCert` option — convenient for a
+> Kubernetes/Tanzu-style deployment where the certificate is mounted from a `Secret`/`ConfigMap`.
+> Requires `ssl=true`; setting it without `ssl=true` fails fast with `IllegalArgumentException`.
 
 ## What "fully reactive" means here
 
@@ -232,10 +248,6 @@ The execution-path analysis, transport spike, transport SPI, and first R2DBC con
 (the "Near-term"/"Later" items this section used to list) are all done; what's left before a
 `0.1.0` release is closing the open gaps below, not building new surface area:
 
-- Decide whether `ssl=true` should grow a way to configure a custom trust store, for self-signed/
-  internal-CA certificates (TLS auto-negotiation itself is now verified — see
-  [Known limitations](#known-limitations))
-- Decide whether a retry/reconnect policy belongs in this driver at all before designing one
 - Fill in `clickhouse-r2dbc-reactive-integration-tests` — the module exists but is still an empty
   scaffold; whole-driver black-box coverage today lives inside `connector`'s own
   `*AgainstRealClickHouseTest` classes instead

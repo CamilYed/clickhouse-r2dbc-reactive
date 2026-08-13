@@ -5,10 +5,43 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.NoSuchOptionException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 class ClickHouseConnectionFactoryTest {
+
+  // A syntactically valid, self-signed X.509 certificate (generated once via `openssl req -x509`,
+  // not tied to any real host) - Netty's SslContextBuilder.trustManager(...) parses its input
+  // eagerly at construction time (see ClickHouseHttpTransport's constructor), so placeholder text
+  // is rejected immediately with IllegalArgumentException rather than accepted and only failing
+  // later at handshake time. A real certificate is needed here purely to prove the resolution
+  // (classpath resource / filesystem path) reaches ClickHouseHttpTransport correctly - whether that
+  // certificate is actually trusted by a real server is covered separately by
+  // ClickHouseHttpTransportTlsTest.shouldSucceedTheHandshakeWhenTheServerCertificateIsExplicitlyTrusted.
+  private static final String A_VALID_CERTIFICATE_PEM =
+      """
+      -----BEGIN CERTIFICATE-----
+      MIIC/zCCAeegAwIBAgIUS4P/jb+igpCdsGqRz8WVGlB6N1IwDQYJKoZIhvcNAQEL
+      BQAwDzENMAsGA1UEAwwEdGVzdDAeFw0yNjA4MTMwODA0NDhaFw0zNjA4MTAwODA0
+      NDhaMA8xDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+      AoIBAQDv9INFKnn2FxMBovVBcFOefd+iLIE1CCJjdPlB2IG+Gq6xJoGiLOzKlurl
+      9DHnp8j+uOR0+P+HZAlHHLofpcwuvNywVGsL/oMezwfR7xtSbfpltJXjwu6SmgIl
+      /W+Ut6H20CHkDboQMGq1qd7VjjMpZhtXSif5m6KEdpHT4LCIWOc1H0HSSzVOn8VQ
+      S21InEKwExQyfOkTbPj3MFsSH+K7KfO2DmcecGwRNy+yiKYXj/k6fgBSZ+IGP6Ec
+      OSpFeOznbTcdtzsAwXZnLxmpPg7MPF2AHY5Q7Pr48dypCuUHfyyjG2yOCIpSwqf4
+      hceskIdX+A2IKahG9ps35D+0ZqYtAgMBAAGjUzBRMB0GA1UdDgQWBBSSjA7RLoiW
+      0okfnKCKQud3IKzNcjAfBgNVHSMEGDAWgBSSjA7RLoiW0okfnKCKQud3IKzNcjAP
+      BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQA7tdOMq3LhMi0kawzn
+      +L4QFpdbNLhdECdElCihsUh29HSFE2R/TIXJoWlN86fl/vRYnITk0pwyxg8zUuHg
+      c0QiEQeEl3HhvblA5H3S/8ZspUVlL+ot+oAMdmd8pAXOLfZwZCS+vZfysUEeYcr/
+      95VKlBtLluHGeWul+l09qgOzmXHEvcc+jMwcmr63rYNig/4CqKDXn3n/GhmzfSMe
+      cunT+sAupKyIECxrXKc8xrJ9vUbecc1BYeC7y7v9z7D6Swdm93QIIJw1fLJi1z3m
+      HpPObHAFTYvukdVlBMSz2y5s8Nx5Ao9bLSljLfl0BSmnDkjAtW0LmAFMng0FU7Qa
+      VF9l
+      -----END CERTIFICATE-----
+      """;
 
   @Test
   void shouldBuildAFactoryFromOptionsWithoutTouchingTheNetwork() {
@@ -52,5 +85,123 @@ class ClickHouseConnectionFactoryTest {
     // when / then
     assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
         .isInstanceOf(NoSuchOptionException.class);
+  }
+
+  @Test
+  void shouldRejectASslRootCertOptionWhenSslIsNotEnabled() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.SSL_ROOT_CERT, "test-ssl-root-cert.pem")
+            .build();
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("ssl=true");
+  }
+
+  @Test
+  void shouldBuildAFactoryWhenSslRootCertIsAClasspathResource() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ConnectionFactoryOptions.SSL, true)
+            .option(ClickHouseConnectionFactoryProvider.SSL_ROOT_CERT, "test-ssl-root-cert.pem")
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldBuildAFactoryWhenSslRootCertIsAFilesystemPath() throws Exception {
+    // given
+    final Path certificateFile = Files.createTempFile("ssl-root-cert", ".pem");
+    certificateFile.toFile().deleteOnExit();
+    Files.writeString(certificateFile, A_VALID_CERTIFICATE_PEM);
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ConnectionFactoryOptions.SSL, true)
+            .option(
+                ClickHouseConnectionFactoryProvider.SSL_ROOT_CERT,
+                certificateFile.toAbsolutePath().toString())
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldRejectASslRootCertThatIsNeitherAClasspathResourceNorAFile() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ConnectionFactoryOptions.SSL, true)
+            .option(
+                ClickHouseConnectionFactoryProvider.SSL_ROOT_CERT, "does-not-exist-anywhere.pem")
+            .build();
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("does-not-exist-anywhere.pem");
+  }
+
+  @Test
+  void shouldAcceptCustomRetryMaxAttemptsAndDelay() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.RETRY_MAX_ATTEMPTS, 5)
+            .option(ClickHouseConnectionFactoryProvider.RETRY_DELAY, Duration.ofMillis(200))
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldAcceptRetryMaxAttemptsZeroToDisableRetrying() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.RETRY_MAX_ATTEMPTS, 0)
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldRejectANegativeRetryMaxAttempts() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.RETRY_MAX_ATTEMPTS, -1)
+            .build();
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 }

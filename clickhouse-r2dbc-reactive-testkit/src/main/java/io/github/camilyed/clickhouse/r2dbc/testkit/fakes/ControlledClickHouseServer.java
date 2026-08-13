@@ -24,6 +24,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
   private final AtomicBoolean requestReceived;
   private final AtomicBoolean connectionClosed;
   private final AtomicInteger activeConnections;
+  private final AtomicInteger totalRequestsReceived;
   private final AtomicReference<HttpHeaders> receivedHeaders;
   private final AtomicReference<String> receivedUri;
 
@@ -32,12 +33,14 @@ public final class ControlledClickHouseServer implements AutoCloseable {
       final AtomicBoolean requestReceived,
       final AtomicBoolean connectionClosed,
       final AtomicInteger activeConnections,
+      final AtomicInteger totalRequestsReceived,
       final AtomicReference<HttpHeaders> receivedHeaders,
       final AtomicReference<String> receivedUri) {
     this.server = server;
     this.requestReceived = requestReceived;
     this.connectionClosed = connectionClosed;
     this.activeConnections = activeConnections;
+    this.totalRequestsReceived = totalRequestsReceived;
     this.receivedHeaders = receivedHeaders;
     this.receivedUri = receivedUri;
   }
@@ -72,6 +75,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean requestReceived = new AtomicBoolean(false);
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
@@ -84,6 +88,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         (request, response) -> {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
+                          totalRequestsReceived.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
                           receivedUri.set(request.uri());
                           response.withConnection(
@@ -105,6 +110,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         requestReceived,
         connectionClosed,
         activeConnections,
+        totalRequestsReceived,
         receivedHeaders,
         receivedUri);
   }
@@ -119,6 +125,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean requestReceived = new AtomicBoolean(false);
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
@@ -131,6 +138,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         (request, response) -> {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
+                          totalRequestsReceived.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
                           receivedUri.set(request.uri());
                           response.withConnection(
@@ -152,6 +160,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         requestReceived,
         connectionClosed,
         activeConnections,
+        totalRequestsReceived,
         receivedHeaders,
         receivedUri);
   }
@@ -160,6 +169,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean requestReceived = new AtomicBoolean(false);
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
@@ -172,6 +182,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         (request, response) -> {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
+                          totalRequestsReceived.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
                           receivedUri.set(request.uri());
                           response.withConnection(
@@ -192,6 +203,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         requestReceived,
         connectionClosed,
         activeConnections,
+        totalRequestsReceived,
         receivedHeaders,
         receivedUri);
   }
@@ -201,6 +213,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean requestReceived = new AtomicBoolean(false);
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
@@ -213,6 +226,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         (request, response) -> {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
+                          totalRequestsReceived.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
                           receivedUri.set(request.uri());
                           response.withConnection(
@@ -230,6 +244,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         requestReceived,
         connectionClosed,
         activeConnections,
+        totalRequestsReceived,
         receivedHeaders,
         receivedUri);
   }
@@ -243,6 +258,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean requestReceived = new AtomicBoolean(false);
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
@@ -255,6 +271,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         (request, response) -> {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
+                          totalRequestsReceived.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
                           receivedUri.set(request.uri());
                           response.withConnection(
@@ -275,6 +292,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         requestReceived,
         connectionClosed,
         activeConnections,
+        totalRequestsReceived,
         receivedHeaders,
         receivedUri);
   }
@@ -285,6 +303,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
     final AtomicBoolean requestReceived = new AtomicBoolean(false);
     final AtomicBoolean connectionClosed = new AtomicBoolean(false);
     final AtomicInteger activeConnections = new AtomicInteger(0);
+    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
     final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
     final AtomicReference<String> receivedUri = new AtomicReference<>();
     final DisposableServer started =
@@ -297,6 +316,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                         (request, response) -> {
                           requestReceived.set(true);
                           activeConnections.incrementAndGet();
+                          totalRequestsReceived.incrementAndGet();
                           receivedHeaders.set(request.requestHeaders());
                           receivedUri.set(request.uri());
                           response.withConnection(
@@ -320,6 +340,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
         requestReceived,
         connectionClosed,
         activeConnections,
+        totalRequestsReceived,
         receivedHeaders,
         receivedUri);
   }
@@ -337,6 +358,11 @@ public final class ControlledClickHouseServer implements AutoCloseable {
   /** How many connections to this server are currently open. */
   public int activeConnectionCount() {
     return activeConnections.get();
+  }
+
+  /** How many requests this server has received in total since it started. */
+  public int totalRequestsReceived() {
+    return totalRequestsReceived.get();
   }
 
   /**
