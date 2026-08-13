@@ -24,14 +24,19 @@ To run one benchmark class only:
 
 ## Status
 
-First slice only: `PointQueryBenchmark` (Level 1 — raw transport + decode, this driver's
-`ClickHouseHttpTransport`/`RowBinaryDecoder` vs client-v2's `Client`/`ClickHouseBinaryFormatReader`),
-proving the module/dataset/comparison-level design end to end and run for real (see ROADMAP.md's
-Phase 5 section for the first numbers). The remaining query shapes (trivial query, full table scan,
-wide multi-type decode, aggregation, INSERT), the reactive-vs-blocking concurrency burst scenario,
-and the backpressure/pool-saturation/cancellation benchmarks are designed in ROADMAP.md but not yet
-implemented — same three comparison levels, same `BenchmarkEnvironment`/dataset-table pattern this
-first class establishes.
+Two Level 1 classes so far, both run for real against Docker/ClickHouse (see ROADMAP.md's Phase 5
+section for numbers):
+
+- `PointQueryBenchmark` — a real single-row lookup against a seeded table.
+- `TrivialQueryBenchmark` — `SELECT 1`, no table at all; isolates protocol/connection overhead from
+  the storage-engine lookup `PointQueryBenchmark` also pays for.
+
+Next up (recommended order, per ROADMAP.md's Phase 5 "Recommended next benchmarks"):
+`StreamingScanBenchmark` (TTFR/TTLR/rows-per-second/bytes-per-second over a large streamed result —
+the highest-value benchmark for this project's actual architecture). After that: wide multi-type
+decode, aggregation, INSERT, the reactive-vs-blocking concurrency burst scenario, and the
+backpressure/pool-saturation/cancellation benchmarks — all designed in ROADMAP.md, not yet built.
+Same `BenchmarkEnvironment`/dataset-table pattern `PointQueryBenchmark` established.
 
 **Fairness fixes applied after the first run** (a real run surfaced real gaps — not designed away
 in the abstract): the ClickHouse image is now version-pinned rather than `latest`; client-v2 now

@@ -1130,15 +1130,55 @@ under-load claim the architecture is actually designed for — that needs the co
 benchmark (not built yet) to test directly, not inferred from a serial point-query benchmark.
 Treat this table the same way as before: one short single-fork run, not a published claim.
 
-**Recommended next benchmarks, in priority order** (per the same review, cross-checked against this
-section's own Level 1/2/3 design — nothing here contradicts what was already planned, it sharpens
-the order): `TrivialQueryBenchmark` (`SELECT 1` — the protocol/connection floor with zero storage-
-engine effects, smaller and simpler than `PointQueryBenchmark`) and `StreamingScanBenchmark`
-(`SELECT ... FROM numbers(10_000_000)`-shaped, measuring TTFR/TTLR/rows-per-second/bytes-per-second/
-allocated-bytes-per-row) before the remaining Level 1 shapes — both named explicitly in this
-section's original design, now sequenced first because they exercise this driver's actual
-architectural reasons for existing (streaming, backpressure, bounded memory) more directly than one
-more point-query variant would.
+### `TrivialQueryBenchmark`, run for real (2026-08-13)
+
+`SELECT 1`, no table — isolates protocol/connection overhead from the storage-engine lookup
+`PointQueryBenchmark` also pays for. Same fork/warmup/measurement shape as the runs above; run
+alongside a repeat of `PointQueryBenchmark` in the same invocation (confirmed still green, same
+5–7% mean/median edge as the fairness-fixed run above — not re-tabulated here since nothing about
+it changed).
+
+| | client-v2 | this driver | this driver's edge |
+| --- | --- | --- | --- |
+| mean | 591.1 µs | 548.5 µs | 7.2% lower |
+| p50 | — | — | ≈6.3% lower |
+| p90 | — | — | ≈10.6% lower |
+| p95 | — | — | ≈10.1% lower |
+| p99 | — | — | ≈7.2% lower |
+| p99.9 | — | — | ≈31.6% lower |
+| p99.99 | 2586.8 µs | 4650.7 µs | **higher**, not lower |
+| p100 (max) | 15106.0 µs | 8847.4 µs | 41.4% lower |
+| sample count (30s) | 50,699 (≈1690 ops/s) | 54,652 (≈1822 ops/s) | ≈7.8% higher throughput |
+
+Same shape as `PointQueryBenchmark`: this driver reads faster from the mean through p99.9, and the
+gap widens sharply at p99.9 (31.6%, the widest yet). Two honest caveats, not smoothed over:
+
+- **p50/p90/p95/p99/p99.9 rows are percentage deltas only** — the absolute µs figures from this run
+  weren't retained, only the computed percentages against client-v2. Re-run and capture raw JSON
+  output (`build/results/jmh/`) before citing this table anywhere more permanent than this doc.
+- **p99.99 flips against this driver, in both benchmarks run so far.** `PointQueryBenchmark`'s
+  re-run above already showed this driver worse at p99.99/p100; here it's worse at p99.99 but
+  better again at p100/max. With only ~1 sample in 10,000–50,000 landing in that bucket, this is
+  far more likely sampling noise than a real regression — but it's now shown up twice, not once, so
+  it's a "watch, don't ignore" finding rather than a one-off. Worth a real look once
+  `StreamingScanBenchmark`/`ConcurrencyBenchmark` exist and a profiler (JMH's own `-prof gc`/async-
+  profiler) can attribute it to GC, connection-pool churn, or something else, rather than guessing
+  from percentile tables alone.
+
+One environment detail surfaced in this run's logs, not yet acted on: this driver's Reactor Netty
+stack logs `Unable to load io.netty.resolver.dns.macos.MacOSDnsServerAddressStreamProvider` on
+macOS (missing `netty-resolver-dns-native-macos`, a native optional dependency). Deliberately not
+added yet — this benchmark resolves `localhost` only, which doesn't hit the DNS resolver Netty is
+warning about, so there's no concrete reason yet to believe this warning explains the p99.99
+finding above. Worth revisiting with actual profiling evidence before spending a dependency-version
+matching exercise on a hunch.
+
+**Recommended next benchmark:** `StreamingScanBenchmark` (`SELECT ... FROM
+numbers(10_000_000)`-shaped, measuring TTFR/TTLR/rows-per-second/bytes-per-second/allocated-bytes-
+per-row) — both `TrivialQueryBenchmark` and the `PointQueryBenchmark` fairness pass are done now, so
+this is next in this section's original priority order. After that: `ConcurrencyBenchmark` (Level
+3, reactive-vs-blocking under concurrent load) — the architecturally most important benchmark for
+this driver, per this section's original design.
 
 ## Phase 6 — Spring WebFlux interop demo (2026-08-13, reworked after a genuine BindMarkersFactory finding — pending green confirmation)
 
