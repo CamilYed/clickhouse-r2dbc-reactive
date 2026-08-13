@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: clickhouse-r2dbc-reactive-webflux-demo
+  # No default here on purpose: point this at a real ClickHouse server before running `bootRun`,
+  # e.g. via `SPRING_R2DBC_URL=r2dbc:clickhouse://localhost:8123 ./gradlew :examples:spring-boot-webflux-demo:bootRun`
+  # (plus SPRING_R2DBC_USERNAME/SPRING_R2DBC_PASSWORD if the server requires auth). Tests wire this
+  # dynamically against a Testcontainers-started server instead - see
+  # OrderEventControllerAgainstRealClickHouseTest.
+  r2dbc:
+    url: ${SPRING_R2DBC_URL:}

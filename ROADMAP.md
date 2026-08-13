@@ -35,7 +35,7 @@ rest of this roadmap.
 | `testkit` | `core` | Shared test infrastructure, used by every other module's tests: (a) `ControlledClickHouseServer` + `ClickHouseWireFixtures` — a fake HTTP endpoint for deterministic wire-level scenarios; (b) `BaseClickHouseIntegrationTest` + an Ability-pattern DSL for real ClickHouse via Testcontainers (create data, clean up between tests). | Yes (it's a test-support *library*, other people writing ClickHouse R2DBC code could depend on it too — same reason JUnit/AssertJ/Testcontainers themselves are ordinary published artifacts) |
 | `integration-tests` | `connector`, `testkit` | Whole-driver, black-box tests: real ClickHouse via Testcontainers, exercised **only** through the public R2DBC SPI (`ConnectionFactory.create(...)` and onward) — never through `core`/`transport-http` internals. This is "one module where we run the whole thing and test it," as its own module so its (slow, Docker-backed) suite doesn't sit inside `connector`'s fast build loop. Test-only: no `src/main`. | No |
 | `benchmarks` *(not built yet — Phase 5)* | `connector` | JMH/Gatling-style throughput and latency measurement against real ClickHouse. Named here so the eventual module boundary is decided in advance; not scaffolded until Phase 5 actually starts, per [CLAUDE.md](CLAUDE.md#performance-testing). | No |
-| `examples/spring-boot-webflux-demo` *(not built yet — Phase 6)* | `connector` | A runnable Spring Boot + WebFlux app proving the driver works end to end through Spring's R2DBC integration, mirroring [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)'s demo. Not scaffolded until Phase 3 (R2DBC SPI) is far enough along to have something to demo. | No |
+| `examples/spring-boot-webflux-demo` | `connector` (runtime-only) | A runnable Spring Boot 4.1 + WebFlux app proving the driver works end to end through Spring's R2DBC integration (`DatabaseClient`, raw SQL only — `R2dbcEntityTemplate`/`.bind(...)` don't work against this driver yet, see Phase 6), mirroring [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)'s demo. Also proves, with a real test, that Spring's declarative transaction machinery fails clearly over this driver (see Phase 6). | No |
 
 Why `integration-tests` is its own module and not just more tests inside `connector`: two
 different things were both called "integration tests" before, and conflating them was the actual
@@ -760,9 +760,10 @@ vendor extension) — see "Fixed this pass" above. Order agreed for what's left:
    untested directly), and a first attempt at `LowCardinality` (currently not attempted at all).
 2. A short, mostly-documentation Phase 4 sign-off pass — the tests already exist, this is writing
    down which named test proves which "fully reactive" property.
-3. `examples/spring-boot-webflux-demo` (Phase 6) — a real Spring Boot + WebFlux app through
-   `DatabaseClient`/`R2dbcEntityTemplate`, explicitly requested as part of "this has to be really
-   well tested" rather than left for after publishing.
+3. `examples/spring-boot-webflux-demo` (Phase 6) — a real Spring Boot + WebFlux app through a
+   hand-built `DatabaseClient`/`ConnectionPool` (`R2dbcEntityTemplate` turned out not to work
+   against this driver — see Phase 6's write-up), explicitly requested as part of "this has to be
+   really well tested" rather than left for after publishing.
 4. Phase 5 (benchmarks) — still gated behind Phase 4 per CLAUDE.md's Performance testing section;
    the sign-off pass in step 2 is what unlocks it, not a calendar date.
 5. Maven Central publication — last, once the above hold.
@@ -814,25 +815,156 @@ signed off. When it starts:
 - Tooling choice (JMH for micro-benchmarks, Gatling/similar for load scenarios) decided at that
   point — nothing added to the build now.
 
-## Phase 6 (later) — Spring WebFlux interop demo
+## Phase 6 — Spring WebFlux interop demo (2026-08-13, reworked after a genuine BindMarkersFactory finding — pending green confirmation)
 
-Explicitly deferred until Phase 3 has a working R2DBC SPI to demo. Goal: prove the driver works
-unmodified through Spring's own R2DBC integration (`DatabaseClient`/`R2dbcEntityTemplate`/
-`ReactiveTransactionManager`) under a current Spring Boot/Spring Framework line (Boot 4 / Framework
-7 at the time of writing — reconfirm the exact version when this phase actually starts, since it's
-a moving target). Spring discovers our driver purely via the standard R2DBC
-`ConnectionFactoryProvider` SPI (`META-INF/services`), the same mechanism every other R2DBC driver
-uses — no Spring dependency belongs in `core`/`transport-http`/`connector` themselves.
+Goal: prove the driver works through Spring's own R2DBC integration (`DatabaseClient`,
+`ReactiveTransactionManager`) under the current Spring Boot/Spring Framework line — confirmed
+against Spring Boot 4.1.0 (Framework 7)'s own managed dependency coordinates page at implementation
+time: Boot 4.1.0 manages `r2dbc-spi` at exactly `1.0.0.RELEASE`, the same version this driver is
+pinned to, and `r2dbc-pool` at `1.0.2.RELEASE` — no version conflict to work around. Spring
+discovers our driver purely via the standard R2DBC `ConnectionFactoryProvider` SPI (`META-INF/
+services`), the same mechanism every other R2DBC driver uses — no Spring dependency belongs in
+`core`/`transport-http`/`connector` themselves; the new module depends on
+`clickhouse-r2dbc-reactive-connector` as `runtimeOnly`, and its own code never imports a single
+class from it.
 
-- New module, `examples/spring-boot-webflux-demo` (not published, not part of the driver's public
-  surface) — same role as
-  [`spring-reactive-transaction-boundary`'s demo module](https://github.com/CamilYed/spring-reactive-transaction-boundary/tree/main/examples/spring-boot-webflux-r2dbc-ddd-demo).
-- Proves: connection pooling via `R2dbcPoolAutoConfiguration`-style setup, transaction-manager
-  wiring (documenting explicitly where ClickHouse's own transaction semantics diverge from a
-  typical RDBMS — this is exactly the kind of gap Phase 3 already commits to documenting rather
-  than silently glossing over), and a real WebFlux endpoint streaming query results end to end.
+The original design (first pass, since superseded) had `EventController` going through
+`R2dbcEntityTemplate`'s object mapping. Building that surfaced a genuine, driver-wide gap rather
+than a demo bug — worth recording in detail since it isn't obvious and will bite the next person
+who tries the same thing:
+
+- Spring R2DBC resolves a `BindMarkersFactory` for `DatabaseClient` bean construction via
+  `BindMarkersFactoryResolver`, which only recognizes a small hardcoded driver list (Postgres,
+  MySQL, MariaDB, SQL Server, H2 — see Spring Framework's own `r2dbc.adoc`, "Currently supported
+  databases"). ClickHouse isn't on it, so left to Spring Boot's own auto-configuration,
+  `DatabaseClient` bean creation fails outright with `IllegalStateException: Cannot determine a
+  BindMarkersFactory for ClickHouse` before a single query ever runs.
+- First fix attempt: a `ClickHouseBindMarkersFactoryProvider` implementing
+  `BindMarkersFactoryResolver.BindMarkerFactoryProvider`, registered via `META-INF/
+  spring.factories`. This unblocked bean construction, but not the deeper problem below — and was
+  later removed once `R2dbcConfiguration` started building `DatabaseClient` explicitly, which
+  sidesteps `BindMarkersFactoryResolver` entirely (a self-defined bean means Spring Boot's own
+  `@ConditionalOnMissingBean(DatabaseClient.class)` bean method never runs).
+- The deeper, still-unresolved problem: even with a constructible `DatabaseClient`, Spring's
+  `.bind()`/named-parameter/`R2dbcEntityTemplate` machinery generates SQL text using whatever
+  placeholder syntax the `BindMarkersFactory` emits (e.g. `"?"`), then calls `Statement.bind(index,
+  value)`. This driver's `ClickHouseStatement.bind(int index, Object value)` maps `index` to the
+  Nth **declared `{name:Type}` parameter** found via `ClickHouseQuery.parameterNamesIn(sql)`.
+  Spring-generated SQL containing `"?"` placeholders has zero such declared parameters, so
+  `nameAt(index)` throws `IndexOutOfBoundsException` at query-*execution* time. This is a genuine
+  architecture mismatch: ClickHouse's own parameterized-query mechanism requires the parameter's
+  type declared inline in the SQL text, which `BindMarkersFactory` has no way to supply (it only
+  ever produces placeholder text, with no type information available at marker-generation time).
+  **Conclusion**: Spring Data R2DBC's `.bind()`/named-parameter/`R2dbcEntityTemplate` object-mapping
+  layer is not currently usable with this driver, independent of the `BindMarkersFactory`
+  construction issue above. Closing this gap "for real" would mean either a driver-side rewrite of
+  bound SQL to inline literal values before sending (defeats the purpose of parameterized queries,
+  reintroduces injection-shaped code paths) or a Spring-side extension point this driver doesn't
+  currently have access to (Spring's binding SPI has no hook for a driver to supply type
+  information back to the marker factory). Left as a documented limitation, not attempted further,
+  per this phase's scope.
+
+Current design, after two rounds of rework — first replacing `R2dbcEntityTemplate` with raw
+`DatabaseClient` (the finding above), then restructuring the whole module into a small
+Ports & Adapters layout around a more realistic "order events" domain instead of a generic
+string-bag CRUD table, explicitly requested as part of "this should be a real project, not dumb
+CRUD, covering as much of the driver as reasonably fits":
+
+- New module, `examples/spring-boot-webflux-demo` (not published, added to both
+  `settings.gradle.kts` and `build.gradle.kts`'s `nonPublishedModules`) — same role as
+  [`spring-reactive-transaction-boundary`'s demo module](https://github.com/CamilYed/spring-reactive-transaction-boundary/tree/main/examples/spring-boot-webflux-r2dbc-ddd-demo)
+  (that repo's exact contents weren't fetchable from this session — `github.com`/
+  `raw.githubusercontent.com` requests came back empty — so this module's structure is this
+  project's own take on the same Ports & Adapters idea already documented in CLAUDE.md's
+  Architecture section, applied one layer up from the driver itself, rather than a line-for-line
+  mirror).
+- Three packages, mirroring the driver's own `core`/`transport-http`/`connector` split one layer up:
+  `domain` (`OrderEvent`, `OrderStatus`, `CategoryTotal`, and the `OrderEventRepository` port — an
+  interface, no Spring/SQL types in sight), `infrastructure` (`DatabaseClientOrderEventRepository`,
+  the port's only adapter and the sole place SQL/`Row.get` decoding happens;
+  `OrderEventsSchemaInitializer`; `R2dbcConfiguration`), `api` (`OrderEventController`, depending
+  only on the `OrderEventRepository` port, never on `DatabaseClient`/SQL directly).
+- `R2dbcConfiguration` (in `infrastructure`): builds `ConnectionFactory`, `DatabaseClient`, and
+  `ReactiveTransactionManager` beans by hand rather than through Spring Boot's R2DBC
+  auto-configuration — modeled on a hand-rolled `ConnectionFactory`/pool wiring class from one of
+  the user's own production Spring Boot services, adapted to this driver and this project's style
+  (no Lombok, `final`-by-default, package-private, Javadoc on the class and each `@Bean` method).
+  Wraps the base `ConnectionFactory` in an `r2dbc-pool` `ConnectionPool` unless
+  `spring.r2dbc.pool.enabled=false`, fail-fast validates the pool settings
+  (`initial-size`/`max-size`/`min-idle` sanity checks) before constructing anything, rejects a
+  `driver=pool` URL (this configuration already builds its own pool), and logs a startup summary of
+  what was configured. This is what makes `DatabaseClient` bean construction succeed at all (see
+  the finding above) and is also, independently, a more realistic demo of what an application's
+  actual R2DBC wiring tends to look like than relying entirely on Boot's defaults.
+- `order_events` table/`OrderEvent` domain type: `id`/`customer_id` (`UUID`), `category`
+  (`LowCardinality(String)`), `tags` (`Array(String)`), `amount` (`Decimal(18,4)`, not nullable),
+  `discount` (`Nullable(Decimal(18,4))`), `status` (`Enum8('PLACED'=1,'PAID'=2,'CANCELLED'=3)`),
+  `client_ip` (`IPv4`), `occurred_at` (`DateTime64(3)`) — chosen specifically to exercise a broad,
+  realistic slice of this driver's decode surface through Spring's `DatabaseClient`/`Row`, not the
+  trivial string/timestamp pair the first pass had. The full type matrix (every integer width,
+  `Map`, `Tuple`, `Nested`, `Nullable` in general, ...) is already covered at the wire level by
+  `transport-http`'s `RealWorldTableAgainstRealClickHouseTest`, so this demo isn't re-proving that;
+  it's proving a realistic slice survives the extra `DatabaseClient`/`Row` hop, both present and
+  absent (`OrderEventControllerAgainstRealClickHouseTest` covers both a fully-populated event and
+  one with an empty tags array and `NULL` discount).
+- Two real, driver-wide decode gotchas surfaced building `DatabaseClientOrderEventRepository`,
+  documented in its own Javadoc rather than hidden behind a silently-"working" helper:
+  - `count()`'s `UInt64` result is explicitly cast to `UInt32` server-side before decoding: this
+    driver decodes ClickHouse `UInt64` as `BigInteger` (verified against client-v2's pinned
+    `BinaryStreamReader` source, same as core's other type-coverage findings), and
+    `ClickHouseRow.get` only casts the already-decoded value rather than widening it — asking for
+    `Long.class` against a raw `UInt64` column throws `ClassCastException`.
+  - `status` (`Enum8`) decodes as client-v2's own internal `EnumValue` type, not a plain `String` —
+    `Row.get(name, String.class)` throws `ClassCastException` the same way `Long.class` does for
+    `UInt64`; reading it means asking for `Object.class` and calling `toString()` on the result
+    (confirmed: `EnumValue.toString()` returns the member name, e.g. `"PLACED"`), then parsing that
+    into a domain enum. **Worth flagging as a possible future driver improvement** — decoding
+    `Enum8`/`Enum16` as a plain `String` directly, rather than leaking an internal client-v2 type
+    through the public R2DBC `Row` surface, would be a small, real quality-of-life fix for any
+    consumer, not just Spring ones. Not attempted in this pass; noted here so it isn't lost.
+- `GET /order-events/analytics/by-category`: a real `GROUP BY category`/`sum(amount)` aggregation
+  query, not a per-row lookup — the point of this demo not being "just CRUD." ClickHouse is built
+  for exactly this kind of query, and it round-trips through `DatabaseClient` the same way a plain
+  `SELECT *` does; `sum(Decimal(18,4))` still decodes as `BigDecimal`, same decode path as any
+  other `Decimal`-family type.
+- `TransactionManagerDivergenceTest`: proves, with a real test rather than only prose, that wiring
+  `R2dbcTransactionManager`/`TransactionalOperator` over this driver fails clearly with
+  `UnsupportedOperationException` — `ClickHouseConnection.beginTransaction()` always errors (see
+  that class's own Javadoc). The application *does* register a real `ReactiveTransactionManager`
+  bean (`R2dbcConfiguration.transactionManager`), and the test autowires it rather than constructing
+  one by hand — proving the actually-configured app fails this way, not a scratch instance built
+  inside the test. Directly fulfills this phase's "documenting explicitly where ClickHouse's own
+  transaction semantics diverge from a typical RDBMS" goal with proof, not just words.
+- `OrderEventControllerAgainstRealClickHouseTest`: full round trip through a real embedded WebFlux
+  server (`@SpringBootTest(webEnvironment = RANDOM_PORT)` + `WebTestClient`) against a real
+  ClickHouse server (Testcontainers, container started eagerly in a `static` initializer rather
+  than via `@Container`/`@Testcontainers` — see the test's own Javadoc for why relying on JUnit
+  extension ordering between `@Testcontainers` and `@SpringBootTest`'s `SpringExtension` would be
+  exactly the kind of fragile-by-accident setup this project avoids elsewhere). Covers: a
+  fully-populated event round trip, an event with empty tags/`NULL` discount, the count endpoint,
+  and the by-category analytics endpoint.
 - Not a substitute for Phase 4's sign-off — this is a demo/consumer-proof, not where "fully
   reactive" gets verified.
+- Test support code (`CreateOrderEventRequestTestBuilder` in `api.builders`, `OrderEventAssert` in
+  `api.assertions`) follows the same Test Data Builder / Custom Assertion building blocks CLAUDE.md
+  defines for the driver's own tests — `CreateOrderEventRequest` was promoted from a record nested
+  inside `OrderEventController` to a top-level public record specifically so the builder (living in
+  its own sub-package, per CLAUDE.md's "Package layout for test support code") can construct it
+  from outside `api`'s package-private types.
+- **Not yet confirmed green** — this module touches genuinely new integration surface (Spring's
+  R2DBC binding/pool machinery, WebFlux JSON codecs, `Enum8` decoding through `DatabaseClient`) this
+  project's own tests never exercised before, so it's realistically more likely than the core
+  driver work to need a round or two of fixes once actually compiled/run — already true twice so
+  far: (1) a `.map(MethodRef)` call needed to target R2DBC's `Readable` supertype, not `Row`, to
+  match `GenericExecuteSpec.map`'s actual overloads; (2) `spring-boot-starter-data-r2dbc` pulls in
+  `DataR2dbcAutoConfiguration`, which eagerly resolves a Spring Data R2DBC `Dialect` via
+  `DialectResolver` — a *second*, separate hardcoded driver list from the `BindMarkersFactoryResolver`
+  one, unrelated to and not fixed by `R2dbcConfiguration`'s own `DatabaseClient` bean (that
+  auto-configuration class isn't gated on `@ConditionalOnMissingBean(DatabaseClient.class)`).
+  Switched to `spring-boot-starter-r2dbc` (the lean starter, confirmed to exist as a real Boot
+  4.1.0 artifact on Maven Central) instead, since this demo never uses
+  `R2dbcEntityTemplate`/Spring Data repositories anyway — removes `DataR2dbcAutoConfiguration` from
+  the classpath entirely rather than trying to satisfy or bypass its `Dialect` requirement.
 
 ## Working with Claude / IntelliJ
 

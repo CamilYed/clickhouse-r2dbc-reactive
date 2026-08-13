@@ -30,8 +30,14 @@ allprojects {
 // Modules that exist purely to hold tests (no public API of their own) never get published to
 // Maven Central. They still get jacoco/spotless/toolchain like every other module — just not
 // maven-publish/signing. Keep this list in sync with settings.gradle.kts.
+//
+// spring-boot-webflux-demo is a runnable example app (Phase 6), not a library either - same
+// reasoning, different shape: it has a public API of sorts (a REST controller), but it's not
+// meant to be a dependency of anything, just proof the driver works through Spring's own R2DBC
+// integration.
 val nonPublishedModules = setOf(
-    "clickhouse-r2dbc-reactive-integration-tests"
+    "clickhouse-r2dbc-reactive-integration-tests",
+    "spring-boot-webflux-demo"
 )
 
 subprojects {
