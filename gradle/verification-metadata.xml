@@ -6,13 +6,17 @@
       <trusted-artifacts>
          <trust file=".*-javadoc[.]jar" regex="true"/>
          <trust file=".*-sources[.]jar" regex="true"/>
-         <!-- IntelliJ also pulls Gradle's own distribution sources (gradle-<version>-src.zip,
-              component group=gradle/name=gradle) to power navigation into the Gradle API/DSL
-              itself - same "IDE convenience artifact, never on any classpath that actually
-              executes" reasoning as the two rules above, just a different file extension/group
-              than a regular Maven dependency's sources jar. Regex on the suffix, not pinned to
-              9.7.0, so a Gradle wrapper bump doesn't need a matching edit here. -->
          <trust file=".*-src[.]zip" regex="true"/>
+         <!-- kotlin-reflect: pulled into IntelliJ's model for :compileClasspath (Kotlin DSL /
+              build-script tooling for .gradle.kts) even though this project has no Kotlin
+              dependency of its own and no real ./gradlew task ever resolves it - a fresh
+              `--write-verification-metadata sha256 --refresh-dependencies clean build` run does
+              not add it (unlike kotlin-stdlib, which some real plugin classpath does pull in).
+              Same IDE-only-artifact category as the rules above; note Gradle's own
+              --write-verification-metadata rewrite strips this comment (but keeps the <trust>
+              element) the next time someone regenerates the file - that's expected, not a
+              regression. -->
+         <trust group="org.jetbrains.kotlin" name="kotlin-reflect" reason="IntelliJ-only build-script tooling artifact, not a real dependency of this project"/>
       </trusted-artifacts>
    </configuration>
    <components>
