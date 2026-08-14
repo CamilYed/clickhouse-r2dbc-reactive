@@ -65,20 +65,21 @@ final class ClickHouseStatement implements Statement {
   // value is declared non-null under this module's @NullMarked contract, but this overrides a
   // plain io.r2dbc.spi.Statement method - external callers of the public R2DBC SPI aren't bound
   // by that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
-  @SuppressWarnings("java:S2583")
+  // @SuppressWarnings("java:S2583") is not honored by SonarCloud's current analyzer for this rule
+  // (confirmed: the issue re-appears with it present) - NOSONAR is the mechanism that actually
+  // suppresses it.
   @Override
   public Statement bind(final int index, final Object value) {
-    if (value == null) {
+    if (value == null) { // NOSONAR - see class-level defensive-null-check note above
       throw new IllegalArgumentException("value must not be null");
     }
     return bind(nameAt(index), value);
   }
 
   // See bind(int, Object) above for why this defensive check is kept despite @NullMarked.
-  @SuppressWarnings("java:S2583")
   @Override
   public Statement bind(final String name, final Object value) {
-    if (name == null || value == null) {
+    if (name == null || value == null) { // NOSONAR - see bind(int, Object) above
       throw new IllegalArgumentException("name and value must not be null");
     }
     requireDeclaredParameter(name);
@@ -87,20 +88,18 @@ final class ClickHouseStatement implements Statement {
   }
 
   // See bind(int, Object) above for why this defensive check is kept despite @NullMarked.
-  @SuppressWarnings("java:S2583")
   @Override
   public Statement bindNull(final int index, final Class<?> type) {
-    if (type == null) {
+    if (type == null) { // NOSONAR - see bind(int, Object) above
       throw new IllegalArgumentException("type must not be null");
     }
     return bindNull(nameAt(index), type);
   }
 
   // See bind(int, Object) above for why this defensive check is kept despite @NullMarked.
-  @SuppressWarnings("java:S2583")
   @Override
   public Statement bindNull(final String name, final Class<?> type) {
-    if (name == null || type == null) {
+    if (name == null || type == null) { // NOSONAR - see bind(int, Object) above
       throw new IllegalArgumentException("name and type must not be null");
     }
     requireDeclaredParameter(name);

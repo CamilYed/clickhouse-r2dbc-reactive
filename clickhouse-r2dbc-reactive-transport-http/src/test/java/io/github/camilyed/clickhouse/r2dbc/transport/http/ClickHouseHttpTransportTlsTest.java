@@ -129,16 +129,14 @@ class ClickHouseHttpTransportTlsTest {
   void shouldRejectATrustedCertificateSuppliedForAPlainHttpBaseUrl() {
     // given
     final byte[] trustedCertificatePem = "not a real certificate".getBytes();
+    // and
+    final Authentication noAuthentication = Authentication.none();
 
     // when / then
     assertThatThrownBy(
             () ->
                 new ClickHouseHttpTransport(
-                    "http://localhost:8123",
-                    Authentication.none(),
-                    null,
-                    null,
-                    trustedCertificatePem))
+                    "http://localhost:8123", noAuthentication, null, null, trustedCertificatePem))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("https://");
   }
