@@ -29,6 +29,7 @@ The design direction started as a public design discussion with the ClickHouse t
 - [Status](#status)
 - [Known limitations](#known-limitations)
 - [What "fully reactive" means here](#what-fully-reactive-means-here)
+- [Connection pooling](#connection-pooling)
 - [Architecture direction](#architecture-direction)
 - [Modules](#modules)
 - [Requirements](#requirements)
@@ -168,6 +169,57 @@ reactive end to end only if it satisfies all of the following:
 | Deterministic cleanup | Connections, response bodies, buffers, and decoder state are released on completion, error, timeout, and cancellation. |
 | Reactive error signalling | Transport and ClickHouse errors surface through `onError` with proper R2DBC exception mapping. |
 | No scheduler workaround | Moving blocking I/O to `boundedElastic`/`publishOn`/`subscribeOn` does not count as making the path reactive. |
+
+## Connection pooling
+
+There are **two separate pools**, at two separate layers — understanding which one does what
+matters for tuning either driver correctly, and it's exactly the confusion the [Why](#why) section
+above names as the original motivation for this project.
+
+1. **R2DBC-SPI-level pool** — `io.r2dbc.pool`'s `ConnectionPool`, wrapping this driver's
+   `ClickHouseConnectionFactory`. This is what Spring Boot's `spring.r2dbc.pool.*` properties
+   configure (see `examples/spring-boot-webflux-demo`'s `R2dbcConfiguration` for the reference
+   wiring: `initialSize`, `minIdle`, `maxSize`, `maxIdleTime`, `validationDepth`, `acquireRetry`,
+   and optionally `maxLifeTime`/`maxAcquireTime`/`maxCreateConnectionTime`/`maxValidationTime`).
+   What it actually pools here is cheap: each `ClickHouseConnection` is a thin, disposable
+   `AtomicBoolean`-guarded handle over a *shared* transport — constructing one costs essentially
+   nothing (see `ClickHouseConnectionFactory`'s own Javadoc). `Connection#validate(ValidationDepth)`
+   is real, not a stub, at `REMOTE` depth: it round-trips a `SELECT 1` against the server;
+   `LOCAL` only checks the connection's own `closed` flag. Verified end to end (query execution,
+   remote validation, and `maxSize` actually bounding concurrent acquires — a second concurrent
+   acquire waits, it doesn't error or silently exceed the bound) in
+   [`ClickHouseConnectionFactoryR2dbcPoolAgainstRealClickHouseTest`](clickhouse-r2dbc-reactive-connector/src/test/java/io/github/camilyed/clickhouse/r2dbc/connector/ClickHouseConnectionFactoryR2dbcPoolAgainstRealClickHouseTest.java)
+   against a real server.
+
+2. **Transport-level pool** — `ClickHouseHttpTransport`'s own Reactor Netty `ConnectionProvider`,
+   pooling the actual TCP connections. This is the pool this project's non-blocking architecture is
+   actually built around, and it's shared by *every* `ClickHouseConnection` this factory produces,
+   regardless of how many R2DBC-SPI-level connections layer 1 hands out above it — sizeable via
+   `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)`. Confirmed (not assumed) to
+   correctly reuse one TCP connection across sequential queries — for both a `.next()`-style
+   single-row consumption pattern and a fully-drained stream — in
+   [`ClickHouseHttpTransportConnectionReuseTest`](clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransportConnectionReuseTest.java),
+   including against Reactor Netty's own debug-level pool logging (`Channel acquired`/`Releasing
+   channel`/`Channel cleaned` against the same channel ID across requests) as independent
+   confirmation — an earlier draft of that investigation suspected a bug here and was wrong; see the
+   test's own Javadoc for why the first diagnostic signal was misleading.
+
+**Why this is the point of the whole project, not an implementation detail:** client-v2's `Client`
+is blocking — serving *N* logical concurrent queries needs *N* platform threads each blocked
+waiting on a connection, one way or another. This driver's non-blocking pipeline lets many more
+logical queries than physical connections be *in flight* at once — `Flux.flatMap(..., concurrency)`
+subscribes to all of them immediately; whichever don't fit in the physical pool queue inside Reactor
+Netty itself, with no blocked thread paying for each one. Measured directly:
+`BoundedPoolConcurrencyBenchmark` (see [docs/PERFORMANCE.md](docs/PERFORMANCE.md), search
+"BoundedPoolConcurrencyBenchmark") configures both this driver and client-v2 with the *same*
+8-connection pool and drives 8/32/128
+logical concurrent point queries at once (async on both sides, not one blocking thread per query) —
+this driver won on every percentile at every concurrency level tested, first measured evidence for
+the architectural property this project set out to provide. Still single-fork/one small first pass,
+not yet a final scalability claim — see that doc for the full caveats and what's still open
+(`ConcurrencyBenchmark`'s separate `@Threads(N)`-blocking-callers shape, by contrast, showed a mixed
+result precisely because it leaves both drivers' pools at mismatched defaults rather than matching
+them — read as "same-blocking-resources baseline", not the architectural verdict).
 
 ## Architecture direction
 
