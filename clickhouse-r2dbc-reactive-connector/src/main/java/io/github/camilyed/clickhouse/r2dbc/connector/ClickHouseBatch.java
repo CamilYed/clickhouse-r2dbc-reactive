@@ -40,10 +40,9 @@ final class ClickHouseBatch implements Batch {
   // sql is declared non-null under this module's @NullMarked contract, but this overrides a
   // plain io.r2dbc.spi.Batch method - external callers of the public R2DBC SPI aren't bound by
   // that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
-  @SuppressWarnings("java:S2583")
   @Override
   public Batch add(final String sql) {
-    if (sql == null) {
+    if (sql == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("sql must not be null");
     }
     statements.add(sql);

@@ -36,23 +36,21 @@ final class ClickHouseRow implements Row {
   // type is declared non-null under this module's @NullMarked contract, but this overrides a
   // plain io.r2dbc.spi.Row method - external callers of the public R2DBC SPI aren't bound by
   // that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
-  @SuppressWarnings("java:S2583")
   @Override
   public <T> T get(final int index, final Class<T> type) {
-    if (type == null) {
+    if (type == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("type must not be null");
     }
     return type.cast(row.valueAt(index));
   }
 
   // See get(int, Class) above for why this defensive check is kept despite @NullMarked.
-  @SuppressWarnings("java:S2583")
   @Override
   public <T> T get(final String name, final Class<T> type) {
-    if (name == null) {
+    if (name == null) { // NOSONAR - see get(int, Class) above
       throw new IllegalArgumentException("name must not be null");
     }
-    if (type == null) {
+    if (type == null) { // NOSONAR - see get(int, Class) above
       throw new IllegalArgumentException("type must not be null");
     }
     return type.cast(row.valueAt(metadata.indexOf(name)));

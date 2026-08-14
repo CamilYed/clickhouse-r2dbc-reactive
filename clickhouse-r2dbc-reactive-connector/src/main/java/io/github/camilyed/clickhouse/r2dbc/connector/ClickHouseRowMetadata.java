@@ -51,9 +51,8 @@ final class ClickHouseRowMetadata implements RowMetadata {
   // getColumnMetadata(String), a plain io.r2dbc.spi.RowMetadata override - external callers of
   // the public R2DBC SPI aren't bound by that static guarantee, so failing fast here beats a
   // confusing NPE deeper in the call chain.
-  @SuppressWarnings("java:S2583")
   int indexOf(final String name) {
-    if (name == null) {
+    if (name == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("name must not be null");
     }
     final Integer index = indexByName.get(canonicalize(name));

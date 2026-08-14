@@ -90,10 +90,9 @@ public final class ClickHouseConnection implements Connection {
   // sql is declared non-null under this module's @NullMarked contract, but this overrides a
   // plain io.r2dbc.spi.Connection method — external callers of the public R2DBC SPI aren't bound
   // by that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
-  @SuppressWarnings("java:S2583")
   @Override
   public Statement createStatement(final String sql) {
-    if (sql == null) {
+    if (sql == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("sql must not be null");
     }
     requireOpen();
@@ -200,12 +199,11 @@ public final class ClickHouseConnection implements Connection {
   // sql/data are declared non-null under this module's @NullMarked contract, but this is a
   // public entry point external callers reach without JSpecify tooling of their own - failing
   // fast here beats a confusing NPE deeper in the call chain.
-  @SuppressWarnings("java:S2583")
   public Publisher<Result> insertStreaming(final String sql, final Publisher<ByteBuffer> data) {
-    if (sql == null) {
+    if (sql == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("sql must not be null");
     }
-    if (data == null) {
+    if (data == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("data must not be null");
     }
     requireOpen();
