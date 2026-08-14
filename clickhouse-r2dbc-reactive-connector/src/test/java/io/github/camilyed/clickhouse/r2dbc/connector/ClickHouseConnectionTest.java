@@ -155,8 +155,7 @@ class ClickHouseConnectionTest {
     final Flux<ByteBuffer> data = Flux.just(ByteBuffer.wrap(new byte[0]));
 
     // when / then
-    assertThatThrownBy(
-            () -> connection.insertStreaming("INSERT INTO t FORMAT TabSeparated", data))
+    assertThatThrownBy(() -> connection.insertStreaming("INSERT INTO t FORMAT TabSeparated", data))
         .isInstanceOf(IllegalStateException.class);
   }
 }

@@ -30,8 +30,7 @@ import org.jspecify.annotations.Nullable;
  */
 public record ClickHouseQuery(String sql, String queryId, Map<String, String> parameters) {
 
-  private static final Pattern PARAMETER_PLACEHOLDER =
-      Pattern.compile("\\{([a-zA-Z_]\\w*):[^}]+}");
+  private static final Pattern PARAMETER_PLACEHOLDER = Pattern.compile("\\{([a-zA-Z_]\\w*):[^}]+}");
 
   /** A query with a freshly generated {@code query_id} and no bound parameters. */
   public static ClickHouseQuery of(final String sql) {

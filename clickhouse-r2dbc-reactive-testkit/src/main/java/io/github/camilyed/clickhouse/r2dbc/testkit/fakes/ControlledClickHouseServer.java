@@ -38,8 +38,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
   }
 
   /**
-   * Everything this fake server tracks about the requests/connections it has seen, bundled into
-   * one value so the {@link ControlledClickHouseServer} constructor and every {@code
+   * Everything this fake server tracks about the requests/connections it has seen, bundled into one
+   * value so the {@link ControlledClickHouseServer} constructor and every {@code
    * startRespondingXxx} factory don't each carry seven separate {@code Atomic*} parameters.
    */
   private record RequestTracking(

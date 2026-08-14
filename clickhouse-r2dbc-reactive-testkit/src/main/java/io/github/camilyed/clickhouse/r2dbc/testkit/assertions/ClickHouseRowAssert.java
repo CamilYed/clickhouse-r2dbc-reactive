@@ -83,7 +83,9 @@ public final class ClickHouseRowAssert
    */
   public ClickHouseRowAssert hasTuple(final String column, final Object... expected) {
     isNotNull();
-    assertThat((Object[]) actual.get(column)).as(COLUMN_DESCRIPTION, column).containsExactly(expected);
+    assertThat((Object[]) actual.get(column))
+        .as(COLUMN_DESCRIPTION, column)
+        .containsExactly(expected);
     return this;
   }
 
@@ -132,7 +134,9 @@ public final class ClickHouseRowAssert
   public ClickHouseRowAssert hasFloatCloseTo(
       final String column, final float expected, final Offset<Float> offset) {
     isNotNull();
-    assertThat((Float) actual.get(column)).as(COLUMN_DESCRIPTION, column).isCloseTo(expected, offset);
+    assertThat((Float) actual.get(column))
+        .as(COLUMN_DESCRIPTION, column)
+        .isCloseTo(expected, offset);
     return this;
   }
 
