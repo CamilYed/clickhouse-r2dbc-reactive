@@ -62,6 +62,10 @@ final class ClickHouseStatement implements Statement {
     throw new UnsupportedOperationException("Batched bindings are not supported yet");
   }
 
+  // value is declared non-null under this module's @NullMarked contract, but this overrides a
+  // plain io.r2dbc.spi.Statement method - external callers of the public R2DBC SPI aren't bound
+  // by that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
+  @SuppressWarnings("java:S2583")
   @Override
   public Statement bind(final int index, final Object value) {
     if (value == null) {
@@ -70,6 +74,8 @@ final class ClickHouseStatement implements Statement {
     return bind(nameAt(index), value);
   }
 
+  // See bind(int, Object) above for why this defensive check is kept despite @NullMarked.
+  @SuppressWarnings("java:S2583")
   @Override
   public Statement bind(final String name, final Object value) {
     if (name == null || value == null) {
@@ -80,6 +86,8 @@ final class ClickHouseStatement implements Statement {
     return this;
   }
 
+  // See bind(int, Object) above for why this defensive check is kept despite @NullMarked.
+  @SuppressWarnings("java:S2583")
   @Override
   public Statement bindNull(final int index, final Class<?> type) {
     if (type == null) {
@@ -88,6 +96,8 @@ final class ClickHouseStatement implements Statement {
     return bindNull(nameAt(index), type);
   }
 
+  // See bind(int, Object) above for why this defensive check is kept despite @NullMarked.
+  @SuppressWarnings("java:S2583")
   @Override
   public Statement bindNull(final String name, final Class<?> type) {
     if (name == null || type == null) {

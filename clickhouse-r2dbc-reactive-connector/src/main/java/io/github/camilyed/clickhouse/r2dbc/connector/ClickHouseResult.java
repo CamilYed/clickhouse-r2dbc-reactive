@@ -87,6 +87,11 @@ final class ClickHouseResult implements Result {
     return Mono.just(writtenRows);
   }
 
+  // mappingFunction is declared non-null under this module's @NullMarked contract, but this
+  // overrides a plain io.r2dbc.spi.Result method - external callers of the public R2DBC SPI
+  // aren't bound by that static guarantee, so failing fast here beats a confusing NPE deeper in
+  // the call chain.
+  @SuppressWarnings("java:S2583")
   @Override
   public <T> Publisher<T> map(final BiFunction<Row, RowMetadata, ? extends T> mappingFunction) {
     if (mappingFunction == null) {
@@ -98,6 +103,8 @@ final class ClickHouseResult implements Result {
     return mapped.onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
+  // See map(...) above for why this defensive check is kept despite @NullMarked.
+  @SuppressWarnings("java:S2583")
   @Override
   public Result filter(final Predicate<Segment> filter) {
     if (filter == null) {
@@ -107,6 +114,8 @@ final class ClickHouseResult implements Result {
         metadata, rows.filter(row -> filter.test(rowSegment(row))), writtenRows);
   }
 
+  // See map(...) above for why this defensive check is kept despite @NullMarked.
+  @SuppressWarnings("java:S2583")
   @Override
   public <T> Publisher<T> flatMap(
       final Function<Segment, ? extends Publisher<? extends T>> mappingFunction) {

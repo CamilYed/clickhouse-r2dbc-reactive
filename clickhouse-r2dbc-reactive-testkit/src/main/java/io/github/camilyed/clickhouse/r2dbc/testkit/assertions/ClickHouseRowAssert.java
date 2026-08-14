@@ -15,6 +15,8 @@ import org.assertj.core.data.Offset;
 public final class ClickHouseRowAssert
     extends AbstractAssert<ClickHouseRowAssert, Map<String, Object>> {
 
+  private static final String COLUMN_DESCRIPTION = "column '%s'";
+
   private ClickHouseRowAssert(final Map<String, Object> actual) {
     super(actual, ClickHouseRowAssert.class);
   }
@@ -30,7 +32,7 @@ public final class ClickHouseRowAssert
   /** Asserts {@code column} equals {@code expected} exactly ({@link Object#equals}). */
   public ClickHouseRowAssert hasValue(final String column, final Object expected) {
     isNotNull();
-    assertThat(actual.get(column)).as("column '%s'", column).isEqualTo(expected);
+    assertThat(actual.get(column)).as(COLUMN_DESCRIPTION, column).isEqualTo(expected);
     return this;
   }
 
@@ -41,7 +43,7 @@ public final class ClickHouseRowAssert
   public ClickHouseRowAssert hasDecimal(final String column, final String expected) {
     isNotNull();
     assertThat((BigDecimal) actual.get(column))
-        .as("column '%s'", column)
+        .as(COLUMN_DESCRIPTION, column)
         .isEqualByComparingTo(expected);
     return this;
   }
@@ -49,7 +51,7 @@ public final class ClickHouseRowAssert
   /** Asserts {@code column} is present and {@code null}. */
   public ClickHouseRowAssert hasNullAt(final String column) {
     isNotNull();
-    assertThat(actual.get(column)).as("column '%s'", column).isNull();
+    assertThat(actual.get(column)).as(COLUMN_DESCRIPTION, column).isNull();
     return this;
   }
 
@@ -59,7 +61,7 @@ public final class ClickHouseRowAssert
    */
   public ClickHouseRowAssert hasTypeAt(final String column, final Class<?> type) {
     isNotNull();
-    assertThat(actual.get(column)).as("column '%s'", column).isInstanceOf(type);
+    assertThat(actual.get(column)).as(COLUMN_DESCRIPTION, column).isInstanceOf(type);
     return this;
   }
 
@@ -71,7 +73,7 @@ public final class ClickHouseRowAssert
   public ClickHouseRowAssert hasList(final String column, final Object... expected) {
     isNotNull();
     assertThat((List<Object>) actual.get(column))
-        .as("column '%s'", column)
+        .as(COLUMN_DESCRIPTION, column)
         .containsExactly(expected);
     return this;
   }
@@ -81,7 +83,7 @@ public final class ClickHouseRowAssert
    */
   public ClickHouseRowAssert hasTuple(final String column, final Object... expected) {
     isNotNull();
-    assertThat((Object[]) actual.get(column)).as("column '%s'", column).containsExactly(expected);
+    assertThat((Object[]) actual.get(column)).as(COLUMN_DESCRIPTION, column).containsExactly(expected);
     return this;
   }
 
@@ -93,7 +95,7 @@ public final class ClickHouseRowAssert
   public ClickHouseRowAssert hasMap(final String column, final Map.Entry<?, ?>... expected) {
     isNotNull();
     assertThat((Map<Object, Object>) actual.get(column))
-        .as("column '%s'", column)
+        .as(COLUMN_DESCRIPTION, column)
         .containsExactly(expected);
     return this;
   }
@@ -107,7 +109,7 @@ public final class ClickHouseRowAssert
    */
   public ClickHouseRowAssert hasEnumName(final String column, final String expected) {
     isNotNull();
-    assertThat(actual.get(column)).as("column '%s'", column).hasToString(expected);
+    assertThat(actual.get(column)).as(COLUMN_DESCRIPTION, column).hasToString(expected);
     return this;
   }
 
@@ -118,7 +120,7 @@ public final class ClickHouseRowAssert
   public ClickHouseRowAssert hasBigInteger(final String column, final String expected) {
     isNotNull();
     assertThat((BigInteger) actual.get(column))
-        .as("column '%s'", column)
+        .as(COLUMN_DESCRIPTION, column)
         .isEqualTo(new BigInteger(expected));
     return this;
   }
@@ -130,7 +132,7 @@ public final class ClickHouseRowAssert
   public ClickHouseRowAssert hasFloatCloseTo(
       final String column, final float expected, final Offset<Float> offset) {
     isNotNull();
-    assertThat((Float) actual.get(column)).as("column '%s'", column).isCloseTo(expected, offset);
+    assertThat((Float) actual.get(column)).as(COLUMN_DESCRIPTION, column).isCloseTo(expected, offset);
     return this;
   }
 
@@ -140,14 +142,14 @@ public final class ClickHouseRowAssert
    */
   public ClickHouseRowAssert hasInetAddress(final String column, final InetAddress expected) {
     isNotNull();
-    assertThat((InetAddress) actual.get(column)).as("column '%s'", column).isEqualTo(expected);
+    assertThat((InetAddress) actual.get(column)).as(COLUMN_DESCRIPTION, column).isEqualTo(expected);
     return this;
   }
 
   /** Asserts {@code column} is a {@link UUID} equal to {@code expected}. */
   public ClickHouseRowAssert hasUuid(final String column, final UUID expected) {
     isNotNull();
-    assertThat((UUID) actual.get(column)).as("column '%s'", column).isEqualTo(expected);
+    assertThat((UUID) actual.get(column)).as(COLUMN_DESCRIPTION, column).isEqualTo(expected);
     return this;
   }
 }

@@ -70,10 +70,11 @@ public final class BenchmarkEnvironment {
   }
 
   private static void logEnvironmentMetadata() {
+    final String clickHouseVersion = queryAdminSql("SELECT version()").strip();
     LOG.info(
         "Benchmark environment: clickHouseImage={}, clickHouseVersion={}, jdk={}, os={}/{}",
         CLICK_HOUSE_IMAGE,
-        queryAdminSql("SELECT version()").strip(),
+        clickHouseVersion,
         System.getProperty("java.version"),
         System.getProperty("os.name"),
         System.getProperty("os.arch"));

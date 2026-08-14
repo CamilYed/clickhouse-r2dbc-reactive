@@ -46,6 +46,9 @@ import reactor.core.publisher.Mono;
  */
 public final class ClickHouseConnection implements Connection {
 
+  private static final String TRANSACTIONS_NOT_SUPPORTED =
+      "ClickHouse does not support transactions";
+
   private final ClickHouseHttpTransport transport;
   private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -55,14 +58,12 @@ public final class ClickHouseConnection implements Connection {
 
   @Override
   public Publisher<Void> beginTransaction() {
-    return Mono.error(
-        new UnsupportedOperationException("ClickHouse does not support transactions"));
+    return Mono.error(new UnsupportedOperationException(TRANSACTIONS_NOT_SUPPORTED));
   }
 
   @Override
   public Publisher<Void> beginTransaction(final TransactionDefinition definition) {
-    return Mono.error(
-        new UnsupportedOperationException("ClickHouse does not support transactions"));
+    return Mono.error(new UnsupportedOperationException(TRANSACTIONS_NOT_SUPPORTED));
   }
 
   @Override
@@ -72,8 +73,7 @@ public final class ClickHouseConnection implements Connection {
 
   @Override
   public Publisher<Void> commitTransaction() {
-    return Mono.error(
-        new UnsupportedOperationException("ClickHouse does not support transactions"));
+    return Mono.error(new UnsupportedOperationException(TRANSACTIONS_NOT_SUPPORTED));
   }
 
   @Override
@@ -87,6 +87,10 @@ public final class ClickHouseConnection implements Connection {
     return Mono.error(new UnsupportedOperationException("ClickHouse does not support savepoints"));
   }
 
+  // sql is declared non-null under this module's @NullMarked contract, but this overrides a
+  // plain io.r2dbc.spi.Connection method — external callers of the public R2DBC SPI aren't bound
+  // by that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
+  @SuppressWarnings("java:S2583")
   @Override
   public Statement createStatement(final String sql) {
     if (sql == null) {
@@ -125,8 +129,7 @@ public final class ClickHouseConnection implements Connection {
 
   @Override
   public Publisher<Void> rollbackTransaction() {
-    return Mono.error(
-        new UnsupportedOperationException("ClickHouse does not support transactions"));
+    return Mono.error(new UnsupportedOperationException(TRANSACTIONS_NOT_SUPPORTED));
   }
 
   @Override
@@ -194,8 +197,11 @@ public final class ClickHouseConnection implements Connection {
    * happens mid-stream, is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
    * ClickHouseR2dbcException#wrap}, same as {@link ClickHouseStatement#execute()}.
    */
-  public Publisher<? extends Result> insertStreaming(
-      final String sql, final Publisher<ByteBuffer> data) {
+  // sql/data are declared non-null under this module's @NullMarked contract, but this is a
+  // public entry point external callers reach without JSpecify tooling of their own - failing
+  // fast here beats a confusing NPE deeper in the call chain.
+  @SuppressWarnings("java:S2583")
+  public Publisher<Result> insertStreaming(final String sql, final Publisher<ByteBuffer> data) {
     if (sql == null) {
       throw new IllegalArgumentException("sql must not be null");
     }
@@ -206,7 +212,7 @@ public final class ClickHouseConnection implements Connection {
     return transport
         .insertWithSummary(ClickHouseQuery.of(sql), data)
         .flatMap(response -> response.body().aggregate().asByteArray().thenReturn(response))
-        .map(response -> ClickHouseResult.forInsert(response.writtenRows().getAsLong()))
+        .map(response -> (Result) ClickHouseResult.forInsert(response.writtenRows().getAsLong()))
         .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 

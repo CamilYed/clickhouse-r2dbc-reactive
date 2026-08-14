@@ -47,6 +47,11 @@ final class ClickHouseRowMetadata implements RowMetadata {
   }
 
   /** The wire-order index of the column named {@code name} (case-insensitive). */
+  // name is declared non-null under this module's @NullMarked contract, but this is reached via
+  // getColumnMetadata(String), a plain io.r2dbc.spi.RowMetadata override - external callers of
+  // the public R2DBC SPI aren't bound by that static guarantee, so failing fast here beats a
+  // confusing NPE deeper in the call chain.
+  @SuppressWarnings("java:S2583")
   int indexOf(final String name) {
     if (name == null) {
       throw new IllegalArgumentException("name must not be null");

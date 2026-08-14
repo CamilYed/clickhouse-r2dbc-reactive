@@ -25,7 +25,6 @@ dependencies {
     implementation(libs.clickhouse.client.v2)
 
     implementation(libs.slf4j.api)
-    runtimeOnly(libs.slf4j.simple)
 
     implementation(platform(libs.testcontainers.bom))
     implementation(libs.testcontainers.clickhouse)
@@ -36,6 +35,8 @@ dependencies {
     implementation(libs.hdrhistogram)
 
     compileOnly(libs.jspecify)
+
+    runtimeOnly(libs.slf4j.simple)
 }
 
 jmh {

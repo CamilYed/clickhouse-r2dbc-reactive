@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A query to send to ClickHouse: the SQL text, its {@code query_id}, and any bound values for
@@ -30,7 +31,7 @@ import java.util.regex.Pattern;
 public record ClickHouseQuery(String sql, String queryId, Map<String, String> parameters) {
 
   private static final Pattern PARAMETER_PLACEHOLDER =
-      Pattern.compile("\\{([a-zA-Z_][a-zA-Z0-9_]*):[^}]+}");
+      Pattern.compile("\\{([a-zA-Z_]\\w*):[^}]+}");
 
   /** A query with a freshly generated {@code query_id} and no bound parameters. */
   public static ClickHouseQuery of(final String sql) {
@@ -67,7 +68,9 @@ public record ClickHouseQuery(String sql, String queryId, Map<String, String> pa
     return new ClickHouseQuery(sql, queryId, Map.copyOf(encoded));
   }
 
-  private static String encodeParameterValue(final Object value) {
+  // value is genuinely nullable here - bindNull(...) stores a null entry in boundValues, and this
+  // method's job is precisely to turn that into ClickHouse's own null marker below.
+  private static String encodeParameterValue(final @Nullable Object value) {
     if (value == null) {
       return "\\N";
     }

@@ -9,6 +9,7 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Decodes {@code Array}/{@code Nested} columns as a plain {@link List} instead of client-v2's
@@ -36,7 +37,7 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
   }
 
   @Override
-  protected boolean readRecord(final Object[] record) throws IOException {
+  protected boolean readRecord(final Object[] values) throws IOException {
     final List<ClickHouseColumn> columns = getSchema().getColumns();
     if (columns.isEmpty()) {
       return false;
@@ -44,7 +45,7 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
     for (int i = 0; i < columns.size(); i++) {
       final ClickHouseColumn column = columns.get(i);
       try {
-        record[i] = binaryStreamReader.readValue(column, listHintFor(column));
+        values[i] = binaryStreamReader.readValue(column, listHintFor(column));
       } catch (final EOFException e) {
         if (i == 0) {
           endReached();
@@ -56,7 +57,12 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
     return true;
   }
 
-  private static Class<?> listHintFor(final ClickHouseColumn column) {
+  /**
+   * Returns {@code null} for every column that isn't {@code Array}/{@code Nested} — the same "no
+   * hint" signal client-v2's own decode path always passes (see this class's own Javadoc) — so
+   * {@code null} here is a deliberate, meaningful value, not an oversight.
+   */
+  private static @Nullable Class<?> listHintFor(final ClickHouseColumn column) {
     final ClickHouseDataType dataType = column.getDataType();
     final boolean isListLike =
         dataType == ClickHouseDataType.Array || dataType == ClickHouseDataType.Nested;

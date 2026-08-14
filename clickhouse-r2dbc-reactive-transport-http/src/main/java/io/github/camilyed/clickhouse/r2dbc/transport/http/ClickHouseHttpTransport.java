@@ -54,6 +54,8 @@ public final class ClickHouseHttpTransport {
   private static final String JSON_AS_STRING_QUERY_PARAM =
       "&output_format_binary_write_json_as_string=1";
 
+  private static final String CONNECTION_PROVIDER_NAME = "clickhouse-http-transport";
+
   private final HttpClient httpClient;
   private final Authentication authentication;
   private final RetryPolicy retryPolicy;
@@ -62,7 +64,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         Authentication.none(),
-        ConnectionProvider.create("clickhouse-http-transport"),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
         null,
         null,
         null,
@@ -73,7 +75,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         Authentication.none(),
-        ConnectionProvider.create("clickhouse-http-transport", maxConnections),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME, maxConnections),
         null,
         null,
         null,
@@ -97,7 +99,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         authentication,
-        ConnectionProvider.create("clickhouse-http-transport", maxConnections),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME, maxConnections),
         null,
         null,
         null,
@@ -112,7 +114,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         Authentication.basic(user, password),
-        ConnectionProvider.create("clickhouse-http-transport"),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
         null,
         null,
         null,
@@ -127,7 +129,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         authentication,
-        ConnectionProvider.create("clickhouse-http-transport"),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
         null,
         null,
         null,
@@ -154,7 +156,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         authentication,
-        ConnectionProvider.create("clickhouse-http-transport"),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
         responseTimeout,
         null,
         null,
@@ -180,7 +182,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         authentication,
-        ConnectionProvider.create("clickhouse-http-transport"),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
         responseTimeout,
         connectTimeout,
         null,
@@ -214,7 +216,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         authentication,
-        ConnectionProvider.create("clickhouse-http-transport"),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
         responseTimeout,
         connectTimeout,
         trustedCertificatePem,
@@ -239,7 +241,7 @@ public final class ClickHouseHttpTransport {
     this(
         baseUrl,
         authentication,
-        ConnectionProvider.create("clickhouse-http-transport"),
+        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
         responseTimeout,
         connectTimeout,
         trustedCertificatePem,

@@ -127,7 +127,10 @@ class ClickHouseHttpTransportTlsTest {
 
   @Test
   void shouldRejectATrustedCertificateSuppliedForAPlainHttpBaseUrl() {
-    // given / when / then
+    // given
+    final byte[] trustedCertificatePem = "not a real certificate".getBytes();
+
+    // when / then
     assertThatThrownBy(
             () ->
                 new ClickHouseHttpTransport(
@@ -135,7 +138,7 @@ class ClickHouseHttpTransportTlsTest {
                     Authentication.none(),
                     null,
                     null,
-                    "not a real certificate".getBytes()))
+                    trustedCertificatePem))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("https://");
   }

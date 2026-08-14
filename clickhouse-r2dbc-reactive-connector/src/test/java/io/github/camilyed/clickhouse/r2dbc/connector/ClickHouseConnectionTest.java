@@ -132,8 +132,11 @@ class ClickHouseConnectionTest {
 
   @Test
   void shouldRejectInsertStreamingWithoutSql() {
+    // given
+    final Flux<ByteBuffer> data = Flux.empty();
+
     // when / then
-    assertThatThrownBy(() -> connection.insertStreaming(null, Flux.empty()))
+    assertThatThrownBy(() -> connection.insertStreaming(null, data))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -148,12 +151,12 @@ class ClickHouseConnectionTest {
   void shouldRejectInsertStreamingAfterClose() {
     // given
     Mono.from(connection.close()).block(Duration.ofSeconds(1));
+    // and
+    final Flux<ByteBuffer> data = Flux.just(ByteBuffer.wrap(new byte[0]));
 
     // when / then
     assertThatThrownBy(
-            () ->
-                connection.insertStreaming(
-                    "INSERT INTO t FORMAT TabSeparated", Flux.just(ByteBuffer.wrap(new byte[0]))))
+            () -> connection.insertStreaming("INSERT INTO t FORMAT TabSeparated", data))
         .isInstanceOf(IllegalStateException.class);
   }
 }
