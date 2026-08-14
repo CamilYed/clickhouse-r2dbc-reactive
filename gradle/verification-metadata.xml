@@ -7,15 +7,14 @@
          <trust file=".*-javadoc[.]jar" regex="true"/>
          <trust file=".*-sources[.]jar" regex="true"/>
          <trust file=".*-src[.]zip" regex="true"/>
-         <!-- kotlin-reflect: pulled into IntelliJ's model for :compileClasspath (Kotlin DSL /
+         <!-- kotlin-reflect: pulled into IntelliJ's model for compileClasspath (Kotlin DSL /
               build-script tooling for .gradle.kts) even though this project has no Kotlin
-              dependency of its own and no real ./gradlew task ever resolves it - a fresh
-              `--write-verification-metadata sha256 --refresh-dependencies clean build` run does
-              not add it (unlike kotlin-stdlib, which some real plugin classpath does pull in).
-              Same IDE-only-artifact category as the rules above; note Gradle's own
-              --write-verification-metadata rewrite strips this comment (but keeps the <trust>
-              element) the next time someone regenerates the file - that's expected, not a
-              regression. -->
+              dependency of its own and no real gradlew task ever resolves it - a fresh
+              write-verification-metadata regeneration with refresh-dependencies does not add
+              it (unlike kotlin-stdlib, which some real plugin classpath does pull in). Same
+              IDE-only-artifact category as the rules above; note Gradle's own metadata rewrite
+              strips this comment (but keeps the trust element below) the next time someone
+              regenerates the file - that's expected, not a regression. -->
          <trust group="org.jetbrains.kotlin" name="kotlin-reflect" reason="IntelliJ-only build-script tooling artifact, not a real dependency of this project"/>
       </trusted-artifacts>
    </configuration>
