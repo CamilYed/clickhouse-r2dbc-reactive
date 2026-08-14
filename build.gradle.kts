@@ -37,7 +37,7 @@ allprojects {
 // integration.
 //
 // clickhouse-r2dbc-reactive-benchmarks (Phase 5) is JMH measurement tooling, not a library either
-// - see ROADMAP.md's Phase 5 section.
+// - see docs/PERFORMANCE.md's Phase 5 section.
 val nonPublishedModules = setOf(
     "clickhouse-r2dbc-reactive-benchmarks",
     "spring-boot-webflux-demo"

@@ -21,18 +21,19 @@ import org.openjdk.jmh.infra.Blackhole;
 
 /**
  * Diagnostic isolation benchmark for {@link StreamingScanBenchmark}'s confirmed, growing regression
- * (see ROADMAP.md's Phase 5 "Optimization phase" section — hypotheses H2/H3): consumes the exact
+ * (see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section — hypotheses H2/H3): consumes the exact
  * same query's response bytes, but never constructs a {@code RowBinaryWithNamesAndTypes} decoder on
- * either side. This isolates "HTTP transport + bridge/copy overhead" from "row decode/materialization
- * overhead" — if this benchmark shows the two drivers roughly matched, the gap
- * {@code StreamingScanBenchmark} measures lives in decode, not transport; if this benchmark alone
- * reproduces a meaningful share of that gap, transport/bridge cost (H2/H3) is a real contributor too.
+ * either side. This isolates "HTTP transport + bridge/copy overhead" from "row
+ * decode/materialization overhead" — if this benchmark shows the two drivers roughly matched, the
+ * gap {@code StreamingScanBenchmark} measures lives in decode, not transport; if this benchmark
+ * alone reproduces a meaningful share of that gap, transport/bridge cost (H2/H3) is a real
+ * contributor too.
  *
  * <p>This driver: {@link ClickHouseHttpTransport#query} as normal, but the response {@code Flux} is
  * only summed for byte count — no {@link io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder}
- * involved at all, so this exercises exactly the same {@code ByteBuf -> byte[]} path (H3) production
- * code takes ({@code ClickHouseResult} uses the identical {@code .asByteArray()} shape) without
- * decode on top of it.
+ * involved at all, so this exercises exactly the same {@code ByteBuf -> byte[]} path (H3)
+ * production code takes ({@code ClickHouseResult} uses the identical {@code .asByteArray()} shape)
+ * without decode on top of it.
  *
  * <p>client-v2: {@link QueryResponse#getInputStream()} — its own lowest-level access to the raw
  * response body, read in a plain byte-counting loop, no {@code ClickHouseBinaryFormatReader}
@@ -49,7 +50,9 @@ public class TransportOnlyStreamingBenchmark {
 
   private static final int READ_BUFFER_SIZE = 8192;
 
-  /** Row-count tiers — same shape as {@link StreamingScanBenchmark}'s, for a like-for-like split. */
+  /**
+   * Row-count tiers — same shape as {@link StreamingScanBenchmark}'s, for a like-for-like split.
+   */
   @Param({"10000", "100000", "1000000"})
   public long rows;
 
@@ -63,7 +66,8 @@ public class TransportOnlyStreamingBenchmark {
     PointQueryTable.seed(rows);
     ourTransport =
         new ClickHouseHttpTransport(
-            BenchmarkEnvironment.httpUrl(), BenchmarkEnvironment.username(),
+            BenchmarkEnvironment.httpUrl(),
+            BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
     clientV2 =
         new Client.Builder()

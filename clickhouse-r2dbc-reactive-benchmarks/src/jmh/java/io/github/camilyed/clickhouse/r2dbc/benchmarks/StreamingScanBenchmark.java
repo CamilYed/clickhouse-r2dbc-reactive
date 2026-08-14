@@ -26,27 +26,28 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 
 /**
- * Level 1 "full-table streaming scan": {@code SELECT id, label, amount FROM
- * benchmark_point_query} with no {@code WHERE}, streaming every row of {@link PointQueryTable}
- * back to the caller. Where {@link PointQueryBenchmark} isolates one round trip's protocol
- * overhead, this class measures sustained throughput and time-to-first-row over a long-running
- * result — the scenario this driver's non-blocking, backpressure-aware transport exists for, per
- * ROADMAP.md's Phase 5 "Query mix" design.
+ * Level 1 "full-table streaming scan": {@code SELECT id, label, amount FROM benchmark_point_query}
+ * with no {@code WHERE}, streaming every row of {@link PointQueryTable} back to the caller. Where
+ * {@link PointQueryBenchmark} isolates one round trip's protocol overhead, this class measures
+ * sustained throughput and time-to-first-row over a long-running result — the scenario this
+ * driver's non-blocking, backpressure-aware transport exists for, per docs/PERFORMANCE.md's Phase 5 "Query
+ * mix" design.
  *
  * <p>The whole-method {@code SampleTime} JMH records is closer to time-to-last-row (drain the
  * entire scan); time-to-first-row is a separate metric JMH has no built-in support for, so it's
- * recorded into its own {@link Histogram} per driver and logged at the end of the trial rather
- * than folded into JMH's own result — see ROADMAP.md's "What's measured, and how". Rows/sec isn't
- * computed here either: derive it from a run's {@code rows} param divided by that run's mean
- * {@code us/op}, as ROADMAP.md's results tables do, rather than adding a redundant JMH metric.
+ * recorded into its own {@link Histogram} per driver and logged at the end of the trial rather than
+ * folded into JMH's own result — see docs/PERFORMANCE.md's "What's measured, and how". Rows/sec
+ * isn't computed here either: derive it from a run's {@code rows} param divided by that run's mean
+ * {@code us/op}, as docs/PERFORMANCE.md's results tables do, rather than adding a redundant JMH
+ * metric.
  *
- * <p><b>One known, deliberately-not-forced-to-match asymmetry</b> (documented, not silently
- * accepted — see {@link PointQueryBenchmark}'s own Javadoc, which this inherits): this driver
- * materializes each row into a {@code Map<String, Object>} via {@link RowBinaryDecoder#decodeRows},
- * while client-v2 reads three typed values directly off its reader with no intermediate
- * collection. At one row that cost is negligible; at this benchmark's row counts (thousands, not
- * one) it's exactly what this benchmark exists to surface — not something to paper over by forcing
- * both sides through the same shape.
+ * <p>Previously documented here as a known asymmetry (see {@link PointQueryBenchmark}'s Javadoc,
+ * which this inherited): this driver used to materialize each row into a {@code Map<String,
+ * Object>} via {@link RowBinaryDecoder#decodeRows}, while client-v2 reads three typed values
+ * directly off its reader with no intermediate collection. Since docs/PERFORMANCE.md's Phase 5 "Optimization
+ * phase" section (hypothesis H1), {@link RowBinaryDecoder#decodeRows} emits a compact {@code
+ * DecodedRow} (a plain {@code Object[]}) instead — closing most, not yet confirmed all, of that gap
+ * at this benchmark's scale. Re-run this class after the redesign to confirm.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -61,13 +62,13 @@ public class StreamingScanBenchmark {
   private static final long TTFR_HIGHEST_TRACKABLE_VALUE_MICROS = TimeUnit.SECONDS.toMicros(60);
 
   /**
-   * Row-count tiers — see ROADMAP.md's Phase 5 "Dataset" table for what each tier is for. A
+   * Row-count tiers — see docs/PERFORMANCE.md's Phase 5 "Dataset" table for what each tier is for. A
    * single-tier run (only 10,000 rows) is dominated by fixed per-request cost (HTTP round trip,
    * ClickHouse query startup, first-chunk latency) rather than sustained per-row streaming cost;
-   * running 10k/100k/1M side by side is what actually shows whether a latency gap is fixed
-   * overhead (flat across tiers) or per-row cost (grows with {@code rows}). {@code 10_000_000}+
-   * ("large" tier) is deliberately not included here — a manual, opt-in {@code @Param} edit for a
-   * release-gate run, not routine local iteration (see ROADMAP.md's Phase 5 "Dataset" table).
+   * running 10k/100k/1M side by side is what actually shows whether a latency gap is fixed overhead
+   * (flat across tiers) or per-row cost (grows with {@code rows}). {@code 10_000_000}+ ("large"
+   * tier) is deliberately not included here — a manual, opt-in {@code @Param} edit for a
+   * release-gate run, not routine local iteration (see docs/PERFORMANCE.md's Phase 5 "Dataset" table).
    */
   @Param({"10000", "100000", "1000000"})
   public long rows;
@@ -84,7 +85,8 @@ public class StreamingScanBenchmark {
     PointQueryTable.seed(rows);
     ourTransport =
         new ClickHouseHttpTransport(
-            BenchmarkEnvironment.httpUrl(), BenchmarkEnvironment.username(),
+            BenchmarkEnvironment.httpUrl(),
+            BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
     clientV2 =
         new Client.Builder()
@@ -106,9 +108,9 @@ public class StreamingScanBenchmark {
   }
 
   /**
-   * This driver: streams every row via {@link RowBinaryDecoder#decodeRows}, timing the gap
-   * between subscribe and the first emitted row into {@link #ourDriverTtfr}, then draining the
-   * rest of the stream (this method's own JMH-measured latency is effectively time-to-last-row).
+   * This driver: streams every row via {@link RowBinaryDecoder#decodeRows}, timing the gap between
+   * subscribe and the first emitted row into {@link #ourDriverTtfr}, then draining the rest of the
+   * stream (this method's own JMH-measured latency is effectively time-to-last-row).
    *
    * <p>The first-row check is a plain array-backed flag read-then-set, not an {@code AtomicLong}
    * compare-and-swap — {@link RowBinaryDecoder#decodeRows} applies no {@code publishOn}/{@code

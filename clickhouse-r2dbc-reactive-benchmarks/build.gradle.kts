@@ -4,7 +4,7 @@ plugins {
 }
 
 // JMH benchmarks comparing this driver against client-v2, at multiple levels (raw transport,
-// public R2DBC SPI, reactive-vs-blocking concurrency). See ROADMAP.md's Phase 5 section for the
+// public R2DBC SPI, reactive-vs-blocking concurrency). See docs/PERFORMANCE.md's Phase 5 section for the
 // full design and rationale. Not published (see root build.gradle.kts's nonPublishedModules) and
 // not part of `check`/`build` — run explicitly via `./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh`.
 //

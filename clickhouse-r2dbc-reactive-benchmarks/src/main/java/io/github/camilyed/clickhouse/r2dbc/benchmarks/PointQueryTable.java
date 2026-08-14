@@ -4,7 +4,7 @@ import java.util.SplittableRandom;
 
 /**
  * The narrow, two-column table the point-query and burst-concurrency benchmarks read from — see
- * ROADMAP.md's Phase 5 section ("Dataset") for why this is a separate, narrow table rather than
+ * docs/PERFORMANCE.md's Phase 5 section ("Dataset") for why this is a separate, narrow table rather than
  * reusing the wide multi-type table: a narrow table isolates connection/protocol overhead from
  * decode cost, which is exactly what the point-query benchmarks are meant to measure in isolation.
  *
@@ -40,12 +40,12 @@ public final class PointQueryTable {
   }
 
   /**
-   * A fixed-seed, pre-generated pool of valid {@code id}s for a table seeded with {@code
-   * rowCount} rows — deliberately not {@code Math.random()} called inside a benchmark's hot path
-   * (costs little relative to a real network round trip, but makes runs non-reproducible and can
-   * give client-v2 and this driver different access patterns across a run). Call once in {@code
-   * @Setup}, then cycle through the returned array during measurement; both benchmark methods
-   * built from the same {@code seed} see the identical id sequence.
+   * A fixed-seed, pre-generated pool of valid {@code id}s for a table seeded with {@code rowCount}
+   * rows — deliberately not {@code Math.random()} called inside a benchmark's hot path (costs
+   * little relative to a real network round trip, but makes runs non-reproducible and can give
+   * client-v2 and this driver different access patterns across a run). Call once in {@code @Setup},
+   * then cycle through the returned array during measurement; both benchmark methods built from the
+   * same {@code seed} see the identical id sequence.
    */
   public static long[] deterministicIds(final long rowCount, final int poolSize, final long seed) {
     final SplittableRandom random = new SplittableRandom(seed);

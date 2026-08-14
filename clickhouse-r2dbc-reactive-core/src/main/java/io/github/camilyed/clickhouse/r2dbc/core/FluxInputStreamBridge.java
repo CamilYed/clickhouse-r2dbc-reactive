@@ -63,12 +63,12 @@ public final class FluxInputStreamBridge extends InputStream {
 
   /**
    * Reused across every {@link #read()} call rather than allocated fresh each time — this class is
-   * read by exactly one dedicated worker thread per its own class-level Javadoc, so a single mutable
-   * field is safe here. Measured, not assumed: {@code DecoderOnlyBenchmark}'s {@code -prof gc} run
-   * (see ROADMAP.md's Phase 5 "Optimization phase" section) found this driver allocating roughly 3x
-   * more bytes/row than client-v2 while decoding the same payload, and every {@code String} column's
-   * length-prefix varint is read one byte at a time via this exact overload — a real, confirmed,
-   * per-row allocation this field removes entirely.
+   * read by exactly one dedicated worker thread per its own class-level Javadoc, so a single
+   * mutable field is safe here. Measured, not assumed: {@code DecoderOnlyBenchmark}'s {@code -prof
+   * gc} run (see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section) found this driver allocating
+   * roughly 3x more bytes/row than client-v2 while decoding the same payload, and every {@code
+   * String} column's length-prefix varint is read one byte at a time via this exact overload — a
+   * real, confirmed, per-row allocation this field removes entirely.
    */
   private final byte[] singleByteReadBuffer = new byte[1];
 

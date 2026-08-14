@@ -1,11 +1,16 @@
 # clickhouse-r2dbc-reactive-benchmarks
 
 JMH benchmarks comparing this driver against `client-v2`, at multiple levels. Full design and
-rationale: [ROADMAP.md's Phase 5 section](../ROADMAP.md#phase-5-later--load-and-performance-testing).
+rationale: [docs/PERFORMANCE.md's Phase 5 section](../docs/PERFORMANCE.md#phase-5-later--load-and-performance-testing).
 
 Not published, not part of `./gradlew build`/`check`. Requires Docker (Testcontainers starts a real,
 version-pinned `clickhouse/clickhouse-server`, one container per JMH fork — see
 `BenchmarkEnvironment`'s Javadoc) and JDK 21.
+
+All numbers currently recorded in this README/ROADMAP.md were measured on a single MacBook Pro
+14-inch (Nov 2023, Apple M3 Pro, 36 GB RAM, macOS Tahoe 26.5.2) — a shared consumer laptop, not an
+isolated benchmarking rig. Treat absolute numbers as specific to that machine; the driver-vs-driver
+comparisons (same hardware/JVM/data on both sides) are the portable part.
 
 ## Running
 
@@ -36,7 +41,7 @@ build script for these flags to do anything.
 
 ## Status
 
-Two Level 1 classes run for real against Docker/ClickHouse (see ROADMAP.md's Phase 5 section for
+Two Level 1 classes run for real against Docker/ClickHouse (see docs/PERFORMANCE.md's Phase 5 section for
 numbers):
 
 - `PointQueryBenchmark` — a real single-row lookup against a seeded table.
@@ -51,7 +56,7 @@ instrumentation ran an `AtomicLong` compare-and-swap on every row, not just the 
 re-run for real. **Confirmed, trustworthy result: this driver is genuinely slower for streaming
 scans, and the gap grows sharply with row count (≈13% → ≈55% → ≈80% slower, 10k → 100k → 1M rows)**
 — unlike `PointQueryBenchmark`/`TrivialQueryBenchmark`, which still favor this driver. See
-ROADMAP.md's Phase 5 "Optimization phase" section for the full numbers, the ranked hypothesis list
+docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for the full numbers, the ranked hypothesis list
 (verified against this repo's actual source, not just inspection), and the investigation plan.
 
 Two new diagnostic classes localize that gap, **run for real, question answered**:
@@ -66,7 +71,7 @@ Two new diagnostic classes localize that gap, **run for real, question answered*
 **Conclusion: transport is this driver's strength, not its weakness — decode/materialization is the
 confirmed, localized bottleneck**, with a smaller secondary cost in the transport-to-decode bridge
 hand-off (sum of the two isolated numbers runs 22–28% under the combined `StreamingScanBenchmark`
-figure for this driver, near-zero for client-v2). Full tables and reasoning: ROADMAP.md's Phase 5
+figure for this driver, near-zero for client-v2). Full tables and reasoning: docs/PERFORMANCE.md's Phase 5
 "Optimization phase" section.
 
 `-prof gc` on `DecoderOnlyBenchmark`, **run for real, H0 and H1 both confirmed**: client-v2 allocates
@@ -103,7 +108,7 @@ calls and packs them into a plain `Object[]` — a real retained per-row object,
 but a genuine, moderate residual remains — **~13–16% slower than client-v2, ~48–56 bytes/row more**,
 most likely the `FluxInputStreamBridge`/`Flux.generate` pipeline itself (the never-isolated H2
 hypothesis) — a reasonable cost for real backpressure and a non-blocking event loop, not a multi-x
-regression. Full numbers and the multi-fork methodology note: ROADMAP.md's Phase 5 section.
+regression. Full numbers and the multi-fork methodology note: docs/PERFORMANCE.md's Phase 5 section.
 
 **Multi-fork methodology note**: the first `ourDriverCompactRow` run used the default single fork and
 gave numbers that didn't reproduce run-to-run on identical code/data. `-Pjmh.forks`/

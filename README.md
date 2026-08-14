@@ -271,7 +271,7 @@ The execution-path analysis, transport spike, transport SPI, and first R2DBC con
 `0.1.0` release is closing the open gaps below, not building new surface area:
 
 - Benchmarks vs. client-v2 — Phase 5, in progress; see
-  [ROADMAP.md's Phase 5 section](ROADMAP.md#phase-5-later--load-and-performance-testing)
+  [docs/PERFORMANCE.md's Phase 5 section](docs/PERFORMANCE.md#phase-5-later--load-and-performance-testing)
 - Maven Central publication (`io.github.camilyed`), following the same release process used in
   [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)
 - Evaluate HTTP multiplexing / native TCP transport as a separate track

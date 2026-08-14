@@ -24,9 +24,9 @@ import org.testcontainers.clickhouse.ClickHouseContainer;
  * so it's reused directly here; only the JUnit wiring around it isn't.
  *
  * <p><b>Shared per JVM fork, not per whole run — confirmed against a real run, not assumed.</b> JMH
- * forks a fresh JVM per {@code @Benchmark} method by default ({@code fork=1}, no {@code
- * @Fork(warmups=..., value=...)} override applied), so this class's {@code static} container field
- * is only shared across benchmark methods that happen to execute inside the same fork — in
+ * forks a fresh JVM per {@code @Benchmark} method by default ({@code fork=1}, no
+ * {@code @Fork(warmups=..., value=...)} override applied), so this class's {@code static} container
+ * field is only shared across benchmark methods that happen to execute inside the same fork — in
  * practice, one container start per {@code @Benchmark} method, not one for the whole {@code jmh}
  * task invocation. Watched two separate {@code clickhouse/clickhouse-server} containers start on
  * two different ports during a single {@code jmh} run (one per benchmark method), each paying the
@@ -112,7 +112,8 @@ public final class BenchmarkEnvironment {
         Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
     final HttpRequest request =
         HttpRequest.newBuilder()
-            .uri(URI.create(httpUrl() + "/?query=" + URLEncoder.encode(sql, StandardCharsets.UTF_8)))
+            .uri(
+                URI.create(httpUrl() + "/?query=" + URLEncoder.encode(sql, StandardCharsets.UTF_8)))
             .header("Authorization", "Basic " + basicAuth)
             .timeout(Duration.ofMinutes(5))
             .POST(HttpRequest.BodyPublishers.noBody())
