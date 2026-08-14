@@ -19,6 +19,7 @@ proposed to the ClickHouse team.
 - [Non-functional requirements: logging, metrics, leaks](#non-functional-requirements-logging-metrics-leaks)
 - [Phase 5 (later) — Load and performance testing](docs/PERFORMANCE.md)
 - [Phase 6 (later) — Spring WebFlux interop demo](#phase-6-later--spring-webflux-interop-demo)
+- [Phase 7 — Operational control & R2DBC correctness (0.2.0)](#phase-7--operational-control--r2dbc-correctness-020)
 - [Working with Claude / IntelliJ](#working-with-claude--intellij)
 
 ## Module map
@@ -1049,6 +1050,186 @@ CRUD, covering as much of the driver as reasonably fits":
   4.1.0 artifact on Maven Central) instead, since this demo never uses
   `R2dbcEntityTemplate`/Spring Data repositories anyway — removes `DataR2dbcAutoConfiguration` from
   the classpath entirely rather than trying to satisfy or bypass its `Dialect` requirement.
+
+## Phase 7 — Operational control & R2DBC correctness (0.2.0)
+
+Starts 2026-08-17. Scope comes from an external review of the `0.1.0` codebase (kept as
+`docs/REVIEW_0.2.0_PLAN_SOURCE.md` for the full original text) — each claim below was individually
+re-verified against this repo's actual source before being copied in here as a roadmap commitment,
+not taken on faith: `ClickHouseResult`'s own Javadoc already documents the `filter()`-derived
+consumption-state gap (2.3 below); `ClickHouseRow.get`'s own Javadoc already documents the
+cast-only, no-widening-conversion behavior (2.4); `ClickHouseConnection.setStatementTimeout` and
+`ClickHouseStatement.add()` both still throw `UnsupportedOperationException` today, confirmed by
+reading the source, not the Javadoc's word for it.
+
+**The single most important call in this phase, if only one thing shipped:** expose and test the
+real transport admission-control boundary. `io.r2dbc.pool`'s `ConnectionPool` is not this driver's
+physical HTTP connection pool — `ClickHouseHttpTransport`'s Reactor Netty `ConnectionProvider` is,
+and it currently has no R2DBC-option-level contract at all (see [Connection
+pooling](README.md#connection-pooling) in the README). A driver that's only "reactive" at the
+`Publisher` type level but has an invisible, uncontrolled transport queue underneath is exactly the
+failure mode [Why](README.md#why) names as this project's origin — closing that gap is more
+valuable to production users than any new ClickHouse type or a second transport.
+
+Same TDD/black-box/no-Mockito rules as always (CLAUDE.md), plus phase-specific ground rules that
+matter more here because this phase is concurrency- and resource-lifecycle-heavy:
+
+- One issue/branch/PR per item below — no unrelated cleanup, renaming, or speculative refactoring
+  riding along on a focused PR.
+- Before touching production code: identify the existing contract, write a focused failing test for
+  the missing behavior, then implement the smallest change that makes it pass.
+- Never reach for `block()`/`join()`/`.get()`/`Thread.sleep()`/unbounded buffering/a blocking HTTP
+  client to make a test or a fix easier — if that temptation shows up, the design is wrong, not the
+  test.
+- Any change touching a Netty `ByteBuf`: test cancellation, the error path, and resource release
+  explicitly — don't assume GC/finalizers cover it.
+- Any change touching concurrency/queueing: make queue/limit ownership explicit in the code (not
+  just in a comment), and test saturation and cancellation-while-pending, not just the happy path.
+- Run `spotlessCheck`/unit/integration/verification tasks before calling an item done — same bar as
+  every other phase.
+
+### Must have (P0)
+
+1. **Expose the Reactor Netty transport pool as R2DBC options.** New options prefixed
+   `transport...` (not `pool...`, so they're never confused with `spring.r2dbc.pool.*`, which
+   configures the *other* pool layer): `transportMaxConnections`, `transportPendingAcquireMaxCount`,
+   `transportPendingAcquireTimeout`, `transportMaxIdleTime`, `transportMaxLifeTime`. Every
+   `ClickHouseHttpTransport` construction path routes through one config object/builder instead of
+   growing more constructor overloads (see item 8 below — this is also the trigger for the
+   config-object refactor, not refactoring for its own sake). Acceptance: available through both
+   `ConnectionFactoryOptions` and the R2DBC URL query string; invalid values fail fast at factory
+   creation, no silent fallback; a test that proves an acquire is actually rejected once
+   `pendingAcquireMaxCount` is exceeded; a `pendingAcquireTimeout` test; a max-active-connections
+   test; README's existing "Connection pooling" section extended to document these options
+   (structure already there — Reactor Netty defaults table, the "is it worth setting" guidance —
+   this item makes the table's "no R2DBC option" gap it already calls out no longer true).
+2. **`Connection.setStatementTimeout(Duration)`** backed by ClickHouse's `max_execution_time`
+   server setting, distinct from `responseTimeout` (transport-level, HTTP response wait) — a set
+   timeout is inherited by statements created from that connection. `Duration.ZERO` gets an
+   explicit, documented meaning (no timeout) rather than an accidental one. Acceptance: a real-
+   ClickHouse test with a deliberately slow query that actually gets cut off by the server-side
+   limit; correct R2DBC exception mapping for the resulting ClickHouse error; docs distinguishing
+   statement timeout (query execution limit) from transport `responseTimeout` (network-level).
+3. **Shared `Result` consumption state across `filter()`-derived views.** Today `filter()` returns a
+   `ClickHouseResult` with its own independent `AtomicBoolean` — consuming both the original and a
+   filtered view is a misuse this class doesn't currently catch (already stated in its own Javadoc).
+   Fix: extract the consumption guard into its own small type, shared by an original `Result` and
+   every `filter()` view derived from it. Acceptance: `result.map(...); result.getRowsUpdated();`
+   throws on the second call (already true); `var f = result.filter(...); f.map(...); result.map(...);`
+   also throws (currently doesn't); `result.map(...); result.filter(...);` — filtering after
+   consumption throws too. All per R2DBC's single-consumption contract, not an invented rule.
+4. **Controlled typed conversions for `Row.get(..., Class<T>)`.** Today it's a bare `type.cast(...)`
+   — asking for `Long.class` against a decoded `Integer` throws `ClassCastException` instead of
+   converting (already stated in `ClickHouseRow`'s own Javadoc). First scope, deliberately not
+   "convert anything to anything": a tested numeric matrix (`Byte`/`Short`/`Integer`/`Long`/
+   `Float`/`Double`/`BigInteger`/`BigDecimal`, with explicit range checking — no silent overflow —
+   and a predictable conversion-failure exception) plus the unambiguous non-numeric cases
+   (`String`, `UUID`, `LocalDate`, `LocalDateTime`, `Instant`/`OffsetDateTime` per the existing
+   ClickHouse-type-to-Java-type mapping). Lives in its own class (a converter, not scattered
+   `instanceof` checks inside `ClickHouseRow`) with a tabular test matrix.
+5. **Correctness-first `Statement.add()`.** Still throws `UnsupportedOperationException`. First
+   implementation: each `bind(...).add()` snapshots the current binding set; `execute()` runs the
+   snapshotted sets sequentially via `Flux.fromIterable(bindingSets).concatMap(...)`, emitting one
+   `Result` per set, per the R2DBC contract. `concatMap` deliberately, not a concurrent operator, for
+   this first pass: predictable ordering, simple error semantics, no surprise concurrency increase.
+   Batched/coalesced multi-row `INSERT` SQL is explicitly deferred — a large insert should keep using
+   `insertStreaming` (already the documented fast path), not wait on this.
+6. **Netty leak-detection test lane.** A dedicated test task/lane run with an aggressive Netty leak
+   detector, specifically covering cancellation, disconnect mid-response, decoder failure, timeout,
+   retry, and downstream cancellation after a few records — the shapes most likely to strand a
+   `ByteBuf`. Already named as important in [Non-functional
+   requirements](#non-functional-requirements-logging-metrics-leaks); this is where it actually gets
+   built.
+7. **An R2DBC compatibility/TestKit lane**, using official R2DBC test tooling where it applies, with
+   ClickHouse's intentional non-support explicitly documented rather than silently skipped:
+   transactions, savepoints, generated keys (where they don't make sense for this model), batch
+   semantics scoped to wherever item 5 lands. Goal isn't 100% green at any cost — it's a precise,
+   written answer to "where does this driver match the SPI, and where does ClickHouse deliberately
+   not have that semantic."
+8. **Document the double-pool behavior.** Largely already done — README's "Connection pooling"
+   section (mermaid diagram of both layers, Reactor Netty defaults table, "is it worth tuning"
+   guidance) predates this phase and already covers this; item 1 above is what removes the one gap
+   that section itself calls out (no R2DBC option for the transport pool). Re-check the wording once
+   item 1 ships so the "gap" language gets updated to "how to configure it," not left stale.
+
+### Should have (P1)
+
+9. **A neutral driver observability SPI** (`DriverObservationListener`: `queryStarted`/
+   `queryCompleted`/`queryFailed`/`queryCancelled`), no hard Micrometer dependency in `core`. Minimum
+   data per event: `query_id`, operation kind, connection-acquire wait time, total request time,
+   time-to-first-row, row/byte counts, retries, cancellation/timeout flags, active/pending transport
+   connections. Never logs full SQL, bind values, or credentials by default — a query
+   hash/fingerprint is the safe default for correlating log lines.
+10. **Basic lifecycle logging keyed on `query_id`**, using the SPI above.
+11. **Explicit ownership of the `RowBinaryDecoder`'s scheduler.** It currently uses
+    `Schedulers.boundedElastic()` because the bridge to client-v2's blocking reader interface needs
+    somewhere off the event loop to run. The open question worth a real test, not an assumption:
+    does every row read actually happen off the Netty event loop, including when downstream requests
+    from a different thread? Target shape: a driver-owned, bounded scheduler (configurable worker
+    count and queue), shut down together with the resource that owns it — not incidental reliance on
+    the globally-shared `boundedElastic`. Add a test that fails if a blocking read runs on a
+    `reactor-http-nio-*` thread, plus slow-subscriber, cancel-during-decode, many-parallel-large-
+    result, and bounded-memory tests.
+12. **A CI compatibility matrix** — split the current single CI lane into a fast PR lane (Java 21,
+    Spotless, unit, integration, leak checks) and a heavier nightly/scheduled lane (minimum
+    supported ClickHouse version, current stable/LTS, newest supported, an extra JDK if compatibility
+    is ever claimed there, JMH smoke/regression, larger concurrency tests). JMH as a full run stays
+    out of the PR gate — measurement noise would produce too many false positives as a hard gate.
+13. **Release tag + GitHub Release automation**, wired onto the existing publish workflow: after a
+    successful Central publish, create the Git tag, the GitHub Release, and release notes from a
+    changelog, so the Maven Central version, the tag, and the GitHub Release always point at the same
+    commit. (`0.1.0` currently has none of these — the first thing to backfill once this item ships.)
+
+### Could have (P2)
+
+14. Optional `clickhouse-r2dbc-reactive-micrometer` adapter for item 9's SPI.
+15. Query fingerprinting for logs/metrics (pairs with item 9/10).
+16. Benchmark-driven tuning of the RowBinary response chunk demand value.
+
+### Explicitly out of scope for 0.2.0
+
+Named up front so the phase doesn't drift into a rewrite: native ClickHouse TCP transport, HTTP/2
+"because it might be faster" without a profiler-identified bottleneck forcing it, a full fix for
+Spring `DatabaseClient.bind()` against ClickHouse's typed `{name:Type}` placeholders (a separate,
+optional `clickhouse-r2dbc-reactive-spring` module is the right shape for that, and it's a `0.3.x`
+conversation), `Dynamic`/`Variant` types, automatic retry for writes based on server error codes
+(needs an explicit `RetrySafety`/idempotency model first — not just "retry more"), transaction
+emulation, a large module-boundary refactor, or a driver-owned ORM/query DSL. `0.2.0` is about
+production predictability, not surface area.
+
+### PR sequence
+
+One issue/branch/PR per item, in this order (each is independently mergeable; later ones don't
+block on earlier ones except where noted):
+
+| PR | Scope | Depends on |
+| --- | --- | --- |
+| 1 | Result consumption correctness (item 3) | — |
+| 2 | Row conversions (item 4) | — |
+| 3 | `Statement.add()` (item 5) | — |
+| 4 | Statement timeout (item 2) | — |
+| 5 | Transport pool options (item 1) — includes the config-object refactor for `ClickHouseHttpTransport` | — |
+| 6 | Decoder scheduler contract (item 11) | — |
+| 7 | Observability SPI (item 9/10) | benefits from PR 5's pool metrics being available, not blocked by it |
+| 8 | R2DBC compatibility lane + CI matrix (items 7, 12) | — |
+| 9 | Release/documentation sync (item 13, README/ROADMAP/CHANGELOG) | all of the above, since it documents what shipped |
+
+### Definition of done for 0.2.0
+
+- [ ] Users control the physical transport pool without writing their own Java constructor call.
+- [ ] The transport's pending-acquire queue is bounded and has a timeout, both configurable.
+- [ ] Statement timeout works against a real ClickHouse server.
+- [ ] `Result` has unambiguous single-consumption semantics, including across `filter()` views.
+- [ ] Typed `Row.get` has controlled, tested conversions for the P0 type matrix.
+- [ ] `Statement.add()` works correctly (sequential, one `Result` per binding set).
+- [ ] Cancellation/timeout/error paths leave no `ByteBuf` leaks (leak-detector lane passes).
+- [ ] A test actively protects the Netty event loop from a blocking decode call.
+- [ ] It's written down which R2DBC compatibility cases are supported vs. deliberately unsupported.
+- [ ] README documents the outer R2DBC pool and inner transport pool as one coherent story (already
+      true today; re-verify after PR 5).
+- [ ] The release has a changelog entry, a Git tag, and a GitHub Release pointing at the same commit
+      as the Maven Central artifact.
+- [ ] A benchmark baseline is recorded (docs/PERFORMANCE.md) but is not a flaky PR gate.
 
 ## Working with Claude / IntelliJ
 
