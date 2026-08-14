@@ -72,6 +72,33 @@ class ClickHouseResultTest {
         .verifyComplete();
   }
 
+  @Test
+  void shouldRejectMappingWithoutAMappingFunction() {
+    // given
+    final ClickHouseResult result = resultOf(1);
+
+    // when / then
+    assertThatThrownBy(() -> result.map(null)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldRejectFilteringWithoutAPredicate() {
+    // given
+    final ClickHouseResult result = resultOf(1);
+
+    // when / then
+    assertThatThrownBy(() -> result.filter(null)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldRejectFlatMappingWithoutAMappingFunction() {
+    // given
+    final ClickHouseResult result = resultOf(1);
+
+    // when / then
+    assertThatThrownBy(() -> result.flatMap(null)).isInstanceOf(IllegalArgumentException.class);
+  }
+
   private ClickHouseResult resultOf(final Object... ids) {
     return resultOfWithWrittenRows(0L, ids);
   }

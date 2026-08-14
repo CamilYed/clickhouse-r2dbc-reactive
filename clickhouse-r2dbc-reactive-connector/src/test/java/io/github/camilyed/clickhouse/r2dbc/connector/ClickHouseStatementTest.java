@@ -47,6 +47,15 @@ class ClickHouseStatementTest {
   }
 
   @Test
+  void shouldRejectBindingANullValueByIndex() {
+    // given
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+
+    // when / then
+    assertThatThrownBy(() -> statement.bind(0, null)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
   void shouldBindByIndexInFirstOccurrenceOrder() {
     // given
     final ClickHouseStatement statement =
@@ -78,6 +87,26 @@ class ClickHouseStatementTest {
     // when / then
     assertThatThrownBy(() -> statement.bindNull("missing", Integer.class))
         .isInstanceOf(NoSuchElementException.class);
+  }
+
+  @Test
+  void shouldRejectBindingNullWithoutATypeByIndex() {
+    // given
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+
+    // when / then
+    assertThatThrownBy(() -> statement.bindNull(0, null))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldRejectBindingNullWithoutATypeByName() {
+    // given
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+
+    // when / then
+    assertThatThrownBy(() -> statement.bindNull("id", null))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test

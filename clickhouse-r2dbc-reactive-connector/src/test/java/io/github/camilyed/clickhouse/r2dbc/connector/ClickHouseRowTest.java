@@ -42,6 +42,19 @@ class ClickHouseRowTest {
   }
 
   @Test
+  void shouldRejectAReadByNameWithoutAName() {
+    // when / then
+    assertThatThrownBy(() -> row.get(null, Object.class))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldRejectAReadByNameWithoutAType() {
+    // when / then
+    assertThatThrownBy(() -> row.get("name", null)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
   void shouldRejectAReadForAnUnknownColumnName() {
     // when / then
     assertThatThrownBy(() -> row.get("missing", Object.class))
