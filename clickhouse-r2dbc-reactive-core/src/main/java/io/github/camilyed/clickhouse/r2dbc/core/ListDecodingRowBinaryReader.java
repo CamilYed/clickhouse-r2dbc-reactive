@@ -62,4 +62,32 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
         dataType == ClickHouseDataType.Array || dataType == ClickHouseDataType.Nested;
     return isListLike ? List.class : null;
   }
+
+  /**
+   * Decodes the next row and returns a snapshot of its values as a plain {@code Object[]}, in wire
+   * column order — bypassing client-v2's {@code RecordWrapper}/{@code Map} facade that {@link
+   * #next()} builds, once past the one call to {@link #next()} this method still makes (see below
+   * for why that part is kept, not reimplemented). See {@link DecodedRow}'s Javadoc for why this
+   * exists: the {@code Map} copy this replaces measured at roughly 576 bytes/row, the dominant
+   * per-row allocation and latency cost in this driver's decode path (docs/PERFORMANCE.md's Phase 5
+   * "Optimization phase" section, hypothesis H1).
+   *
+   * <p>Deliberately still calls {@link #next()} rather than reimplementing its
+   * buffer-swap-and-decode logic directly: that logic lives in client-v2's {@code
+   * .internal}-adjacent base class this project has already drawn a boundary around not depending
+   * on (see this class's own Javadoc). {@link #next()}'s own allocation — one {@code RecordWrapper}
+   * plus two {@code WeakReference}s — is a small, fixed cost that client-v2's own decode path pays
+   * identically (it also calls {@code next()}), so it is not a competitive disadvantage, only the
+   * avoidable {@code Map}-copy on top of it is.
+   *
+   * <p>Must only be called when {@link #hasNext()} is {@code true} — same precondition {@link
+   * #next()} itself has. {@code currentRecord} is read immediately after {@link #next()} returns,
+   * on the same thread, before any later call could swap it out from under this snapshot — safe
+   * because exactly one dedicated worker thread ever drives this reader (see {@link
+   * FluxInputStreamBridge}'s own Javadoc for why).
+   */
+  Object[] nextRowValues() {
+    next();
+    return currentRecord.clone();
+  }
 }

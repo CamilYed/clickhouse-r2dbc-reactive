@@ -4,6 +4,7 @@ import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
@@ -29,8 +30,8 @@ import reactor.core.publisher.Flux;
  * {@link RowBinaryDecoder} vs client-v2's {@link Client} + {@link ClickHouseBinaryFormatReader},
  * running the same single-row parameterized lookup against {@link PointQueryTable}. Measures the
  * protocol/connection-overhead floor, deliberately without either driver's R2DBC-shape or
- * public-API translation layer in the way — see the "Public R2DBC SPI" level benchmarks (a
- * separate class) for that comparison.
+ * public-API translation layer in the way — see the "Public R2DBC SPI" level benchmarks (a separate
+ * class) for that comparison.
  *
  * <p>First slice of the Phase 5 benchmark suite (see ROADMAP.md) — proves the module/dataset/
  * comparison-level design end to end before the remaining query shapes (full scan, wide decode,
@@ -47,14 +48,14 @@ public class PointQueryBenchmark {
   /**
    * How many distinct ids {@link PointQueryTable#deterministicIds} pre-generates — large enough
    * that a 10s measurement window cycles through it many times over without any single id being
-   * disproportionately cache-hot, small enough to build in {@code @Setup} instantly. A power of
-   * two so cycling through it is a cheap bitmask, not a division, in the benchmark hot path.
+   * disproportionately cache-hot, small enough to build in {@code @Setup} instantly. A power of two
+   * so cycling through it is a cheap bitmask, not a division, in the benchmark hot path.
    */
   private static final int ID_POOL_SIZE = 1 << 16;
 
   private static final long ID_SEED = 42L;
 
-  /** Row-count tier — see ROADMAP.md's Phase 5 "Dataset" table for what each tier is for. */
+  /** Row-count tier — see docs/PERFORMANCE.md's Phase 5 "Dataset" table for what each tier is for. */
   @Param({"10000"})
   public long rows;
 
@@ -75,7 +76,8 @@ public class PointQueryBenchmark {
     ids = PointQueryTable.deterministicIds(rows, ID_POOL_SIZE, ID_SEED);
     ourTransport =
         new ClickHouseHttpTransport(
-            BenchmarkEnvironment.httpUrl(), BenchmarkEnvironment.username(),
+            BenchmarkEnvironment.httpUrl(),
+            BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
     clientV2 =
         new Client.Builder()
@@ -96,12 +98,13 @@ public class PointQueryBenchmark {
    * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decodeRows},
    * parameterized via ClickHouse's {@code {id:UInt64}} mechanism.
    *
-   * <p>The one remaining known asymmetry with {@link #clientV2}, deliberately not forced into
-   * false equivalence: this driver materializes each row into a {@code Map<String, Object>} (see
-   * {@link RowBinaryDecoder}'s own Javadoc for why — a lifetime-safety tradeoff, not an accident),
-   * while client-v2 reads typed values directly off its reader with no intermediate map. A future
-   * transport-only benchmark (checksumming raw bytes, no decode at all) would isolate protocol cost
-   * from this decode-shape difference — see ROADMAP.md's Phase 5 section.
+   * <p>Previously, the one known asymmetry with {@link #clientV2} was that this driver materialized
+   * each row into a {@code Map<String, Object>} while client-v2 read typed values directly off its
+   * reader with no intermediate collection — since docs/PERFORMANCE.md's Phase 5 "Optimization phase"
+   * section (hypothesis H1), {@link RowBinaryDecoder} now snapshots each row into a compact {@link
+   * DecodedRow} (a plain {@code Object[]}) instead, closing most of that gap. A transport-only
+   * benchmark (checksumming raw bytes, no decode at all) isolates protocol cost from decode cost
+   * separately — see {@code TransportOnlyStreamingBenchmark}.
    */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
@@ -109,8 +112,7 @@ public class PointQueryBenchmark {
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
-    final Map<String, Object> row =
-        RowBinaryDecoder.decodeRows(body).blockFirst(Duration.ofSeconds(10));
+    final DecodedRow row = RowBinaryDecoder.decodeRows(body).blockFirst(Duration.ofSeconds(10));
     blackhole.consume(row);
   }
 

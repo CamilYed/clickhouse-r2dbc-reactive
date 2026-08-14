@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseQueryResponse;
 import io.r2dbc.spi.Result;
@@ -8,7 +9,6 @@ import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
 import java.nio.ByteBuffer;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -36,7 +36,7 @@ import reactor.core.publisher.Mono;
 final class ClickHouseResult implements Result {
 
   private final ClickHouseRowMetadata metadata;
-  private final Flux<Map<String, Object>> rows;
+  private final Flux<DecodedRow> rows;
   private final long writtenRows;
   private final AtomicBoolean consumed = new AtomicBoolean(false);
 
@@ -45,9 +45,7 @@ final class ClickHouseResult implements Result {
   }
 
   private ClickHouseResult(
-      final ClickHouseRowMetadata metadata,
-      final Flux<Map<String, Object>> rows,
-      final long writtenRows) {
+      final ClickHouseRowMetadata metadata, final Flux<DecodedRow> rows, final long writtenRows) {
     this.metadata = metadata;
     this.rows = rows;
     this.writtenRows = writtenRows;
@@ -96,7 +94,7 @@ final class ClickHouseResult implements Result {
     }
     markConsumedOrFail();
     final Flux<T> mapped =
-        rows.map(values -> mappingFunction.apply(new ClickHouseRow(values, metadata), metadata));
+        rows.map(row -> mappingFunction.apply(new ClickHouseRow(row, metadata), metadata));
     return mapped.onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
@@ -106,7 +104,7 @@ final class ClickHouseResult implements Result {
       throw new IllegalArgumentException("filter must not be null");
     }
     return new ClickHouseResult(
-        metadata, rows.filter(values -> filter.test(rowSegment(values))), writtenRows);
+        metadata, rows.filter(row -> filter.test(rowSegment(row))), writtenRows);
   }
 
   @Override
@@ -116,12 +114,12 @@ final class ClickHouseResult implements Result {
       throw new IllegalArgumentException("mappingFunction must not be null");
     }
     markConsumedOrFail();
-    final Flux<T> flatMapped = rows.concatMap(values -> mappingFunction.apply(rowSegment(values)));
+    final Flux<T> flatMapped = rows.concatMap(row -> mappingFunction.apply(rowSegment(row)));
     return flatMapped.onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
-  private RowSegment rowSegment(final Map<String, Object> values) {
-    return new ClickHouseRowSegment(new ClickHouseRow(values, metadata));
+  private RowSegment rowSegment(final DecodedRow row) {
+    return new ClickHouseRowSegment(new ClickHouseRow(row, metadata));
   }
 
   private void markConsumedOrFail() {

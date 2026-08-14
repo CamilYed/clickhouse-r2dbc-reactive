@@ -4,9 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
-import java.util.LinkedHashMap;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import java.util.List;
-import java.util.Map;
 import java.util.NoSuchElementException;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +15,7 @@ class ClickHouseRowTest {
       new ClickHouseRowMetadata(
           List.of(new ColumnDescriptor("id", "UInt32"), new ColumnDescriptor("name", "String")));
 
-  private final ClickHouseRow row = rowOf(Map.of("id", 7, "name", "Ada"));
+  private final ClickHouseRow row = rowOf(7, "Ada");
 
   @Test
   void shouldReadAValueByIndex() {
@@ -55,7 +54,7 @@ class ClickHouseRowTest {
     assertThat(row.getMetadata()).isSameAs(metadata);
   }
 
-  private ClickHouseRow rowOf(final Map<String, Object> values) {
-    return new ClickHouseRow(new LinkedHashMap<>(values), metadata);
+  private ClickHouseRow rowOf(final Object id, final Object name) {
+    return new ClickHouseRow(new DecodedRow(new Object[] {id, name}), metadata);
   }
 }

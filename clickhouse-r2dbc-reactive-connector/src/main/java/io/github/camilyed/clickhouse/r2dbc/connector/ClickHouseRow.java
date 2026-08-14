@@ -1,25 +1,30 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
-import java.util.Map;
 
 /**
- * A decoded row, backed by {@code core}'s already-decoded {@code Map<String, Object>}.
+ * A decoded row, backed by {@code core}'s already-decoded, positional {@link DecodedRow}.
  *
  * <p>{@link #get(int, Class)}/{@link #get(String, Class)} only cast the already-decoded value to
  * {@code type}; neither attempts any widening conversion beyond what {@code core}'s decoder already
  * produced (e.g. asking for {@code Long} when the decoded value is an {@code Integer} throws {@link
  * ClassCastException} rather than converting). Broader R2DBC type-conversion support is separately
  * scoped future work.
+ *
+ * <p>{@link #get(String, Class)} resolves {@code name} to a wire index via {@code metadata} (a
+ * lookup built once per result, not once per row) and reads {@code row.valueAt(index)} directly —
+ * unlike the {@code Map<String, Object>}-backed row this type used to wrap, there is no per-call
+ * name-keyed lookup against the row itself, only against the already-shared {@code metadata}.
  */
 final class ClickHouseRow implements Row {
 
-  private final Map<String, Object> values;
+  private final DecodedRow row;
   private final ClickHouseRowMetadata metadata;
 
-  ClickHouseRow(final Map<String, Object> values, final ClickHouseRowMetadata metadata) {
-    this.values = values;
+  ClickHouseRow(final DecodedRow row, final ClickHouseRowMetadata metadata) {
+    this.row = row;
     this.metadata = metadata;
   }
 
@@ -33,8 +38,7 @@ final class ClickHouseRow implements Row {
     if (type == null) {
       throw new IllegalArgumentException("type must not be null");
     }
-    final String name = metadata.getColumnMetadata(index).getName();
-    return type.cast(values.get(name));
+    return type.cast(row.valueAt(index));
   }
 
   @Override
@@ -45,7 +49,6 @@ final class ClickHouseRow implements Row {
     if (type == null) {
       throw new IllegalArgumentException("type must not be null");
     }
-    final String canonicalName = metadata.getColumnMetadata(name).getName();
-    return type.cast(values.get(canonicalName));
+    return type.cast(row.valueAt(metadata.indexOf(name)));
   }
 }

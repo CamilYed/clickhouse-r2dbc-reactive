@@ -3,18 +3,32 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import io.r2dbc.spi.ColumnMetadata;
 import io.r2dbc.spi.RowMetadata;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.NoSuchElementException;
 
 /**
  * {@link RowMetadata} over a fixed, wire-ordered list of {@code core}'s {@link ColumnDescriptor}s.
+ *
+ * <p>Also the name→index lookup {@link ClickHouseRow} uses to resolve {@link
+ * io.r2dbc.spi.Row#get(String, Class)} against a {@link
+ * io.github.camilyed.clickhouse.r2dbc.core.DecodedRow}'s positional values — built once here, in
+ * the constructor, rather than re-derived per row/per call the way it was before this class held an
+ * index map at all.
  */
 final class ClickHouseRowMetadata implements RowMetadata {
 
   private final List<ClickHouseColumnMetadata> columnMetadatas;
+  private final Map<String, Integer> indexByName;
 
   ClickHouseRowMetadata(final List<ColumnDescriptor> columns) {
     this.columnMetadatas = columns.stream().map(ClickHouseColumnMetadata::new).toList();
+    this.indexByName = new HashMap<>();
+    for (int index = 0; index < columns.size(); index++) {
+      indexByName.put(canonicalize(columns.get(index).name()), index);
+    }
   }
 
   @Override
@@ -24,17 +38,27 @@ final class ClickHouseRowMetadata implements RowMetadata {
 
   @Override
   public ColumnMetadata getColumnMetadata(final String name) {
-    if (name == null) {
-      throw new IllegalArgumentException("name must not be null");
-    }
-    return columnMetadatas.stream()
-        .filter(column -> column.getName().equalsIgnoreCase(name))
-        .findFirst()
-        .orElseThrow(() -> new NoSuchElementException("No column named '" + name + "'"));
+    return columnMetadatas.get(indexOf(name));
   }
 
   @Override
   public List<? extends ColumnMetadata> getColumnMetadatas() {
     return columnMetadatas;
+  }
+
+  /** The wire-order index of the column named {@code name} (case-insensitive). */
+  int indexOf(final String name) {
+    if (name == null) {
+      throw new IllegalArgumentException("name must not be null");
+    }
+    final Integer index = indexByName.get(canonicalize(name));
+    if (index == null) {
+      throw new NoSuchElementException("No column named '" + name + "'");
+    }
+    return index;
+  }
+
+  private static String canonicalize(final String name) {
+    return name.toLowerCase(Locale.ROOT);
   }
 }

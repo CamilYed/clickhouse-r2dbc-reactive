@@ -7,9 +7,7 @@ import com.clickhouse.client.api.metadata.TableSchema;
 import com.clickhouse.client.api.query.QuerySettings;
 import com.clickhouse.data.ClickHouseColumn;
 import java.nio.ByteBuffer;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SynchronousSink;
@@ -28,13 +26,17 @@ import reactor.core.scheduler.Schedulers;
  * .internal} {@code ArrayValue} — see that class's Javadoc for why this is safe and narrowly
  * scoped. Every other column type is unaffected.
  *
- * <p>Each row is copied into a plain {@link LinkedHashMap} the moment it's read, rather than handed
- * out as client-v2's own {@code Map} implementation. That implementation ({@code RecordWrapper})
- * stores its values behind a {@link java.lang.ref.WeakReference} to the reader's internal state —
- * reading from it later, after the reader itself is no longer strongly reachable (e.g. once a
- * downstream {@code blockFirst()} has cancelled the subscription), can throw a {@code
- * NullPointerException} if the garbage collector has since run. Copying immediately, while the
- * reader is still on the stack, sidesteps that lifetime trap entirely.
+ * <p>Each row is snapshotted into a compact {@link DecodedRow} the moment it's read, via {@link
+ * ListDecodingRowBinaryReader#nextRowValues()}, rather than handed out as client-v2's own {@code
+ * Map} implementation (its {@code RecordWrapper}) or copied into a {@code LinkedHashMap} built
+ * fresh per row (an earlier version of this class did exactly that — see {@link DecodedRow}'s
+ * Javadoc for why it was replaced: measured at roughly 576 bytes/row and the dominant per-row cost
+ * in this driver's decode path). {@code RecordWrapper} itself stores its values behind a {@link
+ * java.lang.ref.WeakReference} to the reader's internal state — reading from it later, after the
+ * reader itself is no longer strongly reachable, can throw a {@code NullPointerException} if the
+ * garbage collector has since run. Snapshotting into a plain {@code Object[]} immediately, while
+ * the reader is still on the stack, sidesteps that lifetime trap the same way the old {@code
+ * LinkedHashMap} copy did, without paying for a hash table nobody needs.
  */
 public final class RowBinaryDecoder {
 
@@ -54,8 +56,10 @@ public final class RowBinaryDecoder {
 
   private RowBinaryDecoder() {}
 
-  /** Decodes {@code source} into rows keyed by column name, in wire order. */
-  public static Flux<Map<String, Object>> decodeRows(final Flux<ByteBuffer> source) {
+  /**
+   * Decodes {@code source} into rows, in wire column order. See {@link #decode} for name access.
+   */
+  public static Flux<DecodedRow> decodeRows(final Flux<ByteBuffer> source) {
     return Flux.generate(() -> newReader(source), RowBinaryDecoder::emitNextRow);
   }
 
@@ -78,8 +82,7 @@ public final class RowBinaryDecoder {
                     columnsOf(reader), Flux.generate(() -> reader, RowBinaryDecoder::emitNextRow)));
   }
 
-  private static List<ColumnDescriptor> columnsOf(
-      final RowBinaryWithNamesAndTypesFormatReader reader) {
+  private static List<ColumnDescriptor> columnsOf(final ListDecodingRowBinaryReader reader) {
     // A genuinely empty response body (e.g. a DDL statement, which never sends the
     // RowBinaryWithNamesAndTypes header at all) leaves the reader's schema null rather than an
     // empty TableSchema — reader.getSchema().getColumns() would NPE for that case otherwise.
@@ -94,7 +97,7 @@ public final class RowBinaryDecoder {
     return new ColumnDescriptor(column.getColumnName(), column.getOriginalTypeName());
   }
 
-  private static RowBinaryWithNamesAndTypesFormatReader newReader(final Flux<ByteBuffer> source) {
+  private static ListDecodingRowBinaryReader newReader(final Flux<ByteBuffer> source) {
     return new ListDecodingRowBinaryReader(
         FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND),
         new QuerySettings()
@@ -108,11 +111,10 @@ public final class RowBinaryDecoder {
         new BinaryStreamReader.DefaultByteBufferAllocator());
   }
 
-  private static RowBinaryWithNamesAndTypesFormatReader emitNextRow(
-      final RowBinaryWithNamesAndTypesFormatReader reader,
-      final SynchronousSink<Map<String, Object>> sink) {
+  private static ListDecodingRowBinaryReader emitNextRow(
+      final ListDecodingRowBinaryReader reader, final SynchronousSink<DecodedRow> sink) {
     if (reader.hasNext()) {
-      sink.next(new LinkedHashMap<>(reader.next()));
+      sink.next(new DecodedRow(reader.nextRowValues()));
     } else {
       sink.complete();
     }

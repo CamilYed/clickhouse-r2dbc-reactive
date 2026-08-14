@@ -27,19 +27,29 @@ import reactor.core.publisher.SynchronousSink;
 
 /**
  * Diagnostic isolation benchmark for {@link StreamingScanBenchmark}'s confirmed, growing regression
- * (see ROADMAP.md's Phase 5 "Optimization phase" section — hypotheses H0/H1): decodes the exact same
- * bytes from memory, no network involved on either side, isolating pure row-decode/materialization
- * cost from transport/bridge cost (which {@link TransportOnlyStreamingBenchmark} isolates the other
- * way). Together the two answer "where does the gap actually live" instead of guessing from
- * {@code StreamingScanBenchmark}'s combined number alone.
+ * (see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section — hypotheses H0/H1): decodes the exact
+ * same bytes from memory, no network involved on either side, isolating pure
+ * row-decode/materialization cost from transport/bridge cost (which {@link
+ * TransportOnlyStreamingBenchmark} isolates the other way). Together the two answer "where does the
+ * gap actually live" instead of guessing from {@code StreamingScanBenchmark}'s combined number
+ * alone.
  *
  * <p>The response body for {@code rows} is captured once in {@code @Setup(Level.Trial)} — a real
  * query against {@link PointQueryTable}, fully aggregated into one {@code byte[]} via {@code
  * .aggregate().asByteArray()} (the same operator this transport's own {@code killQueryBestEffort}
- * uses) — outside the measured region. Both {@code @Benchmark} methods then decode that same
+ * uses) — outside the measured region. Every {@code @Benchmark} method then decodes that same
  * in-memory payload repeatedly. Deliberately handed to each decoder as a single chunk rather than
- * replaying original network fragmentation: this isolates decode cost from chunk-boundary effects on
- * purpose, since chunking is exactly what {@link TransportOnlyStreamingBenchmark} exists to cover.
+ * replaying original network fragmentation: this isolates decode cost from chunk-boundary effects
+ * on purpose, since chunking is exactly what {@link TransportOnlyStreamingBenchmark} exists to
+ * cover.
+ *
+ * <p>Once H1 (the {@code LinkedHashMap} copy) was confirmed dominant and removed as a variable
+ * ({@link #ourDriverCompactRow}), a real but smaller residual gap against {@link #clientV2}
+ * remained. {@link #compactRowDirectLoop} and {@link #compactRowFluxNoBridge} are a small factorial
+ * matrix isolating where that residual actually lives — bridge vs. Reactor vs. the row object
+ * itself — one dimension changed at a time, rather than lumping it all under "bridge overhead": see
+ * docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for the full H2a–H2d breakdown and the numbers
+ * once this matrix has been run.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -57,7 +67,9 @@ public class DecoderOnlyBenchmark {
    */
   private static final int RESPONSE_CHUNK_DEMAND = 4;
 
-  /** Row-count tiers — same shape as {@link StreamingScanBenchmark}'s, for a like-for-like split. */
+  /**
+   * Row-count tiers — same shape as {@link StreamingScanBenchmark}'s, for a like-for-like split.
+   */
   @Param({"10000", "100000", "1000000"})
   public long rows;
 
@@ -74,7 +86,8 @@ public class DecoderOnlyBenchmark {
     PointQueryTable.seed(rows);
     final ClickHouseHttpTransport transport =
         new ClickHouseHttpTransport(
-            BenchmarkEnvironment.httpUrl(), BenchmarkEnvironment.username(),
+            BenchmarkEnvironment.httpUrl(),
+            BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
     capturedResponseBytes =
         transport
@@ -84,7 +97,9 @@ public class DecoderOnlyBenchmark {
             .block(Duration.ofSeconds(60));
   }
 
-  /** This driver's production decode path, {@link RowBinaryDecoder#decodeRows}, over captured bytes. */
+  /**
+   * This driver's production decode path, {@link RowBinaryDecoder#decodeRows}, over captured bytes.
+   */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body = Flux.just(ByteBuffer.wrap(capturedResponseBytes));
@@ -102,7 +117,7 @@ public class DecoderOnlyBenchmark {
    * rather than inferred by subtracting client-v2's baseline from this driver's total, which folds
    * in every other difference between the two paths (the bridge's own queue/{@code StreamSignal}
    * machinery, {@code Flux.generate}'s state, the reader subclass) along with the map copy — see
-   * ROADMAP.md's Phase 5 "Optimization phase" section for why that subtraction wasn't rigorous
+   * docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for why that subtraction wasn't rigorous
    * enough to attribute a bytes/row number to H1.
    */
   @Benchmark
@@ -134,17 +149,23 @@ public class DecoderOnlyBenchmark {
   }
 
   /**
-   * The production-shaped candidate replacement for {@link #ourDriver}'s {@code
-   * new LinkedHashMap<>(reader.next())} — a compact {@code Object[]} snapshot per row, built from
-   * the same three typed getters {@link #clientV2} calls ({@code getLong}/{@code getString}/{@code
-   * getBigDecimal}), never touching {@code RecordWrapper.entrySet()} at all. Unlike {@link
-   * #ourDriverWithoutMapCopy} (which discards each row untouched — useful for isolating H1's cost,
-   * but not a fair comparison against {@link #clientV2}, which does real per-value work), this
-   * method does the same per-column extraction {@link #clientV2} does and retains a real per-row
-   * object (an {@code Object[]}, blackholed same as the row count) — the same shape a production
-   * {@code DecodedRow} would need to hand back to an R2DBC caller. This is the benchmark the
-   * investigation in ROADMAP.md's Phase 5 "Optimization phase" section calls for before committing
-   * to the compact-row redesign: equivalent value access on both sides, not a discard-only diagnostic.
+   * The candidate that validated the compact-row redesign now used by production (see {@code
+   * ListDecodingRowBinaryReader#nextRowValues} / {@link RowBinaryDecoder}): a compact {@code
+   * Object[]} snapshot per row, built here from the same three typed getters {@link #clientV2}
+   * calls ({@code getLong}/{@code getString}/{@code getBigDecimal}), never touching {@code
+   * RecordWrapper.entrySet()} at all. Unlike {@link #ourDriverWithoutMapCopy} (which discards each
+   * row untouched — useful for isolating H1's cost, but not a fair comparison against {@link
+   * #clientV2}, which does real per-value work), this method does the same per-column extraction
+   * {@link #clientV2} does and retains a real per-row object (an {@code Object[]}, blackholed same
+   * as the row count) — the shape a production row needs to hand back to an R2DBC caller.
+   *
+   * <p>Production itself takes a related but slightly different, likely cheaper path: instead of
+   * calling three typed getters per row, {@code ListDecodingRowBinaryReader#nextRowValues} clones
+   * the reader's own already-decoded {@code currentRecord} array directly (bypassing per-column
+   * getter dispatch entirely, not just the {@code Map} copy) — see that method's own Javadoc. This
+   * benchmark's numbers are therefore an upper bound on the redesign's actual cost, not an exact
+   * prediction; a dedicated benchmark exercising {@code nextRowValues} itself would measure that
+   * path directly. Not yet built — see docs/PERFORMANCE.md's Phase 5 section for the open follow-up.
    */
   @Benchmark
   public void ourDriverCompactRow(final Blackhole blackhole) {
@@ -152,6 +173,74 @@ public class DecoderOnlyBenchmark {
         new RowBinaryWithNamesAndTypesFormatReader(
             FluxInputStreamBridge.subscribeTo(
                 Flux.just(ByteBuffer.wrap(capturedResponseBytes)), RESPONSE_CHUNK_DEMAND),
+            new QuerySettings()
+                .setUseTimeZone("UTC")
+                .serverSetting(ServerSettings.OUTPUT_FORMAT_BINARY_WRITE_JSON_AS_STRING, "1"),
+            new BinaryStreamReader.DefaultByteBufferAllocator());
+    final long rowCount =
+        Flux.generate(
+                () -> reader,
+                (final RowBinaryWithNamesAndTypesFormatReader r,
+                    final SynchronousSink<Object[]> sink) -> {
+                  if (r.hasNext()) {
+                    r.next();
+                    final Object[] row = {r.getLong(1), r.getString(2), r.getBigDecimal(3)};
+                    blackhole.consume(row);
+                    sink.next(row);
+                  } else {
+                    sink.complete();
+                  }
+                  return r;
+                })
+            .count()
+            .block(Duration.ofSeconds(60));
+    blackhole.consume(rowCount);
+  }
+
+  /**
+   * H2 isolation matrix, step A: same compact-row value extraction as {@link #ourDriverCompactRow},
+   * but over a plain {@code ByteArrayInputStream} with a direct {@code while} loop — no {@link
+   * FluxInputStreamBridge}, no {@code Flux.generate}, no Reactor at all. This is exactly {@link
+   * #clientV2}'s own transport shape, but building the same retained {@code Object[]} row {@link
+   * #ourDriverCompactRow} does. Comparing this against {@link #clientV2} isolates the cost of
+   * building/blackholing the row object itself, independent of any Reactor or bridge machinery —
+   * see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section, the H2 factorial breakdown (H2a–H2d).
+   */
+  @Benchmark
+  public void compactRowDirectLoop(final Blackhole blackhole) throws Exception {
+    long rowCount = 0;
+    try (ByteArrayInputStream input = new ByteArrayInputStream(capturedResponseBytes)) {
+      final RowBinaryWithNamesAndTypesFormatReader reader =
+          new RowBinaryWithNamesAndTypesFormatReader(
+              input,
+              new QuerySettings()
+                  .setUseTimeZone("UTC")
+                  .serverSetting(ServerSettings.OUTPUT_FORMAT_BINARY_WRITE_JSON_AS_STRING, "1"),
+              new BinaryStreamReader.DefaultByteBufferAllocator());
+      while (reader.next() != null) {
+        final Object[] row = {reader.getLong(1), reader.getString(2), reader.getBigDecimal(3)};
+        blackhole.consume(row);
+        rowCount++;
+      }
+    }
+    blackhole.consume(rowCount);
+  }
+
+  /**
+   * H2 isolation matrix, step B: same compact-row value extraction and the same {@code
+   * ByteArrayInputStream} as {@link #compactRowDirectLoop} (still no {@link
+   * FluxInputStreamBridge}), but driven through {@code Flux.generate} instead of a plain {@code
+   * while} loop — isolating Reactor's own per-row emission machinery ({@code SynchronousSink},
+   * generator state) from the bridge. {@link #compactRowDirectLoop} vs this method isolates H2b
+   * (Reactor/{@code Flux.generate} overhead); this method vs {@link #ourDriverCompactRow} isolates
+   * H2a ({@link FluxInputStreamBridge} overhead) — see docs/PERFORMANCE.md's Phase 5 "Optimization phase"
+   * section for the full H2a–H2d breakdown this factorial matrix is designed to answer.
+   */
+  @Benchmark
+  public void compactRowFluxNoBridge(final Blackhole blackhole) {
+    final RowBinaryWithNamesAndTypesFormatReader reader =
+        new RowBinaryWithNamesAndTypesFormatReader(
+            new ByteArrayInputStream(capturedResponseBytes),
             new QuerySettings()
                 .setUseTimeZone("UTC")
                 .serverSetting(ServerSettings.OUTPUT_FORMAT_BINARY_WRITE_JSON_AS_STRING, "1"),
