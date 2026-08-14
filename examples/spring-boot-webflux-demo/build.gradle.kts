@@ -36,7 +36,16 @@ dependencies {
     // single class from our driver directly. Spring discovers it purely through the standard
     // R2DBC ConnectionFactoryProvider SPI (META-INF/services), exactly like every other R2DBC
     // driver - that's the whole point of this module (see ROADMAP.md's Phase 6).
-    runtimeOnly(project(":clickhouse-r2dbc-reactive-connector"))
+    //
+    // Deliberately the *published* Maven Central coordinate, not project(":clickhouse-r2dbc-reactive-connector"):
+    // this demo exists to show exactly what an external consumer's build file looks like, so it
+    // depends on the driver the same way they would. Trade-off, stated plainly: this module no
+    // longer catches a regression in core/transport-http/connector on every root build - it now
+    // proves "the last published release still works end to end", not "today's local change
+    // works end to end". The whole-driver black-box proof for local changes still lives in
+    // connector's own real-ClickHouse tests (see ROADMAP.md's module map). Bump this version
+    // alongside every release.
+    runtimeOnly("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.1.0")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
         exclude(group = "org.junit.vintage", module = "junit-vintage-engine")
