@@ -23,16 +23,22 @@ final; multi-fork reconfirmation is the single biggest open item in this whole f
 | `StreamingScanBenchmark` @ 100k rows | Full scan, medium | 🟢 this driver ~13% faster (mean) | Single fork, **needs multi-fork confirmation** (2026-08-14) |
 | `StreamingScanBenchmark` @ 1M rows | Full scan, large | 🟢 this driver ~1.8% faster (mean), tighter tail (max 178ms vs 254ms) | Single fork, **needs multi-fork confirmation** (2026-08-14) |
 | `DecoderOnlyBenchmark` (decode only, no network) | Raw decode cost, `Map`-based benchmark harness (pre-`DecodedRow`) | 🔴 ~13–16% slower, ~48–56 B/row more allocated, once compared fairly (equivalent getter calls both sides) | 3-fork confirmed (2026-08-13) — **describes the old benchmark harness, not yet re-measured against production `nextRowValues()`** |
+| `ConcurrencyBenchmark` `@Threads(8)`, mean → p99 | 8 concurrent threads, same point lookup as `PointQueryBenchmark` | 🔴 ~4% slower (mean), degrading to ~15% slower at p99 | Single fork, one run (2026-08-14) |
+| `ConcurrencyBenchmark` `@Threads(8)`, p99.9 → max | Same run, extreme tail | 🟢 ~7% faster at p99.9, up to ~46% faster at max | Single fork, one run (2026-08-14) |
 
-**Bottom line today: at every level actually re-measured after the `DecodedRow` redesign
-(`StreamingScanBenchmark`, all three tiers), this driver wins.** The one red row
-(`DecoderOnlyBenchmark`) measures a *different, older* code path (the benchmark's own hand-rolled
-typed-getter comparison, not the production `nextRowValues()` mechanism) and predates the redesign
-being build-verified — it's evidence for *why* the redesign was worth doing, not a current regression.
-Two things stand between this and a number worth publishing: (1) every "needs multi-fork
-confirmation" row above, and (2) `ConcurrencyBenchmark` (Level 3) hasn't been run at all yet, so
-nothing here says anything about the concurrent/burst scenario that originally motivated this
-project.
+**Bottom line today: mixed, and more nuanced than the single-threaded story above.** At every
+single-threaded level re-measured after the `DecodedRow` redesign (`StreamingScanBenchmark`, all
+three tiers; `TrivialQueryBenchmark`/`PointQueryBenchmark`, single-threaded), this driver wins. Under
+8-thread concurrent load (`ConcurrencyBenchmark`), this driver is a *bit worse* through most of the
+distribution (mean/p50–p99) but has a *much better* extreme tail (p99.9–max) than client-v2 —
+see the dedicated section near the end for the read on why. The `DecoderOnlyBenchmark` red row
+measures a *different, older* code path (the benchmark's own hand-rolled typed-getter comparison,
+not the production `nextRowValues()` mechanism) and predates the redesign being build-verified —
+it's evidence for *why* the redesign was worth doing, not a current regression. Three things stand
+between this and a number worth publishing: (1) every "needs multi-fork confirmation" row above,
+(2) `ConcurrencyBenchmark`'s mean/p99 regression isn't yet understood, not just unconfirmed, and
+(3) the custom bounded-pool reactive-harness shape (the scenario that actually motivated this
+project) still hasn't been built at all.
 
 ---
 
@@ -43,14 +49,16 @@ project.
 > | Done | Open |
 > | --- | --- |
 > | H0 (`byte[1]` alloc) — fixed, confirmed | Multi-fork (`-Pjmh.forks=3`) reconfirmation of the newest `StreamingScanBenchmark` numbers |
-> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | `ConcurrencyBenchmark` (Level 3) — not started |
-> | `DecodedRow` redesign — **build-verified** (2026-08-14): compiles, `StreamingScanBenchmark` green, `ourDriver` now beats `clientV2` at all three tiers | Full `./gradlew spotlessCheck clean build` on the redesign (only compilation + one benchmark confirmed so far, not the unit test suite) |
+> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | `ConcurrencyBenchmark`'s mean/p99 regression under 8 threads (~4–15% slower) — not yet understood |
+> | `DecodedRow` redesign — **build-verified** (2026-08-14): compiles, `StreamingScanBenchmark` green, `ourDriver` now beats `clientV2` at all three tiers | Multi-fork (`-Pjmh.forks=3`) reconfirmation of `StreamingScanBenchmark`/`ConcurrencyBenchmark` |
+> | `ConcurrencyBenchmark`'s `@Threads(8)` shape — **build-verified and run** (2026-08-14): mixed result, worse mean/p99, much better tail | Full `./gradlew spotlessCheck clean build` on the redesign (only compilation + benchmarks confirmed so far, not the unit test suite) |
+> | | `ConcurrencyBenchmark`'s custom reactive-harness shape (small bounded pool) — blocked on adding a `maxConnections`-style knob to `ClickHouseHttpTransport`, see the class's own Javadoc |
 > | | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
 > | | Performance charts for the main `README.md` — deliberately deferred to the very end of this phase |
 >
-> See ["Redesign confirmed by a real build"](#redesign-confirmed-by-a-real-build-2026-08-14) near
-> the end for the newest numbers, or jump to the very last section for the current guardrail/priority
-> list.
+> See ["`ConcurrencyBenchmark`'s `@Threads(8)` shape, run for real"](#concurrencybenchmarks-threads8-shape-run-for-real-2026-08-14)
+> near the end for the newest numbers, or jump to the very last section for the current
+> guardrail/priority list.
 
 ---
 
@@ -1076,8 +1084,56 @@ tier measured**, after losing it badly (13%/55%/80% slower) at the start of this
 **Still open after this run, unchanged from the status box at the top of this file:** the H2 factorial
 matrix (`compactRowDirectLoop`/`compactRowFluxNoBridge`) has been run once, single-fork, with
 internally inconsistent (non-monotonic) numbers at the 1M tier — needs the same multi-fork treatment
-before any H2 number goes in this doc as confirmed. `ConcurrencyBenchmark` (Level 3) and the
-wide-decode/aggregation/INSERT benchmarks are still not started. Charts for the main `README.md`
-stay deferred until all of the above is confirmed, per the explicit instruction already recorded
-above.
+before any H2 number goes in this doc as confirmed. The wide-decode/aggregation/INSERT benchmarks are
+still not started. Charts for the main `README.md` stay deferred until all of the above is confirmed,
+per the explicit instruction already recorded above.
+
+---
+
+### `ConcurrencyBenchmark`'s `@Threads(8)` shape, run for real (2026-08-14)
+
+First Level 3 (concurrency) data point, and the first result in this whole investigation with a
+genuinely mixed outcome instead of a clean win or loss. `ConcurrencyBenchmark` runs the exact same
+parameterized point lookup `PointQueryBenchmark` measures single-threaded, but with 8 JMH worker
+threads (`@Threads(8)`) hammering the same shared `ClickHouseHttpTransport`/`Client` instances
+concurrently. Single fork, one run — same caveat as every other run on this page. Latency in µs/op
+(lower is faster):
+
+| percentile | client-v2 | this driver | verdict |
+| --- | --- | --- | --- |
+| mean | 2,112.4 | 2,204.1 | **this driver ≈4.3% SLOWER** |
+| p50 | 1,962.0 | 2,027.5 | **this driver ≈3.3% SLOWER** |
+| p90 | 2,850.8 | 3,072.0 | **this driver ≈7.8% SLOWER** |
+| p95 | 3,239.9 | 3,571.7 | **this driver ≈10.2% SLOWER** |
+| p99 | 4,333.6 | 4,964.4 | **this driver ≈14.6% SLOWER** |
+| p99.9 | 8,364.0 | 7,761.4 | **this driver ≈7.2% FASTER** |
+| p99.99 | 34,197.9 | 23,154.2 | **this driver ≈32.3% FASTER** |
+| p100 (max) | 46,202.9 | 24,739.8 | **this driver ≈46.5% FASTER** |
+
+**A clean crossover, not noise-shaped:** this driver is consistently a bit worse from the mean
+through p99 (the gap widening steadily — 3% → 8% → 10% → 15% — not flat, not erratic), then flips to
+consistently better from p99.9 through the max, by a growing margin. Both halves of this pattern are
+internally coherent, which is more consistent with a real structural effect than sampling noise, but
+neither half is confirmed by a second fork yet.
+
+**A plausible read, not yet verified:** under single-threaded load (`PointQueryBenchmark`), this
+driver won by ~6% mean. Under 8 concurrent threads, that reverses to ~4% slower mean — something about
+concurrent access costs this driver more than it costs client-v2 on the *typical* request, which
+lines up with the still-unattributed H2 residual (~13–16% slower once compared fairly at the decode
+level, never isolated to bridge vs. Reactor vs. something else — see the H2 section above) becoming
+more visible under contention rather than being a new finding. The tail flip (this driver dramatically
+better at p99.9+) is consistent with the architectural pitch this driver is actually built on:
+`clientV2`'s blocking client can have a worker thread fully stall on connection acquisition or a slow
+socket with nothing else to do; this driver's non-blocking pipeline degrades more gracefully under the
+same contention, at the cost of a bit more per-request overhead in the common case. **Not yet proven —
+just the most obvious mechanical story, and one this project's own discipline says needs a profiler
+(connection-pool metrics, `-prof gc`, or async-profiler under load) before being written up as fact.**
+
+**What's still missing before this is a complete Level 3 picture:** (1) a multi-fork rerun, same as
+every other number on this page; (2) the custom bounded-pool reactive-harness shape — the actual
+"~11 concurrent queries per user action" scenario that motivated this project, not yet built (see
+`ConcurrencyBenchmark`'s own Javadoc for why: no `maxConnections` knob exists on
+`ClickHouseHttpTransport` yet, a real design decision, not a quick add); (3) connection-pool-level
+diagnostics (both sides' pool metrics during the run) to actually attribute the mean/p99 regression
+instead of theorizing about it from latency numbers alone.
 
