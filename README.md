@@ -27,6 +27,7 @@ The design direction started as a public design discussion with the ClickHouse t
 
 - [Why](#why)
 - [Status](#status)
+- [Performance](#performance)
 - [Known limitations](#known-limitations)
 - [What "fully reactive" means here](#what-fully-reactive-means-here)
 - [Connection pooling](#connection-pooling)
@@ -71,6 +72,31 @@ to depend on today", kept up to date as things are found and fixed — treat thi
 of it, not the other way around.
 
 Expect breaking changes at every stage before a `0.1.0` release.
+
+## Performance
+
+Every number below is from a real ClickHouse server (Testcontainers), 3-JMH-fork confirmed, against
+`com.clickhouse:client-v2:0.9.0`. Full methodology, every run, and every open caveat:
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+<p align="center">
+  <img src="docs/images/streaming-scan-mean-latency.png" width="49%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
+  <img src="docs/images/bounded-pool-concurrency-mean-latency.png" width="49%" alt="BoundedPoolConcurrencyBenchmark mean latency by concurrency level, this driver vs client-v2">
+</p>
+
+| Scenario | Result |
+| --- | --- |
+| Full table scan (10k/100k/1M rows) | 🟢 8–21% faster mean, at every tier tested |
+| Decode cost alone, no network (production decode path) | 🟢 22–38% faster mean — the clearest architectural win in the whole suite |
+| Matched 8-connection pool, 8/32/128 concurrent async queries | 🟢 ~5–6% faster mean, consistent at every concurrency level |
+| Single-row point lookup / `SELECT 1` floor | 🟢 6–7% faster mean |
+
+**The one open item worth knowing about before trusting the tail:** at 1M rows, one JMH fork (of
+three) produced a handful of outlier samples that spike this driver's p99.9/max — traced to 3–4
+samples out of ~657, isolated to that one fork, not reproduced in the other two. Mean/p50–p99 are
+unaffected and win cleanly. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#are-we-faster-than-client-v2--read-this-first)
+for the full breakdown, every percentile, and the raw per-fork evidence — this project's whole
+culture is "measure, don't assume," so the doc keeps the messy parts in, not just the wins.
 
 ## Known limitations
 

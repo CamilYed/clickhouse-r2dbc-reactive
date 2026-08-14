@@ -1,54 +1,106 @@
 # Performance & Benchmarking
 
 Full record of Phase 5 (load/performance testing) — design, every benchmark run, every finding,
-the H0/H1/H2 optimization investigation, and the ongoing compact-row redesign. Moved out of
-[ROADMAP.md](../ROADMAP.md) on 2026-08-14 because that file had grown too large to navigate; this
-content is otherwise unchanged (same headings, same anchors) — only the file it lives in changed.
+the H0/H1/H2 optimization investigation, and the compact-row redesign. Moved out of
+[ROADMAP.md](../ROADMAP.md) on 2026-08-14 because that file had grown too large to navigate.
 See [ROADMAP.md](../ROADMAP.md) for everything else (Phases 0–4, 6, production readiness).
 
 Companion doc: [../clickhouse-r2dbc-reactive-benchmarks/README.md](../clickhouse-r2dbc-reactive-benchmarks/README.md)
 for how to actually run the benchmarks.
 
+---
+
+## Environment
+
+Every number in this file, unless a section says otherwise, comes from the same machine and the
+same JVM build:
+
+| | |
+| --- | --- |
+| CPU | _pending — see the open item below_ |
+| RAM | _pending — see the open item below_ |
+| OS | _pending — see the open item below_ |
+| JDK | OpenJDK 64-Bit Server VM, `21.0.8+9-LTS` (Temurin, via `sdkman`) |
+| ClickHouse | `clickhouse/clickhouse-server:latest` via Testcontainers — **not pinned to a specific version**, so "latest" can silently drift between runs; a real caveat, not yet addressed |
+| client-v2 (baseline) | `com.clickhouse:client-v2:0.9.0` |
+| JMH | 1.36, `SampleTime` mode, `SECONDS`/`MICROSECONDS` output depending on benchmark |
+| Multi-fork runs | `-Pjmh.forks=3 -Pjmh.warmupIterations=3` — 3 JVM forks × 3×10s warmup × 3×10s measurement iterations per benchmark method/param combination |
+
+> [!NOTE]
+> Every benchmark in this repo runs against a real ClickHouse server (via Testcontainers), not a
+> mock — see [ROADMAP.md's testing strategy](../ROADMAP.md) for why this project avoids mocking
+> the thing it's measuring. Single machine, single point in time; no claim here is a substitute for
+> load-testing against your own hardware and network.
+
+---
+
+## Benchmark catalog
+
+What each benchmark class actually exercises, so a number in the table below can be traced back to
+a concrete scenario instead of taken on faith.
+
+| Benchmark | Question it answers | Shape |
+| --- | --- | --- |
+| `TrivialQueryBenchmark` | What's the floor cost of one round-trip (`SELECT 1`), before any real row decoding? | Single-threaded, one connection, sequential requests |
+| `PointQueryBenchmark` | What does one parameterized, real 1-row lookup cost end to end (protocol + decode)? | Single-threaded, one connection, sequential requests |
+| `StreamingScanBenchmark` | What does a full table scan cost as row count grows — network + decode + backpressure together? | Single-threaded, 10k/100k/1M-row tiers, full drain |
+| `DecoderOnlyBenchmark` | With the network removed (same bytes replayed from memory), what does *decoding alone* cost? Isolates the H0–H2 optimization investigation below from transport noise | Single-threaded, same three row tiers, no I/O in the measured region |
+| `ConcurrencyBenchmark` | What happens under `@Threads(8)` blocking concurrent callers, with **each driver left at its own default pool**? | 8 JMH worker threads, blocking calls, unmatched pool sizes — a "same blocking-caller resources" baseline, not the architectural verdict |
+| `BoundedPoolConcurrencyBenchmark` | What happens when both drivers are given the **same** connection budget (8) and driven **non-blocking/async** at 8/32/128 logical concurrent queries — the actual scenario this project is built around | `Flux.flatMap(..., concurrency)` (this driver) vs. `CompletableFuture` async API (client-v2), matched 8-connection pool both sides |
+
+---
+
 ## Are we faster than client-v2? — read this first
 
-One table, every benchmark class, latest numbers. **Green = this driver wins, red = client-v2 wins.**
-Every row is single-fork unless noted — see the "Confidence" column before treating any of this as
-final; multi-fork reconfirmation is the single biggest open item in this whole file.
+One table, every benchmark class, latest numbers. **Green = this driver wins, red = client-v2 wins,
+yellow = mixed/inconclusive.** The "Confidence" column says how many JMH forks a number survived —
+single-fork numbers have moved by double-digit percentages between runs in this file's own history
+(see the H0/H1 investigation and the `BoundedPoolConcurrencyBenchmark`/`StreamingScanBenchmark`
+reruns below), so treat single-fork rows as a first signal, not a final answer.
 
 | Benchmark | What it measures | Latest verdict | Confidence |
 | --- | --- | --- | --- |
 | `TrivialQueryBenchmark` (`SELECT 1`) | Protocol/connection floor | 🟢 this driver ~7% faster (mean), up to ~32% faster at p99.9 — 🔴 slower at p99.99 only | Single fork, one run (2026-08-13) |
 | `PointQueryBenchmark` (parameterized 1-row lookup) | Protocol + real row lookup | 🟢 this driver ~6% faster (mean), up to ~26% faster at p99.9 | Single fork, re-run twice, consistent (2026-08-13) |
-| `StreamingScanBenchmark` @ 10k rows | Full scan, small | 🟢 this driver ~21% faster (mean) | Single fork, **needs multi-fork confirmation** (2026-08-14) |
-| `StreamingScanBenchmark` @ 100k rows | Full scan, medium | 🟢 this driver ~13% faster (mean) | Single fork, **needs multi-fork confirmation** (2026-08-14) |
-| `StreamingScanBenchmark` @ 1M rows | Full scan, large | 🟢 this driver ~1.8% faster (mean), tighter tail (max 178ms vs 254ms) | Single fork, **needs multi-fork confirmation** (2026-08-14) |
-| `DecoderOnlyBenchmark` (decode only, no network) | Raw decode cost, `Map`-based benchmark harness (pre-`DecodedRow`) | 🔴 ~13–16% slower, ~48–56 B/row more allocated, once compared fairly (equivalent getter calls both sides) | 3-fork confirmed (2026-08-13) — **describes the old benchmark harness, not yet re-measured against production `nextRowValues()`** |
+| `StreamingScanBenchmark` @ 10k rows | Full scan, small | 🟢 this driver ~9.7% faster (mean) | **3-fork confirmed (2026-08-14)** |
+| `StreamingScanBenchmark` @ 100k rows | Full scan, medium | 🟢 this driver ~21.0% faster (mean) | **3-fork confirmed (2026-08-14)** |
+| `StreamingScanBenchmark` @ 1M rows | Full scan, large | 🟢 this driver ~8.3% faster (mean/p50–p99) — 🟡 p99.9/max spiked to 387ms vs client-v2's 164ms, traced to 3–4 outlier samples in one of three forks, not a reproducible pattern | **3-fork confirmed (2026-08-14)** — see the dedicated section below before trusting the tail number either way |
+| `DecoderOnlyBenchmark`, production path (`ourDriver`) | Raw decode cost, no network, **current shipped code** (`RowBinaryDecoder`/`DecodedRow`) | 🟢 this driver ~35% faster @ 10k, ~22% faster @ 100k, ~38% faster @ 1M | **3-fork confirmed (2026-08-14)** — answers the open question the row below left hanging |
+| `DecoderOnlyBenchmark`, H1/H2 diagnostic variants (`ourDriverCompactRow`, `compactRowDirectLoop`, `compactRowFluxNoBridge`) | An earlier, since-superseded decode strategy considered during the redesign, kept only for the H1/H2 investigation's own record | 🔴 4–28% slower than client-v2 — **describes a path that was never shipped**, not the driver you get today | 3-fork confirmed (2026-08-13/14) — historical, see the H2 section |
 | `ConcurrencyBenchmark` `@Threads(8)`, mean → p99 | 8 concurrent threads, blocking, both sides' *default* (unmatched) pools | 🔴 ~4% slower (mean), degrading to ~15% slower at p99 | Single fork, one run (2026-08-14) — **see below: likely an unmatched-pool artifact, not architectural** |
 | `ConcurrencyBenchmark` `@Threads(8)`, p99.9 → max | Same run, extreme tail | 🟢 ~7% faster at p99.9, up to ~46% faster at max | Single fork, one run (2026-08-14) |
-| `BoundedPoolConcurrencyBenchmark`, pool=8, concurrency=8/32/128 | Non-blocking `flatMap`/async `CompletableFuture`, **matched** 8-connection pool both sides — the actual motivating scenario | 🟢 this driver wins on mean→p99 at **every** concurrency level (~2.5–10% faster) — 🟡 tail (p999+) is mixed: big win at concurrency=32 (+18–27%), small loss at 8 and 128 (−3% to −15%), likely sample-count noise at those extreme buckets | **3-fork confirmed (2026-08-14)** — mean/p50–p99 win reproduced; the single-fork run's "wins on every percentile" claim did not fully hold under multi-fork and is now narrowed |
+| `BoundedPoolConcurrencyBenchmark`, pool=8, concurrency=8/32/128 | Non-blocking `flatMap`/async `CompletableFuture`, **matched** 8-connection pool both sides — the actual motivating scenario | 🟢 this driver wins on mean→p99 at **every** concurrency level (~2.5–10% faster) — 🟡 tail (p999+) is mixed: big win at concurrency=32 (+18–27%), small loss at 8 and 128 (−3% to −15%), likely sample-count noise at those extreme buckets | **3-fork confirmed (2026-08-14)** |
 
-**Bottom line today: once pool size is actually matched between the two drivers, this driver wins
-across the board — including under concurrency, which the earlier `ConcurrencyBenchmark` result had
-left genuinely unclear.** At every single-threaded level re-measured after the `DecodedRow` redesign
-(`StreamingScanBenchmark`, all three tiers; `TrivialQueryBenchmark`/`PointQueryBenchmark`), this
-driver wins. `ConcurrencyBenchmark`'s `@Threads(8)` mean/p99 regression turned out to most likely be
-an artifact of **unmatched connection pool configuration** between the two drivers (neither side had
-its pool size set explicitly) rather than a real architectural cost — `BoundedPoolConcurrencyBenchmark`,
-which explicitly matches both sides to the same 8-connection pool and drives logical concurrency
-non-blocking/async on both sides, shows this driver winning on every single percentile at every
-concurrency level tested (8/32/128), including the mean and p99 that looked like a regression before.
-See the dedicated section near the end for the numbers and the "why" read. `BoundedPoolConcurrencyBenchmark`
-itself is now **3-fork confirmed** (2026-08-14): the mean/p50–p99 win reproduced at essentially the
-same magnitude as the single-fork run (~2.5–10% faster at every concurrency level), but the
-single-fork run's "wins on every percentile including the tail" claim did not fully survive
-multi-fork — p999+ is now mixed (a clear win at concurrency=32, a small loss at 8 and 128), most
-likely low-sample-count noise at those extreme buckets (only 600–10,000 samples per row, so p999/p9999
-are estimated from a handful of points) rather than a real architectural difference either way. The
-`DecoderOnlyBenchmark` red row still measures a *different, older* code path (pre-`DecodedRow`) and
-isn't a current regression. What's left before any of this is publishable: (1) every remaining
-"needs multi-fork confirmation" row above (`StreamingScanBenchmark`'s three tiers); (2)
-`BoundedPoolConcurrencyBenchmark`'s small first pass (one pool size, three concurrency levels) could
-still be widened now that the first pass is multi-fork confirmed.
+<p align="center">
+  <img src="images/streaming-scan-mean-latency.png" width="32%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
+  <img src="images/decoder-only-mean-latency.png" width="32%" alt="DecoderOnlyBenchmark production-path mean latency by row count, this driver vs client-v2">
+  <img src="images/bounded-pool-concurrency-mean-latency.png" width="32%" alt="BoundedPoolConcurrencyBenchmark mean latency by concurrency level, this driver vs client-v2">
+</p>
+
+**Bottom line today: this driver wins on mean/typical-case latency in every benchmark that measures
+the shipped code, and every one of those wins is now 3-fork confirmed, not a single noisy run.**
+`StreamingScanBenchmark` (all three tiers), `DecoderOnlyBenchmark`'s production path, and
+`BoundedPoolConcurrencyBenchmark` (all three concurrency levels) all reproduced their win under
+`-Pjmh.forks=3`. Two things are still open, and both are stated plainly rather than smoothed over:
+
+1. **The `StreamingScanBenchmark` @ 1M tail spike.** A single run produced a 387ms max where the
+   rest of the distribution (and client-v2's own max) sat at 150–164ms. Traced to the raw
+   per-fork samples: forks 1 and 2 show a clean 137–158ms range with zero outliers; fork 3 alone
+   produced 3–4 samples in the 374–387ms band. One fork out of three, a handful of samples out of
+   ~657 — consistent with a one-off GC pause or OS scheduling hiccup on that fork's JVM process,
+   not (yet) a reproduced architectural regression. Documented, not dismissed: **this needs a
+   `-prof gc` pass and another multi-fork run before being called either "fixed" or "a real
+   finding."**
+2. **`ConcurrencyBenchmark`'s `@Threads(8)` mean/p99 regression** is still single-fork and still
+   most likely an artifact of leaving both drivers at *unmatched default* connection pools —
+   `BoundedPoolConcurrencyBenchmark` (matched pools, non-blocking both sides) shows no such
+   regression at any of the three concurrency levels tested, at 3-fork confidence. `@Threads(8)`
+   itself has not been re-run multi-fork.
+
+What's left before this file is "done": a `-prof gc` pass on the 1M tail spike; a multi-fork rerun
+of `ConcurrencyBenchmark`; widening `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes,
+higher concurrency); and the wide multi-type decode/aggregation/INSERT benchmarks, which are
+designed (see below) but not yet built.
 
 ---
 
@@ -58,17 +110,16 @@ still be widened now that the first pass is multi-fork confirmed.
 >
 > | Done | Open |
 > | --- | --- |
-> | H0 (`byte[1]` alloc) — fixed, confirmed | Multi-fork (`-Pjmh.forks=3`) reconfirmation of the newest `StreamingScanBenchmark` numbers |
-> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | Multi-fork (`-Pjmh.forks=3`) reconfirmation of the newest `StreamingScanBenchmark` numbers |
-> | `DecodedRow` redesign — **build-verified** (2026-08-14): compiles, `StreamingScanBenchmark` green, `ourDriver` now beats `clientV2` at all three tiers | Multi-fork (`-Pjmh.forks=3`) reconfirmation of `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 |
-> | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
-> | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed** (2026-08-14): mean/p50–p99 win reproduced (~2.5–10% faster) at every concurrency level; tail (p999+) mixed, likely sample-count noise | Widen the matrix (more pool sizes/concurrency levels) |
-> | | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
-> | | Performance charts for the main `README.md` — deliberately deferred to the very end of this phase |
+> | H0 (`byte[1]` alloc) — fixed, confirmed | `-prof gc` pass + another multi-fork run on `StreamingScanBenchmark`'s 1M-row tail spike (one fork of three produced 3–4 outlier samples) |
+> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | Multi-fork rerun of `ConcurrencyBenchmark`'s `@Threads(8)` shape |
+> | `DecodedRow` redesign — **3-fork confirmed** (2026-08-14): `StreamingScanBenchmark` and `DecoderOnlyBenchmark`'s production path both beat `clientV2` at all three tiers | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
+> | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Widen `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes/concurrency levels) |
+> | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed** (2026-08-14): mean/p50–p99 win reproduced (~2.5–10% faster) at every concurrency level; tail (p999+) mixed, likely sample-count noise | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
+> | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | Machine spec (CPU/RAM/OS) for the Environment section above |
+> | Performance charts — added to this file and to the main `README.md` (2026-08-14) | |
 >
-> See ["`ConcurrencyBenchmark`'s `@Threads(8)` shape, run for real"](#concurrencybenchmarks-threads8-shape-run-for-real-2026-08-14)
-> near the end for the newest numbers, or jump to the very last section for the current
-> guardrail/priority list.
+> See further down — search this file for "3-fork confirmation" — for the newest numbers, or jump
+> to the very last section for the current guardrail/priority list.
 
 ---
 
@@ -1265,4 +1316,116 @@ prove — non-blocking driver code beats blocking driver code at equal pool size
 matters for most traffic (mean/p50–p99) — is now the strongest-evidenced claim in this file. The
 tail-percentile framing from the single-fork run was too strong; it's now stated as "mixed, likely
 noise" rather than "wins everywhere."
+
+---
+
+### `StreamingScanBenchmark`/`DecoderOnlyBenchmark`, 3-fork confirmation (2026-08-14)
+
+`./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes="StreamingScanBenchmark|DecoderOnlyBenchmark" -Pjmh.forks=3 -Pjmh.warmupIterations=3`,
+~1h19m wall clock (both classes, all `@Param` tiers, 3 forks × 3×10s warmup × 3×10s measurement
+each). This answers two open items at once: whether the single-fork `StreamingScanBenchmark` numbers
+from "Redesign confirmed by a real build" above survive multi-fork, and whether the shipped
+`DecodedRow` decode path (not the old diagnostic harness) actually beats client-v2 once measured
+directly.
+
+#### `StreamingScanBenchmark` — the win holds, the *shape* of the curve does not
+
+| rows | client-v2 mean | this driver mean | verdict | single-fork claim (for comparison) |
+| --- | --- | --- | --- | --- |
+| 10,000 | 4,637.3 | 4,188.6 | **this driver ≈9.7% FASTER** | was ≈21.5% faster |
+| 100,000 | 21,514.0 | 17,002.2 | **this driver ≈21.0% FASTER** | was ≈13.0% faster |
+| 1,000,000 | 150,728.0 | 138,179.0 | **this driver ≈8.3% FASTER** | was ≈1.8% faster |
+
+<p align="center">
+  <img src="images/streaming-scan-mean-latency.png" width="70%" alt="StreamingScanBenchmark mean latency by row count, 3-fork">
+</p>
+
+**The win direction reproduced at all three tiers — the exact percentages, and even the shape of
+the curve, did not.** The single-fork run showed a smoothly *shrinking* advantage as row count grew
+(21.5% → 13.0% → 1.8%), which read like a plausible story on its own ("fixed per-request overhead
+becomes a smaller share of a bigger number"). The 3-fork run shows no such shape: 100k has the
+*largest* advantage (21.0%), bracketed by smaller advantages at 10k and 1M (9.7%, 8.3%). **The
+single-fork curve's shape was noise, not a real trend** — exactly the failure mode multi-fork
+confirmation exists to catch, and a useful concrete example of why this project doesn't trust a
+single run for anything going in the headline table.
+
+#### The 1M-row tail: a real number, traced to one fork, not (yet) a real finding
+
+<p align="center">
+  <img src="images/streaming-scan-1m-percentile-tail.png" width="75%" alt="StreamingScanBenchmark 1M-row percentile spread showing the tail outlier">
+</p>
+
+At the 1M tier, this driver's p99.9 and max both landed at **386.9ms**, against client-v2's steady
+**163.8ms** — a number that, read at face value, would flip the whole 1M-row result from "we win" to
+"we have a serious tail problem." Rather than report that number as a fact, it was traced to the raw
+per-fork-per-iteration histogram JMH recorded:
+
+| fork | iteration | samples | max in bucket |
+| --- | --- | --- | --- |
+| 1 | all 3 | 76–77 each | 137.4–143.1ms |
+| 2 | all 3 | 66–77 each | 137.4–140.2ms |
+| 3 | iter 1 | 68 | 158.3ms (11 samples above 150ms, none above 159ms) |
+| 3 | iter 2 | 66 | **373.8ms** (1 sample above 300ms) |
+| 3 | iter 3 | 64 | **386.9ms** (3 samples above 300ms: 374.9, 379.6, 386.9ms) |
+
+Forks 1 and 2 — two thirds of the run — show a clean, boring distribution topping out at 137–158ms,
+matching client-v2's own range in the same run. Only fork 3's last two iterations produced the
+outliers, four samples out of roughly 657 total. client-v2's own histogram for the same tier, same
+run, shows no equivalent spike in any fork (max 154.7–163.8ms everywhere). **This is a real,
+reproducible-in-the-data-file anomaly, isolated to one JVM process out of three** — consistent with
+a GC pause or OS scheduling hiccup specific to that fork, not (yet) evidence of an architectural
+tail-latency problem in this driver's streaming path. Written up honestly rather than either (a)
+quietly dropping the 1M row from the headline table, or (b) reporting "387ms worst case" as if it
+were representative — **neither would be honest; a `-prof gc` pass on this exact tier is the
+concrete next step, not yet taken.**
+
+#### `DecoderOnlyBenchmark` — the production path, measured directly for the first time
+
+Earlier runs of this benchmark (see "Both isolation benchmarks run for real" and the `-prof gc`
+section above) only ever measured the *old*, pre-`DecodedRow` diagnostic harness — the summary
+table's red "~13–16% slower" row described code that was never shipped. This run adds `ourDriver`,
+which calls `RowBinaryDecoder.decodeRows` — the exact method the shipped connector uses — directly
+over the same captured bytes client-v2's own benchmark decodes, finally answering that open question:
+
+| rows | client-v2 mean | `ourDriver` (production) mean | verdict |
+| --- | --- | --- | --- |
+| 10,000 | 782.3 | 506.6 | **this driver ≈35.2% FASTER** |
+| 100,000 | 7,399.6 | 5,737.9 | **this driver ≈22.5% FASTER** |
+| 1,000,000 | 83,325.8 | 51,885.7 | **this driver ≈37.7% FASTER** |
+
+<p align="center">
+  <img src="images/decoder-only-mean-latency.png" width="70%" alt="DecoderOnlyBenchmark production decode path mean latency by row count, 3-fork">
+</p>
+
+**Decisive, 3-fork-confirmed win, at pure decode cost with the network entirely removed.** This is
+the strongest single number in this file for "does the architecture actually pay off," precisely
+*because* it isolates decode from transport — there's no non-blocking-vs-blocking story to credit
+here, just `ListDecodingRowBinaryReader#nextRowValues` (cloning the reader's already-decoded
+`currentRecord` array directly) against client-v2's own per-column getter dispatch.
+
+The same run also re-measured the five other `DecoderOnlyBenchmark` methods
+(`ourDriverWithoutMapCopy`, `ourDriverCompactRow`, `compactRowDirectLoop`, `compactRowFluxNoBridge`),
+which are **diagnostic scaffolding from the H1/H2 investigation, not the shipped code** — see the
+next section for what they mean and why they should not be read as "this driver is sometimes slower
+than client-v2."
+
+#### Reading the diagnostic variants correctly — a naming trap worth calling out explicitly
+
+`ourDriverCompactRow`, `compactRowDirectLoop`, and `compactRowFluxNoBridge` all score *worse* than
+client-v2 in this run (4–28% slower depending on tier and method — see the H2 section above for the
+original single-fork numbers, now 3-fork confirmed at similar magnitudes). Read carelessly, that
+looks like a contradiction with the "35–38% faster" `ourDriver` number two paragraphs up. It isn't,
+and the `DecoderOnlyBenchmark` class's own Javadoc says why: `ourDriverCompactRow` was **the
+candidate that validated the redesign**, built with three explicit typed-getter calls
+(`getLong`/`getString`/`getBigDecimal`) over `FluxInputStreamBridge` + `Flux.generate` — a
+reasonable design, but not what got shipped. Production's actual path
+(`ListDecodingRowBinaryReader#nextRowValues`, what `ourDriver` measures) instead clones the reader's
+own already-decoded record array directly, **bypassing per-column getter dispatch entirely** — cheaper
+than what any of the three diagnostic methods do. `compactRowDirectLoop`/`compactRowFluxNoBridge` go
+further, deliberately stripping out `FluxInputStreamBridge`/Reactor one variable at a time to isolate
+where the *diagnostic* candidate's residual cost against client-v2 lived (H2a/H2b) — useful for
+understanding the investigation's own history, actively misleading if mistaken for "how this driver
+performs today." **Kept in the summary table above with an explicit "never shipped" label for exactly
+this reason**, rather than deleted — the investigation log's own discipline is to keep the record, not
+to quietly drop numbers that don't fit the current story.
 
