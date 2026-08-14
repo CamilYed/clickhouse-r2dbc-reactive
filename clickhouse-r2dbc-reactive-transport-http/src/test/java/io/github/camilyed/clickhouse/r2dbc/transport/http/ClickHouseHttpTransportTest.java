@@ -51,6 +51,31 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldReturnTheConfiguredResponseBodyWhenAuthenticationAndMaxConnectionsAreBothConfigured() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    final byte[] receivedBody;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(), Authentication.basic("user", "password"), 2);
+
+      receivedBody =
+          transport
+              .query(ClickHouseQuery.of("SELECT 1"))
+              .aggregate()
+              .asByteArray()
+              .block(Duration.ofSeconds(5));
+    }
+
+    // then
+    assertThat(receivedBody).isEqualTo(configuredBody);
+  }
+
+  @Test
   void shouldParseWrittenRowsFromTheClickHouseSummaryHeader() {
     // given
     final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();

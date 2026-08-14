@@ -81,6 +81,30 @@ public final class ClickHouseHttpTransport {
   }
 
   /**
+   * Authenticates every request with the given {@link Authentication} mode and bounds the
+   * underlying connection pool to {@code maxConnections} — the combination every other constructor
+   * is missing (each configures one or the other, never both together). Added specifically so a
+   * caller (e.g. a benchmark modeling "many logical concurrent queries over a small, deliberately
+   * bounded connection pool") can size the pool explicitly on an authenticated server, instead of
+   * being stuck with {@link ConnectionProvider#create(String)}'s default sizing. Every other
+   * parameter this transport supports ({@code responseTimeout}, {@code connectTimeout}, a custom
+   * trusted certificate, {@link RetryPolicy}) keeps its default via this constructor — use the
+   * general-entry-point constructors below directly if one of those also needs to be non-default at
+   * the same time.
+   */
+  public ClickHouseHttpTransport(
+      final String baseUrl, final Authentication authentication, final int maxConnections) {
+    this(
+        baseUrl,
+        authentication,
+        ConnectionProvider.create("clickhouse-http-transport", maxConnections),
+        null,
+        null,
+        null,
+        RetryPolicy.defaultPolicy());
+  }
+
+  /**
    * Authenticates every request with HTTP Basic auth, as required by a password-protected
    * ClickHouse server.
    */
