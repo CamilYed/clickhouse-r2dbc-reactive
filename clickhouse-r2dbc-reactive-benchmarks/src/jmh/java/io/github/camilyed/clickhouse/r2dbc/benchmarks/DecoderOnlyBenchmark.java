@@ -27,8 +27,8 @@ import reactor.core.publisher.SynchronousSink;
 
 /**
  * Diagnostic isolation benchmark for {@link StreamingScanBenchmark}'s confirmed, growing regression
- * (see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section — hypotheses H0/H1): decodes the exact
- * same bytes from memory, no network involved on either side, isolating pure
+ * (see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section — hypotheses H0/H1): decodes the
+ * exact same bytes from memory, no network involved on either side, isolating pure
  * row-decode/materialization cost from transport/bridge cost (which {@link
  * TransportOnlyStreamingBenchmark} isolates the other way). Together the two answer "where does the
  * gap actually live" instead of guessing from {@code StreamingScanBenchmark}'s combined number
@@ -48,8 +48,8 @@ import reactor.core.publisher.SynchronousSink;
  * remained. {@link #compactRowDirectLoop} and {@link #compactRowFluxNoBridge} are a small factorial
  * matrix isolating where that residual actually lives — bridge vs. Reactor vs. the row object
  * itself — one dimension changed at a time, rather than lumping it all under "bridge overhead": see
- * docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for the full H2a–H2d breakdown and the numbers
- * once this matrix has been run.
+ * docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for the full H2a–H2d breakdown and the
+ * numbers once this matrix has been run.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -117,8 +117,8 @@ public class DecoderOnlyBenchmark {
    * rather than inferred by subtracting client-v2's baseline from this driver's total, which folds
    * in every other difference between the two paths (the bridge's own queue/{@code StreamSignal}
    * machinery, {@code Flux.generate}'s state, the reader subclass) along with the map copy — see
-   * docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for why that subtraction wasn't rigorous
-   * enough to attribute a bytes/row number to H1.
+   * docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for why that subtraction wasn't
+   * rigorous enough to attribute a bytes/row number to H1.
    */
   @Benchmark
   public void ourDriverWithoutMapCopy(final Blackhole blackhole) {
@@ -165,7 +165,8 @@ public class DecoderOnlyBenchmark {
    * getter dispatch entirely, not just the {@code Map} copy) — see that method's own Javadoc. This
    * benchmark's numbers are therefore an upper bound on the redesign's actual cost, not an exact
    * prediction; a dedicated benchmark exercising {@code nextRowValues} itself would measure that
-   * path directly. Not yet built — see docs/PERFORMANCE.md's Phase 5 section for the open follow-up.
+   * path directly. Not yet built — see docs/PERFORMANCE.md's Phase 5 section for the open
+   * follow-up.
    */
   @Benchmark
   public void ourDriverCompactRow(final Blackhole blackhole) {
@@ -204,7 +205,8 @@ public class DecoderOnlyBenchmark {
    * #clientV2}'s own transport shape, but building the same retained {@code Object[]} row {@link
    * #ourDriverCompactRow} does. Comparing this against {@link #clientV2} isolates the cost of
    * building/blackholing the row object itself, independent of any Reactor or bridge machinery —
-   * see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section, the H2 factorial breakdown (H2a–H2d).
+   * see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section, the H2 factorial breakdown
+   * (H2a–H2d).
    */
   @Benchmark
   public void compactRowDirectLoop(final Blackhole blackhole) throws Exception {
@@ -233,8 +235,8 @@ public class DecoderOnlyBenchmark {
    * while} loop — isolating Reactor's own per-row emission machinery ({@code SynchronousSink},
    * generator state) from the bridge. {@link #compactRowDirectLoop} vs this method isolates H2b
    * (Reactor/{@code Flux.generate} overhead); this method vs {@link #ourDriverCompactRow} isolates
-   * H2a ({@link FluxInputStreamBridge} overhead) — see docs/PERFORMANCE.md's Phase 5 "Optimization phase"
-   * section for the full H2a–H2d breakdown this factorial matrix is designed to answer.
+   * H2a ({@link FluxInputStreamBridge} overhead) — see docs/PERFORMANCE.md's Phase 5 "Optimization
+   * phase" section for the full H2a–H2d breakdown this factorial matrix is designed to answer.
    */
   @Benchmark
   public void compactRowFluxNoBridge(final Blackhole blackhole) {

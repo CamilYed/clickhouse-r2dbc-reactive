@@ -106,8 +106,7 @@ class ClickHouseConnectionFactoryR2dbcPoolAgainstRealClickHouseTest
 
       // and — a second acquire is bounded to a short timeout while the first is still held.
       final Throwable secondAcquireOutcome =
-          catchThrowable(
-              () -> Mono.from(pool.create()).timeout(Duration.ofMillis(500)).block());
+          catchThrowable(() -> Mono.from(pool.create()).timeout(Duration.ofMillis(500)).block());
 
       // then — the second acquire could not complete in time; the pool genuinely blocked it.
       // Exceptions.unwrap strips Reactor's RuntimeException wrapper around the checked

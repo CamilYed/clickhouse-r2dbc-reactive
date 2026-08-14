@@ -29,24 +29,24 @@ import reactor.core.publisher.Flux;
 /**
  * Level 3, {@code @Threads(N)} shape only: N platform threads, each independently issuing the same
  * parameterized point lookup {@link PointQueryBenchmark} measures single-threaded, against a shared
- * {@link ClickHouseHttpTransport}/{@link Client} instance per JMH's own {@code @State(Scope.Benchmark)}
- * semantics (the same instances {@link PointQueryBenchmark} already shares across its single calling
- * thread — {@code @Threads(N)} here simply drives more of them concurrently). Answers: with the same
- * number of platform threads and each library's own default connection handling left untouched, are
- * the two drivers roughly comparable under concurrent load — a same-resources comparison, per
- * docs/PERFORMANCE.md's Phase 5 "Concurrency/burst" design.
+ * {@link ClickHouseHttpTransport}/{@link Client} instance per JMH's own
+ * {@code @State(Scope.Benchmark)} semantics (the same instances {@link PointQueryBenchmark} already
+ * shares across its single calling thread — {@code @Threads(N)} here simply drives more of them
+ * concurrently). Answers: with the same number of platform threads and each library's own default
+ * connection handling left untouched, are the two drivers roughly comparable under concurrent load
+ * — a same-resources comparison, per docs/PERFORMANCE.md's Phase 5 "Concurrency/burst" design.
  *
  * <p><b>Deliberately not the whole Level 3 design.</b> The second, arguably more interesting shape
- * described there — this driver's non-blocking pipeline serving many logical concurrent queries over
- * a deliberately <em>small</em> bounded connection pool via a custom {@code Flux.flatMap} harness,
- * the actual "~11 concurrent queries per user action" scenario that motivated this whole project — is
- * not implemented here. {@link ClickHouseHttpTransport} currently exposes no way to bound its
- * underlying Reactor Netty connection pool size (it uses the client's default, not a small,
- * explicitly-sized one); building that harness meaningfully needs either a {@code maxConnections}-
- * style constructor knob added to {@link ClickHouseHttpTransport} first, or accepting Reactor
- * Netty's default pool ceiling as the bound, which wouldn't demonstrate the "few connections, many
- * logical queries" property the scenario is actually about. Left as an explicit, named follow-up
- * rather than built on an arbitrary/unrepresentative pool size.
+ * described there — this driver's non-blocking pipeline serving many logical concurrent queries
+ * over a deliberately <em>small</em> bounded connection pool via a custom {@code Flux.flatMap}
+ * harness, the actual "~11 concurrent queries per user action" scenario that motivated this whole
+ * project — is not implemented here. {@link ClickHouseHttpTransport} currently exposes no way to
+ * bound its underlying Reactor Netty connection pool size (it uses the client's default, not a
+ * small, explicitly-sized one); building that harness meaningfully needs either a {@code
+ * maxConnections}- style constructor knob added to {@link ClickHouseHttpTransport} first, or
+ * accepting Reactor Netty's default pool ceiling as the bound, which wouldn't demonstrate the "few
+ * connections, many logical queries" property the scenario is actually about. Left as an explicit,
+ * named follow-up rather than built on an arbitrary/unrepresentative pool size.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -59,7 +59,9 @@ public class ConcurrencyBenchmark {
   private static final int ID_POOL_SIZE = 1 << 16;
   private static final long ID_SEED = 42L;
 
-  /** Row-count tier for {@link PointQueryTable} — kept fixed; concurrency is the axis under test. */
+  /**
+   * Row-count tier for {@link PointQueryTable} — kept fixed; concurrency is the axis under test.
+   */
   @Param({"10000"})
   public long rows;
 
@@ -118,11 +120,11 @@ public class ConcurrencyBenchmark {
 
   /**
    * client-v2 under {@code @Threads(8)}: each worker thread issues its own blocking {@link
-   * Client#query} call against the shared {@link #clientV2} instance — client-v2's {@link Client} is
-   * documented as thread-safe for concurrent {@code query} calls, backed by its own internal
+   * Client#query} call against the shared {@link #clientV2} instance — client-v2's {@link Client}
+   * is documented as thread-safe for concurrent {@code query} calls, backed by its own internal
    * connection pool sized by its defaults (not explicitly configured here, matching {@link
-   * #ourDriver} leaving Reactor Netty's pool at its default too — a same-resources comparison, not a
-   * pool-size-tuned one).
+   * #ourDriver} leaving Reactor Netty's pool at its default too — a same-resources comparison, not
+   * a pool-size-tuned one).
    */
   @Benchmark
   @Threads(8)

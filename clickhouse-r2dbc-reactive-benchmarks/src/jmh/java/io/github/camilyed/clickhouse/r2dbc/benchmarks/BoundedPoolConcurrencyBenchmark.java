@@ -35,18 +35,19 @@ import reactor.core.publisher.Mono;
  * calling thread issues and awaits all of them), client-v2 via its own async {@code
  * CompletableFuture}-returning {@link Client#query} (its internal HTTP client executor handles the
  * concurrency, not caller-provided threads either). Both sides configured with the same {@link
- * #POOL_SIZE} connections. This is the actual "~11 concurrent queries per user action" scenario that
- * motivated this project (see docs/PERFORMANCE.md's Phase 5 "Concurrency/burst" design) — answers
- * whether a small pool serving many more logical queries than it has connections behaves better on
- * this driver's non-blocking pipeline than on client-v2's, not just how the two compare with
- * platform-thread count and connection count both equal (that's {@link ConcurrencyBenchmark}'s job).
+ * #POOL_SIZE} connections. This is the actual "~11 concurrent queries per user action" scenario
+ * that motivated this project (see docs/PERFORMANCE.md's Phase 5 "Concurrency/burst" design) —
+ * answers whether a small pool serving many more logical queries than it has connections behaves
+ * better on this driver's non-blocking pipeline than on client-v2's, not just how the two compare
+ * with platform-thread count and connection count both equal (that's {@link ConcurrencyBenchmark}'s
+ * job).
  *
  * <p><b>Small first pass, not the full matrix.</b> Pool size is fixed at {@link #POOL_SIZE} (not
  * parameterized) and {@link #concurrency} only sweeps 8/32/128 — a deliberately small run to get a
  * first real signal before committing to a larger sweep (more concurrency levels, multiple pool
- * sizes), given every benchmark on this page already takes real wall-clock time and this project has
- * already been burned once by treating a single small-tier run as conclusive. Widen the matrix only
- * once this first pass actually shows something worth digging into further.
+ * sizes), given every benchmark on this page already takes real wall-clock time and this project
+ * has already been burned once by treating a single small-tier run as conclusive. Widen the matrix
+ * only once this first pass actually shows something worth digging into further.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -62,7 +63,9 @@ public class BoundedPoolConcurrencyBenchmark {
   /** Physical connection pool size — fixed and deliberately small, see the class's own Javadoc. */
   private static final int POOL_SIZE = 8;
 
-  /** How many logical concurrent queries to issue over the fixed {@link #POOL_SIZE}-connection pool. */
+  /**
+   * How many logical concurrent queries to issue over the fixed {@link #POOL_SIZE}-connection pool.
+   */
   @Param({"8", "32", "128"})
   public int concurrency;
 
@@ -74,10 +77,10 @@ public class BoundedPoolConcurrencyBenchmark {
   private final AtomicLong idCursor = new AtomicLong();
 
   /**
-   * Starts the shared container, seeds {@link PointQueryTable}, and configures both drivers with the
-   * same {@link #POOL_SIZE}-connection pool — this driver via the {@code (baseUrl, Authentication,
-   * maxConnections)} constructor added specifically for this benchmark, client-v2 via {@code
-   * Client.Builder#setMaxConnections}/{@code enableConnectionPool}.
+   * Starts the shared container, seeds {@link PointQueryTable}, and configures both drivers with
+   * the same {@link #POOL_SIZE}-connection pool — this driver via the {@code (baseUrl,
+   * Authentication, maxConnections)} constructor added specifically for this benchmark, client-v2
+   * via {@code Client.Builder#setMaxConnections}/{@code enableConnectionPool}.
    */
   @Setup(Level.Trial)
   public void setUpTrial() {

@@ -11,8 +11,8 @@ import java.util.Arrays;
  * <p>Deliberately a plain {@code Object[]} snapshot rather than a {@code Map<String, Object>} built
  * fresh per row: the {@code Map} shape measured at roughly 576 bytes/row and was the dominant
  * per-row allocation and latency cost in this driver's decode path — client-v2's own row
- * representation never needed a hash table either. See docs/PERFORMANCE.md's Phase 5 "Optimization phase"
- * section (hypothesis H1) for the measurements this replaces.
+ * representation never needed a hash table either. See docs/PERFORMANCE.md's Phase 5 "Optimization
+ * phase" section (hypothesis H1) for the measurements this replaces.
  *
  * <p><b>{@code values} is not defensively copied by this type</b> — copying it here would silently
  * reintroduce the per-row allocation this type exists to avoid. The producer ({@link
