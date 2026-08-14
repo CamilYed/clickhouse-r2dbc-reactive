@@ -214,9 +214,11 @@ Netty itself, with no blocked thread paying for each one. Measured directly:
 "BoundedPoolConcurrencyBenchmark") configures both this driver and client-v2 with the *same*
 8-connection pool and drives 8/32/128
 logical concurrent point queries at once (async on both sides, not one blocking thread per query) —
-this driver won on every percentile at every concurrency level tested, first measured evidence for
-the architectural property this project set out to provide. Still single-fork/one small first pass,
-not yet a final scalability claim — see that doc for the full caveats and what's still open
+this driver won on mean through p99 at every concurrency level tested, **3-fork confirmed**
+(~2.5–10% faster; the extreme tail past p999 is mixed and likely sample-count noise, not a
+reproduced win either direction) — the strongest measured evidence so far for the architectural
+property this project set out to provide. Still one pool size / three concurrency levels, not yet a
+full scalability sweep — see that doc for the full caveats and what's still open
 (`ConcurrencyBenchmark`'s separate `@Threads(N)`-blocking-callers shape, by contrast, showed a mixed
 result precisely because it leaves both drivers' pools at mismatched defaults rather than matching
 them — read as "same-blocking-resources baseline", not the architectural verdict).

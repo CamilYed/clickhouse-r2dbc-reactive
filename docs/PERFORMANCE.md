@@ -25,7 +25,7 @@ final; multi-fork reconfirmation is the single biggest open item in this whole f
 | `DecoderOnlyBenchmark` (decode only, no network) | Raw decode cost, `Map`-based benchmark harness (pre-`DecodedRow`) | 🔴 ~13–16% slower, ~48–56 B/row more allocated, once compared fairly (equivalent getter calls both sides) | 3-fork confirmed (2026-08-13) — **describes the old benchmark harness, not yet re-measured against production `nextRowValues()`** |
 | `ConcurrencyBenchmark` `@Threads(8)`, mean → p99 | 8 concurrent threads, blocking, both sides' *default* (unmatched) pools | 🔴 ~4% slower (mean), degrading to ~15% slower at p99 | Single fork, one run (2026-08-14) — **see below: likely an unmatched-pool artifact, not architectural** |
 | `ConcurrencyBenchmark` `@Threads(8)`, p99.9 → max | Same run, extreme tail | 🟢 ~7% faster at p99.9, up to ~46% faster at max | Single fork, one run (2026-08-14) |
-| `BoundedPoolConcurrencyBenchmark`, pool=8, concurrency=8/32/128 | Non-blocking `flatMap`/async `CompletableFuture`, **matched** 8-connection pool both sides — the actual motivating scenario | 🟢 this driver wins on **every** percentile at **every** concurrency level: ~4–6% faster mean, up to ~26% faster at p99.9/max | Single fork, one run (2026-08-14) — **needs multi-fork confirmation, but the cleanest, most consistent result in this whole file** |
+| `BoundedPoolConcurrencyBenchmark`, pool=8, concurrency=8/32/128 | Non-blocking `flatMap`/async `CompletableFuture`, **matched** 8-connection pool both sides — the actual motivating scenario | 🟢 this driver wins on mean→p99 at **every** concurrency level (~2.5–10% faster) — 🟡 tail (p999+) is mixed: big win at concurrency=32 (+18–27%), small loss at 8 and 128 (−3% to −15%), likely sample-count noise at those extreme buckets | **3-fork confirmed (2026-08-14)** — mean/p50–p99 win reproduced; the single-fork run's "wins on every percentile" claim did not fully hold under multi-fork and is now narrowed |
 
 **Bottom line today: once pool size is actually matched between the two drivers, this driver wins
 across the board — including under concurrency, which the earlier `ConcurrencyBenchmark` result had
@@ -37,12 +37,18 @@ its pool size set explicitly) rather than a real architectural cost — `Bounded
 which explicitly matches both sides to the same 8-connection pool and drives logical concurrency
 non-blocking/async on both sides, shows this driver winning on every single percentile at every
 concurrency level tested (8/32/128), including the mean and p99 that looked like a regression before.
-See the dedicated section near the end for the numbers and the "why" read. The `DecoderOnlyBenchmark`
-red row still measures a *different, older* code path (pre-`DecodedRow`) and isn't a current
-regression. What's left before any of this is publishable: (1) every "needs multi-fork confirmation"
-row above — still the single biggest open item; (2) `BoundedPoolConcurrencyBenchmark`'s small first
-pass (one pool size, three concurrency levels) could still be widened once multi-fork confirms it
-holds.
+See the dedicated section near the end for the numbers and the "why" read. `BoundedPoolConcurrencyBenchmark`
+itself is now **3-fork confirmed** (2026-08-14): the mean/p50–p99 win reproduced at essentially the
+same magnitude as the single-fork run (~2.5–10% faster at every concurrency level), but the
+single-fork run's "wins on every percentile including the tail" claim did not fully survive
+multi-fork — p999+ is now mixed (a clear win at concurrency=32, a small loss at 8 and 128), most
+likely low-sample-count noise at those extreme buckets (only 600–10,000 samples per row, so p999/p9999
+are estimated from a handful of points) rather than a real architectural difference either way. The
+`DecoderOnlyBenchmark` red row still measures a *different, older* code path (pre-`DecodedRow`) and
+isn't a current regression. What's left before any of this is publishable: (1) every remaining
+"needs multi-fork confirmation" row above (`StreamingScanBenchmark`'s three tiers); (2)
+`BoundedPoolConcurrencyBenchmark`'s small first pass (one pool size, three concurrency levels) could
+still be widened now that the first pass is multi-fork confirmed.
 
 ---
 
@@ -53,10 +59,10 @@ holds.
 > | Done | Open |
 > | --- | --- |
 > | H0 (`byte[1]` alloc) — fixed, confirmed | Multi-fork (`-Pjmh.forks=3`) reconfirmation of the newest `StreamingScanBenchmark` numbers |
-> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | Multi-fork confirmation of `BoundedPoolConcurrencyBenchmark`'s clean win — still single-fork |
-> | `DecodedRow` redesign — **build-verified** (2026-08-14): compiles, `StreamingScanBenchmark` green, `ourDriver` now beats `clientV2` at all three tiers | Multi-fork (`-Pjmh.forks=3`) reconfirmation of `StreamingScanBenchmark`/`ConcurrencyBenchmark` |
-> | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/one test confirmed so far) |
-> | `BoundedPoolConcurrencyBenchmark` — **build-verified and run** (2026-08-14): this driver wins on every percentile at every concurrency level (8/32/128) against a matched 8-connection pool — the cleanest result in this whole file | Widen the matrix (more pool sizes/concurrency levels) once multi-fork confirms this first pass |
+> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | Multi-fork (`-Pjmh.forks=3`) reconfirmation of the newest `StreamingScanBenchmark` numbers |
+> | `DecodedRow` redesign — **build-verified** (2026-08-14): compiles, `StreamingScanBenchmark` green, `ourDriver` now beats `clientV2` at all three tiers | Multi-fork (`-Pjmh.forks=3`) reconfirmation of `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 |
+> | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
+> | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed** (2026-08-14): mean/p50–p99 win reproduced (~2.5–10% faster) at every concurrency level; tail (p999+) mixed, likely sample-count noise | Widen the matrix (more pool sizes/concurrency levels) |
 > | | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
 > | | Performance charts for the main `README.md` — deliberately deferred to the very end of this phase |
 >
@@ -1218,4 +1224,45 @@ sizes, higher concurrency levels) once multi-fork confirms this first pass holds
 ```
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=BoundedPoolConcurrencyBenchmark -Pjmh.forks=3 -Pjmh.warmupIterations=3
 ```
+
+---
+
+### `BoundedPoolConcurrencyBenchmark`, 3-fork confirmation (2026-08-14)
+
+Same benchmark, same matched-8-connection-pool setup, run with `-Pjmh.forks=3
+-Pjmh.warmupIterations=3` (~20 minutes) instead of a single fork. Latency in µs/op (lower is
+faster); percentiles computed from JMH's `sample` mode, sample counts shown because they matter for
+how much to trust the extreme tail below.
+
+| concurrency | client-v2 mean | this driver mean | verdict | samples (v2 / ours) |
+| --- | --- | --- | --- | --- |
+| 8 | 9,160.6 | 8,663.4 | **this driver ≈5.4% FASTER** | 9,822 / 10,385 |
+| 32 | 37,022.7 | 34,820.7 | **this driver ≈6.0% FASTER** | 2,432 / 2,589 |
+| 128 | 147,854.8 | 139,325.3 | **this driver ≈5.8% FASTER** | 612 / 650 |
+
+**Mean through p99 holds, at essentially the same magnitude as the single-fork run** — p50 faster by
+5.0–5.6%, p90 by 5.5–6.9%, p95 by 5.3–10.3%, p99 by 2.5–9.7%, consistent at all three concurrency
+levels. This is the reproducible, trustworthy part of the result: with a matched pool and non-blocking
+calls on both sides, this driver is faster on the typical case, not just in one noisy run. This driver
+also completed more samples than client-v2 in the same measurement window at concurrency 32 and 128
+(2,589 vs 2,432; 650 vs 612) — consistent with lower latency under load, not just a lower point
+estimate.
+
+**The tail (p999 and beyond) did not hold up the same way, and the single-fork run's "wins on every
+percentile" claim is retracted for that range.** At concurrency=32 the tail win is still large and
+clean (p999 +27%, p999.9/max +18%). But at concurrency=8 this driver is *slower* at p999 (−14.8%),
+p999.9 (−3.1%), and max (−3.9%); at concurrency=128 this driver is slower at p999/p999.9/max (−6.4%
+across all three, since they collapse to the same single top sample). The most likely explanation,
+not yet confirmed: at 600–10,000 samples per row, p999 and above are estimated from single-digit
+numbers of data points — a couple of unlucky GC pauses or OS scheduling hiccups in either direction
+easily flips the sign at that resolution. This is exactly the kind of number a factorial experiment
+or a `-prof gc`/`-prof async` pass would be needed to actually explain, not just report; **not yet
+attempted for this benchmark specifically**, unlike the H0/H1 investigation earlier in this file which
+did go that far.
+
+**Net effect on the "are we faster" story:** the actual architectural point this benchmark exists to
+prove — non-blocking driver code beats blocking driver code at equal pool size, on the case that
+matters for most traffic (mean/p50–p99) — is now the strongest-evidenced claim in this file. The
+tail-percentile framing from the single-fork run was too strong; it's now stated as "mixed, likely
+noise" rather than "wins everywhere."
 
