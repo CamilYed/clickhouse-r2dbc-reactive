@@ -14,8 +14,16 @@
 [![Reactor](https://img.shields.io/badge/Reactor-Mono%20%7C%20Flux-blueviolet.svg)](https://projectreactor.io/)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-Client%20V2-FFCC01.svg)](https://github.com/ClickHouse/clickhouse-java)
 
-Not shown yet: a Maven Central version badge — added once the first release actually ships (see
-[Installation](#installation)), rather than a badge that would just read "not found" today.
+[![Maven Central - connector](https://img.shields.io/maven-central/v/io.github.camilyed/clickhouse-r2dbc-reactive-connector?label=connector)](https://central.sonatype.com/artifact/io.github.camilyed/clickhouse-r2dbc-reactive-connector)
+[![Maven Central - core](https://img.shields.io/maven-central/v/io.github.camilyed/clickhouse-r2dbc-reactive-core?label=core)](https://central.sonatype.com/artifact/io.github.camilyed/clickhouse-r2dbc-reactive-core)
+[![Maven Central - transport-http](https://img.shields.io/maven-central/v/io.github.camilyed/clickhouse-r2dbc-reactive-transport-http?label=transport-http)](https://central.sonatype.com/artifact/io.github.camilyed/clickhouse-r2dbc-reactive-transport-http)
+[![Maven Central - testkit](https://img.shields.io/maven-central/v/io.github.camilyed/clickhouse-r2dbc-reactive-testkit?label=testkit)](https://central.sonatype.com/artifact/io.github.camilyed/clickhouse-r2dbc-reactive-testkit)
+
+Most consumers only need `connector` (it pulls `core`/`transport-http` in transitively) — see
+[Installation](#installation). `testkit` is a separate, optional dependency for anyone writing
+tests against this driver (a fake ClickHouse HTTP server, a real-ClickHouse Testcontainers DSL).
+Badges may briefly show "not found" right after a release — Central Portal sync to the search
+index that shields.io reads from can lag a few minutes to a few hours behind publication.
 
 A fully reactive R2DBC driver for ClickHouse. It reuses
 [ClickHouse Java Client V2](https://github.com/ClickHouse/clickhouse-java)'s public row-decoding
@@ -68,11 +76,13 @@ a driver where those properties are explicit, tested, and owned by a single, wel
 
 ## Status
 
-Functional, not yet released. The full R2DBC SPI surface exists and is exercised against a real
-ClickHouse server (Testcontainers): connection lifecycle, `SELECT`/`INSERT`/parameterized
-statements, batches, row/column metadata, `getRowsUpdated()`, and R2DBC exception mapping for
-ClickHouse server errors. No version has been published to Maven Central yet, and the driver has
-not been run against a production workload.
+Functional, `0.1.0` published to Maven Central. The full R2DBC SPI surface exists and is exercised
+against a real ClickHouse server (Testcontainers): connection lifecycle,
+`SELECT`/`INSERT`/parameterized statements, batches, row/column metadata, `getRowsUpdated()`, and
+R2DBC exception mapping for ClickHouse server errors. **The driver has not been run against a
+production workload** — everything above is confirmed by an automated test suite (unit, transport
+contract tests against a controlled fake server, and real-ClickHouse integration tests via
+Testcontainers, see [Testing strategy](#testing-strategy)), not by production experience yet.
 
 Before relying on this in production, read
 [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) — an explicit,
@@ -88,15 +98,13 @@ Expect breaking changes at every stage before a `0.1.0` release.
 
 ## Installation
 
-**Not yet published to Maven Central** — see [Status](#status) and [Roadmap](#roadmap); publication
-is gated behind the Phase 5 performance work in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). The
-coordinates below are what a release will use once one exists — check
-[central.sonatype.com](https://central.sonatype.com/search?q=io.github.camilyed) or the badge at
-the top of this file before assuming a version is actually available.
+Published to Maven Central under `io.github.camilyed`. Check the badge at the top of this file, or
+[central.sonatype.com](https://central.sonatype.com/search?q=io.github.camilyed), for the latest
+version.
 
 ```kotlin
 dependencies {
-    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:<version>")
+    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.1.0")
 }
 ```
 
@@ -106,7 +114,7 @@ classpath (they're `implementation`, not `api`, dependencies of the connector on
 this driver's own internals, not part of its public surface — see
 [Architecture direction](#architecture-direction)).
 
-### Building from source in the meantime
+### Building from source instead
 
 ```bash
 git clone https://github.com/CamilYed/clickhouse-r2dbc-reactive.git
@@ -350,6 +358,28 @@ There are **two separate pools**, at two separate layers — understanding which
 matters for tuning either driver correctly, and it's exactly the confusion the [Why](#why) section
 above names as the original motivation for this project.
 
+```mermaid
+flowchart LR
+    APP["Your code<br/>(Mono/Flux, DatabaseClient...)"] --> L1
+
+    subgraph L1["Layer 1 - optional<br/>io.r2dbc.pool"]
+        POOL["ConnectionPool<br/>pools ClickHouseConnection handles"]
+    end
+
+    L1 --> CONN["ClickHouseConnection<br/>thin, disposable, no real resource"]
+    CONN --> TRANSPORT["ClickHouseHttpTransport<br/>one instance, shared by every Connection"]
+
+    subgraph L2["Layer 2 - always on<br/>Reactor Netty"]
+        TRANSPORT --> NETTY["ConnectionProvider<br/>pools the real TCP connections"]
+    end
+
+    NETTY --> CH[("ClickHouse server<br/>HTTP interface")]
+```
+
+Layer 1 is optional and, in this driver, mostly a lifecycle/API-contract concern — not a scarce
+resource guard. Layer 2 is the one actually holding physical sockets and is always present,
+whether you configure it or not.
+
 1. **R2DBC-SPI-level pool** — `io.r2dbc.pool`'s `ConnectionPool`, the standard R2DBC pooling
    implementation (not something this driver builds itself; the same one every other R2DBC driver
    plugs into the same way), wrapping this driver's `ClickHouseConnectionFactory`. What it actually
@@ -416,6 +446,39 @@ above names as the original motivation for this project.
    channel`/`Channel cleaned` against the same channel ID across requests) as independent
    confirmation — an earlier draft of that investigation suspected a bug here and was wrong; see the
    test's own Javadoc for why the first diagnostic signal was misleading.
+
+   **What you actually accept here, and its current gap.** `maxConnections` is the only knob this
+   driver exposes over the Netty pool, and only through the plain Java constructor above — there is
+   **no `maxConnections` R2DBC connection option today**, so a Spring Boot app configuring
+   `spring.r2dbc.url=r2dbc:clickhouse://...` (the path almost everyone actually uses) always gets
+   this pool at Reactor Netty's own defaults, with no way to size it through the URL or
+   `application.yml`. Every other Netty pool knob (`maxIdleTime`, `maxLifeTime`,
+   `pendingAcquireTimeout`, `pendingAcquireMaxCount`, leasing strategy) isn't exposed at all yet —
+   not through the constructor, not through R2DBC options.
+
+   **Reactor Netty's own defaults, since nothing here is required reading to use this driver** —
+   this is what `ConnectionProvider.create(name)` gives you when `maxConnections` is left unset:
+
+   | Setting | Default | Meaning |
+   | --- | --- | --- |
+   | `maxConnections` | `max(availableProcessors, 8) * 2` (at least 16) | Physical TCP connections open to ClickHouse at once, per remote host |
+   | `pendingAcquireMaxCount` | `500` | How many acquire requests queue once `maxConnections` is saturated, before new ones fail fast |
+   | `pendingAcquireTimeout` | `45s` | How long a queued acquire waits before failing with a pool-timeout error |
+   | `maxIdleTime` / `maxLifeTime` | unset (no eviction) | An idle or long-lived pooled connection is never proactively closed by the pool itself — it's held until the server closes it or the app shuts down |
+   | Leasing strategy | `fifo` | Idle connections are handed out oldest-released-first |
+
+   **Is it worth setting `maxConnections` yourself?** Usually not, and that's the point of this
+   project: because the pipeline is non-blocking end to end, many more *logical* concurrent queries
+   can be in flight than there are physical connections — `Flux.flatMap(..., concurrency)` submits
+   all of them immediately, and whichever don't fit under `maxConnections` simply queue inside
+   Reactor Netty with no thread blocked waiting, up to `pendingAcquireMaxCount`/
+   `pendingAcquireTimeout`. `BoundedPoolConcurrencyBenchmark` (below) measures exactly this
+   headroom at an artificially small 8-connection pool against 8/32/128 concurrent queries and this
+   driver still wins on latency — the default pool (≥16 connections) already has more headroom than
+   that benchmark's deliberately tight one. Reach for a higher `maxConnections` only if you've
+   measured real pending-acquire waits under your own load (Reactor Netty logs these at `DEBUG`),
+   or you deliberately want more physical parallelism against ClickHouse itself (e.g. ClickHouse's
+   own `max_concurrent_queries` server-side limit becomes the real ceiling before this pool would).
 
 **Why this is the point of the whole project, not an implementation detail:** client-v2's `Client`
 is blocking — serving *N* logical concurrent queries needs *N* platform threads each blocked
