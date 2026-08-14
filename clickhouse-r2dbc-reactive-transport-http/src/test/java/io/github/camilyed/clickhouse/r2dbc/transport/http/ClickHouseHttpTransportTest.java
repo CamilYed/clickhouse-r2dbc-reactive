@@ -466,8 +466,8 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
 
       // then
       await()
-          .during(Duration.ofMillis(200))
-          .atMost(Duration.ofMillis(500))
+          .during(Duration.ofMillis(400))
+          .atMost(Duration.ofMillis(1000))
           .untilAsserted(() -> assertThat(server.hasReceivedRequest()).isFalse());
     }
   }

@@ -251,6 +251,9 @@ sonar {
         property("sonar.projectKey", "CamilYed_clickhouse-r2dbc-reactive")
         property("sonar.organization", "camilyed")
         property("sonar.host.url", "https://sonarcloud.io")
+        // clickhouse-r2dbc-reactive-integration-tests was deleted (see ROADMAP.md's module map);
+        // clickhouse-r2dbc-reactive-benchmarks is intentionally absent - see
+        // sonar.coverage.exclusions below for why.
         property(
             "sonar.coverage.jacoco.xmlReportPaths",
             listOf(
@@ -258,7 +261,29 @@ sonar {
                 "clickhouse-r2dbc-reactive-transport-http/build/reports/jacoco/test/jacocoTestReport.xml",
                 "clickhouse-r2dbc-reactive-connector/build/reports/jacoco/test/jacocoTestReport.xml",
                 "clickhouse-r2dbc-reactive-testkit/build/reports/jacoco/test/jacocoTestReport.xml",
-                "clickhouse-r2dbc-reactive-integration-tests/build/reports/jacoco/test/jacocoTestReport.xml"
+                "examples/spring-boot-webflux-demo/build/reports/jacoco/test/jacocoTestReport.xml"
+            ).joinToString(",")
+        )
+        // Two categories of source that structurally can never show real coverage under this
+        // per-module JaCoCo/Sonar wiring, regardless of how thoroughly they're actually exercised:
+        //
+        // - clickhouse-r2dbc-reactive-testkit/src/main: exists specifically to be consumed by OTHER
+        //   modules' test suites (transport-http's contract tests, connector's real-ClickHouse
+        //   tests) - see this module's own package Javadoc and CLAUDE.md's "Package layout for test
+        //   support code". JaCoCo attributes execution data to whichever module's *test* task ran,
+        //   not the module whose *class* was exercised, so testkit's own jacocoTestReport shows 0%
+        //   for classes like ControlledClickHouseServer no matter how many real tests in other
+        //   modules exercise them. Per CLAUDE.md's coverage philosophy, this is test-support
+        //   infrastructure, not driver logic needing a coverage guarantee.
+        // - clickhouse-r2dbc-reactive-benchmarks: JMH measurement tooling (src/jmh), not exercised by
+        //   the regular `test` task at all - see CLAUDE.md's "Performance testing" section ("not
+        //   now", a later separate phase). Its own jacocoTestReport.xml would show 0% for anything
+        //   touched, which would only ever drag the gate down, never reflect anything real.
+        property(
+            "sonar.coverage.exclusions",
+            listOf(
+                "clickhouse-r2dbc-reactive-testkit/src/main/**",
+                "clickhouse-r2dbc-reactive-benchmarks/**"
             ).joinToString(",")
         )
     }

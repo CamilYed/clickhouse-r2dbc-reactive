@@ -22,9 +22,7 @@ class DecodedRowTest {
     final DecodedRow sameValuesDifferentArray = new DecodedRow(new Object[] {1, "Ada"});
 
     // when / then
-    assertThat(row).isEqualTo(sameValuesDifferentArray);
-    // and
-    assertThat(row).hasSameHashCodeAs(sameValuesDifferentArray);
+    assertThat(row).isEqualTo(sameValuesDifferentArray).hasSameHashCodeAs(sameValuesDifferentArray);
   }
 
   @Test

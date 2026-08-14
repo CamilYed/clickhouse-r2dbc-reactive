@@ -195,6 +195,9 @@ class R2dbcConfiguration {
       final ConnectionFactoryOptions options,
       final R2dbcProperties.Pool pool,
       final ConnectionFactory baseConnectionFactory) {
+    final String maxIdleTime = formatDuration(pool.getMaxIdleTime());
+    final String maxLifeTime = formatDuration(pool.getMaxLifeTime());
+    final String maxAcquireTime = formatDuration(pool.getMaxAcquireTime());
     LOG.info(
         """
 
@@ -219,9 +222,9 @@ class R2dbcConfiguration {
         pool.getInitialSize(),
         pool.getMinIdle(),
         pool.getMaxSize(),
-        formatDuration(pool.getMaxIdleTime()),
-        formatDuration(pool.getMaxLifeTime()),
-        formatDuration(pool.getMaxAcquireTime()),
+        maxIdleTime,
+        maxLifeTime,
+        maxAcquireTime,
         pool.getValidationDepth(),
         pool.getAcquireRetry());
   }

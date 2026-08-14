@@ -11,6 +11,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
+import reactor.netty.http.server.HttpServerRequest;
+import reactor.netty.http.server.HttpServerResponse;
 
 /**
  * A minimal, in-process fake of ClickHouse's HTTP interface, for forcing wire-level conditions a
@@ -21,32 +23,62 @@ import reactor.netty.http.server.HttpServer;
  */
 public final class ControlledClickHouseServer implements AutoCloseable {
 
+  private static final String ROW_BINARY_WITH_NAMES_AND_TYPES = "RowBinaryWithNamesAndTypes";
+  private static final String CLICKHOUSE_FORMAT_HEADER = "X-ClickHouse-Format";
+  private static final String CONTENT_TYPE_HEADER = "Content-Type";
+  private static final String OCTET_STREAM = "application/octet-stream";
+
   private final DisposableServer server;
-  private final AtomicBoolean requestReceived;
-  private final AtomicBoolean connectionClosed;
-  private final AtomicInteger activeConnections;
-  private final AtomicInteger totalRequestsReceived;
-  private final AtomicReference<HttpHeaders> receivedHeaders;
-  private final AtomicReference<String> receivedUri;
-  private final AtomicReference<byte[]> receivedBody;
+  private final RequestTracking tracking;
 
   private ControlledClickHouseServer(
-      final DisposableServer server,
-      final AtomicBoolean requestReceived,
-      final AtomicBoolean connectionClosed,
-      final AtomicInteger activeConnections,
-      final AtomicInteger totalRequestsReceived,
-      final AtomicReference<HttpHeaders> receivedHeaders,
-      final AtomicReference<String> receivedUri,
-      final AtomicReference<byte[]> receivedBody) {
+      final DisposableServer server, final RequestTracking tracking) {
     this.server = server;
-    this.requestReceived = requestReceived;
-    this.connectionClosed = connectionClosed;
-    this.activeConnections = activeConnections;
-    this.totalRequestsReceived = totalRequestsReceived;
-    this.receivedHeaders = receivedHeaders;
-    this.receivedUri = receivedUri;
-    this.receivedBody = receivedBody;
+    this.tracking = tracking;
+  }
+
+  /**
+   * Everything this fake server tracks about the requests/connections it has seen, bundled into one
+   * value so the {@link ControlledClickHouseServer} constructor and every {@code
+   * startRespondingXxx} factory don't each carry seven separate {@code Atomic*} parameters.
+   */
+  private record RequestTracking(
+      AtomicBoolean requestReceived,
+      AtomicBoolean connectionClosed,
+      AtomicInteger activeConnections,
+      AtomicInteger totalRequestsReceived,
+      AtomicReference<HttpHeaders> receivedHeaders,
+      AtomicReference<String> receivedUri,
+      AtomicReference<byte[]> receivedBody) {
+
+    static RequestTracking newTracking() {
+      return new RequestTracking(
+          new AtomicBoolean(false),
+          new AtomicBoolean(false),
+          new AtomicInteger(0),
+          new AtomicInteger(0),
+          new AtomicReference<>(),
+          new AtomicReference<>(),
+          new AtomicReference<>());
+    }
+
+    void recordRequestStart(final HttpServerRequest request) {
+      requestReceived.set(true);
+      activeConnections.incrementAndGet();
+      totalRequestsReceived.incrementAndGet();
+      receivedHeaders.set(request.requestHeaders());
+      receivedUri.set(request.uri());
+    }
+
+    void trackConnectionLifecycle(final HttpServerResponse response) {
+      response.withConnection(
+          conn ->
+              conn.onDispose(
+                  () -> {
+                    connectionClosed.set(true);
+                    activeConnections.decrementAndGet();
+                  }));
+    }
   }
 
   /** Responds to every request with {@code responseBody} in a single chunk, immediately. */
@@ -76,13 +108,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
   /** Sends headers immediately, then waits {@code delay} before sending {@code body}. */
   public static ControlledClickHouseServer startRespondingToSelectOneWithBodyDelay(
       final byte[] body, final Duration delay) {
-    final AtomicBoolean requestReceived = new AtomicBoolean(false);
-    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
-    final AtomicInteger activeConnections = new AtomicInteger(0);
-    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
-    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
-    final AtomicReference<String> receivedUri = new AtomicReference<>();
-    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final RequestTracking tracking = RequestTracking.newTracking();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -91,34 +117,16 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                     routes.post(
                         "/",
                         (request, response) -> {
-                          requestReceived.set(true);
-                          activeConnections.incrementAndGet();
-                          totalRequestsReceived.incrementAndGet();
-                          receivedHeaders.set(request.requestHeaders());
-                          receivedUri.set(request.uri());
-                          response.withConnection(
-                              conn ->
-                                  conn.onDispose(
-                                      () -> {
-                                        connectionClosed.set(true);
-                                        activeConnections.decrementAndGet();
-                                      }));
+                          tracking.recordRequestStart(request);
+                          tracking.trackConnectionLifecycle(response);
                           return response
-                              .header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
-                              .header("Content-Type", "application/octet-stream")
+                              .header(CLICKHOUSE_FORMAT_HEADER, ROW_BINARY_WITH_NAMES_AND_TYPES)
+                              .header(CONTENT_TYPE_HEADER, OCTET_STREAM)
                               .sendHeaders()
                               .sendByteArray(Mono.just(body).delayElement(delay));
                         }))
             .bindNow();
-    return new ControlledClickHouseServer(
-        started,
-        requestReceived,
-        connectionClosed,
-        activeConnections,
-        totalRequestsReceived,
-        receivedHeaders,
-        receivedUri,
-        receivedBody);
+    return new ControlledClickHouseServer(started, tracking);
   }
 
   /**
@@ -128,13 +136,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
    */
   public static ControlledClickHouseServer startRespondingToSelectOneWithSummary(
       final byte[] responseBody, final String summaryJson) {
-    final AtomicBoolean requestReceived = new AtomicBoolean(false);
-    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
-    final AtomicInteger activeConnections = new AtomicInteger(0);
-    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
-    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
-    final AtomicReference<String> receivedUri = new AtomicReference<>();
-    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final RequestTracking tracking = RequestTracking.newTracking();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -143,34 +145,16 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                     routes.post(
                         "/",
                         (request, response) -> {
-                          requestReceived.set(true);
-                          activeConnections.incrementAndGet();
-                          totalRequestsReceived.incrementAndGet();
-                          receivedHeaders.set(request.requestHeaders());
-                          receivedUri.set(request.uri());
-                          response.withConnection(
-                              conn ->
-                                  conn.onDispose(
-                                      () -> {
-                                        connectionClosed.set(true);
-                                        activeConnections.decrementAndGet();
-                                      }));
+                          tracking.recordRequestStart(request);
+                          tracking.trackConnectionLifecycle(response);
                           return response
-                              .header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
-                              .header("Content-Type", "application/octet-stream")
+                              .header(CLICKHOUSE_FORMAT_HEADER, ROW_BINARY_WITH_NAMES_AND_TYPES)
+                              .header(CONTENT_TYPE_HEADER, OCTET_STREAM)
                               .header("X-ClickHouse-Summary", summaryJson)
                               .sendByteArray(Mono.just(responseBody));
                         }))
             .bindNow();
-    return new ControlledClickHouseServer(
-        started,
-        requestReceived,
-        connectionClosed,
-        activeConnections,
-        totalRequestsReceived,
-        receivedHeaders,
-        receivedUri,
-        receivedBody);
+    return new ControlledClickHouseServer(started, tracking);
   }
 
   /**
@@ -183,13 +167,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
    */
   public static ControlledClickHouseServer startAcceptingInsertsAndRespondingWithSummary(
       final String summaryJson) {
-    final AtomicBoolean requestReceived = new AtomicBoolean(false);
-    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
-    final AtomicInteger activeConnections = new AtomicInteger(0);
-    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
-    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
-    final AtomicReference<String> receivedUri = new AtomicReference<>();
-    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final RequestTracking tracking = RequestTracking.newTracking();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -198,18 +176,8 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                     routes.post(
                         "/",
                         (request, response) -> {
-                          requestReceived.set(true);
-                          activeConnections.incrementAndGet();
-                          totalRequestsReceived.incrementAndGet();
-                          receivedHeaders.set(request.requestHeaders());
-                          receivedUri.set(request.uri());
-                          response.withConnection(
-                              conn ->
-                                  conn.onDispose(
-                                      () -> {
-                                        connectionClosed.set(true);
-                                        activeConnections.decrementAndGet();
-                                      }));
+                          tracking.recordRequestStart(request);
+                          tracking.trackConnectionLifecycle(response);
                           return request
                               .receive()
                               .aggregate()
@@ -217,7 +185,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                               .defaultIfEmpty(new byte[0])
                               .flatMap(
                                   bytes -> {
-                                    receivedBody.set(bytes);
+                                    tracking.receivedBody().set(bytes);
                                     return response
                                         .header("X-ClickHouse-Summary", summaryJson)
                                         .sendByteArray(Mono.just(new byte[0]))
@@ -225,25 +193,11 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                                   });
                         }))
             .bindNow();
-    return new ControlledClickHouseServer(
-        started,
-        requestReceived,
-        connectionClosed,
-        activeConnections,
-        totalRequestsReceived,
-        receivedHeaders,
-        receivedUri,
-        receivedBody);
+    return new ControlledClickHouseServer(started, tracking);
   }
 
   private static ControlledClickHouseServer startRespondingWith(final Flux<byte[]> body) {
-    final AtomicBoolean requestReceived = new AtomicBoolean(false);
-    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
-    final AtomicInteger activeConnections = new AtomicInteger(0);
-    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
-    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
-    final AtomicReference<String> receivedUri = new AtomicReference<>();
-    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final RequestTracking tracking = RequestTracking.newTracking();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -252,44 +206,20 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                     routes.post(
                         "/",
                         (request, response) -> {
-                          requestReceived.set(true);
-                          activeConnections.incrementAndGet();
-                          totalRequestsReceived.incrementAndGet();
-                          receivedHeaders.set(request.requestHeaders());
-                          receivedUri.set(request.uri());
-                          response.withConnection(
-                              conn ->
-                                  conn.onDispose(
-                                      () -> {
-                                        connectionClosed.set(true);
-                                        activeConnections.decrementAndGet();
-                                      }));
+                          tracking.recordRequestStart(request);
+                          tracking.trackConnectionLifecycle(response);
                           return response
-                              .header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
-                              .header("Content-Type", "application/octet-stream")
+                              .header(CLICKHOUSE_FORMAT_HEADER, ROW_BINARY_WITH_NAMES_AND_TYPES)
+                              .header(CONTENT_TYPE_HEADER, OCTET_STREAM)
                               .sendByteArray(body);
                         }))
             .bindNow();
-    return new ControlledClickHouseServer(
-        started,
-        requestReceived,
-        connectionClosed,
-        activeConnections,
-        totalRequestsReceived,
-        receivedHeaders,
-        receivedUri,
-        receivedBody);
+    return new ControlledClickHouseServer(started, tracking);
   }
 
   /** Accepts the connection and reads the request, but never sends any response at all. */
   public static ControlledClickHouseServer startAcceptingButNeverResponding() {
-    final AtomicBoolean requestReceived = new AtomicBoolean(false);
-    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
-    final AtomicInteger activeConnections = new AtomicInteger(0);
-    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
-    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
-    final AtomicReference<String> receivedUri = new AtomicReference<>();
-    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final RequestTracking tracking = RequestTracking.newTracking();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -298,30 +228,12 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                     routes.post(
                         "/",
                         (request, response) -> {
-                          requestReceived.set(true);
-                          activeConnections.incrementAndGet();
-                          totalRequestsReceived.incrementAndGet();
-                          receivedHeaders.set(request.requestHeaders());
-                          receivedUri.set(request.uri());
-                          response.withConnection(
-                              conn ->
-                                  conn.onDispose(
-                                      () -> {
-                                        connectionClosed.set(true);
-                                        activeConnections.decrementAndGet();
-                                      }));
+                          tracking.recordRequestStart(request);
+                          tracking.trackConnectionLifecycle(response);
                           return Mono.never();
                         }))
             .bindNow();
-    return new ControlledClickHouseServer(
-        started,
-        requestReceived,
-        connectionClosed,
-        activeConnections,
-        totalRequestsReceived,
-        receivedHeaders,
-        receivedUri,
-        receivedBody);
+    return new ControlledClickHouseServer(started, tracking);
   }
 
   /**
@@ -330,13 +242,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
    */
   public static ControlledClickHouseServer startRespondingWithClickHouseError(
       final int errorCode, final String message, final int httpStatus) {
-    final AtomicBoolean requestReceived = new AtomicBoolean(false);
-    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
-    final AtomicInteger activeConnections = new AtomicInteger(0);
-    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
-    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
-    final AtomicReference<String> receivedUri = new AtomicReference<>();
-    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final RequestTracking tracking = RequestTracking.newTracking();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -345,45 +251,21 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                     routes.post(
                         "/",
                         (request, response) -> {
-                          requestReceived.set(true);
-                          activeConnections.incrementAndGet();
-                          totalRequestsReceived.incrementAndGet();
-                          receivedHeaders.set(request.requestHeaders());
-                          receivedUri.set(request.uri());
-                          response.withConnection(
-                              conn ->
-                                  conn.onDispose(
-                                      () -> {
-                                        connectionClosed.set(true);
-                                        activeConnections.decrementAndGet();
-                                      }));
+                          tracking.recordRequestStart(request);
+                          tracking.trackConnectionLifecycle(response);
                           return response
                               .status(httpStatus)
                               .header("X-ClickHouse-Exception-Code", String.valueOf(errorCode))
                               .sendString(Mono.just(message));
                         }))
             .bindNow();
-    return new ControlledClickHouseServer(
-        started,
-        requestReceived,
-        connectionClosed,
-        activeConnections,
-        totalRequestsReceived,
-        receivedHeaders,
-        receivedUri,
-        receivedBody);
+    return new ControlledClickHouseServer(started, tracking);
   }
 
   /** Sends {@code firstChunk}, then resets the TCP connection after {@code beforeReset}. */
   public static ControlledClickHouseServer startRespondingThenResettingConnection(
       final byte[] firstChunk, final Duration beforeReset) {
-    final AtomicBoolean requestReceived = new AtomicBoolean(false);
-    final AtomicBoolean connectionClosed = new AtomicBoolean(false);
-    final AtomicInteger activeConnections = new AtomicInteger(0);
-    final AtomicInteger totalRequestsReceived = new AtomicInteger(0);
-    final AtomicReference<HttpHeaders> receivedHeaders = new AtomicReference<>();
-    final AtomicReference<String> receivedUri = new AtomicReference<>();
-    final AtomicReference<byte[]> receivedBody = new AtomicReference<>();
+    final RequestTracking tracking = RequestTracking.newTracking();
     final DisposableServer started =
         HttpServer.create()
             .port(0)
@@ -392,56 +274,44 @@ public final class ControlledClickHouseServer implements AutoCloseable {
                     routes.post(
                         "/",
                         (request, response) -> {
-                          requestReceived.set(true);
-                          activeConnections.incrementAndGet();
-                          totalRequestsReceived.incrementAndGet();
-                          receivedHeaders.set(request.requestHeaders());
-                          receivedUri.set(request.uri());
+                          tracking.recordRequestStart(request);
                           response.withConnection(
                               conn -> {
                                 conn.onDispose(
                                     () -> {
-                                      connectionClosed.set(true);
-                                      activeConnections.decrementAndGet();
+                                      tracking.connectionClosed().set(true);
+                                      tracking.activeConnections().decrementAndGet();
                                     });
                                 Mono.delay(beforeReset)
                                     .subscribe(ignored -> conn.channel().close());
                               });
                           return response
-                              .header("X-ClickHouse-Format", "RowBinaryWithNamesAndTypes")
-                              .header("Content-Type", "application/octet-stream")
+                              .header(CLICKHOUSE_FORMAT_HEADER, ROW_BINARY_WITH_NAMES_AND_TYPES)
+                              .header(CONTENT_TYPE_HEADER, OCTET_STREAM)
                               .sendByteArray(Flux.concat(Flux.just(firstChunk), Flux.never()));
                         }))
             .bindNow();
-    return new ControlledClickHouseServer(
-        started,
-        requestReceived,
-        connectionClosed,
-        activeConnections,
-        totalRequestsReceived,
-        receivedHeaders,
-        receivedUri,
-        receivedBody);
+    return new ControlledClickHouseServer(started, tracking);
   }
 
   /** Whether this server has received at least one request since it started. */
   public boolean hasReceivedRequest() {
-    return requestReceived.get();
+    return tracking.requestReceived().get();
   }
 
   /** Whether the most recent connection to this server has been closed. */
   public boolean hasClosedConnection() {
-    return connectionClosed.get();
+    return tracking.connectionClosed().get();
   }
 
   /** How many connections to this server are currently open. */
   public int activeConnectionCount() {
-    return activeConnections.get();
+    return tracking.activeConnections().get();
   }
 
   /** How many requests this server has received in total since it started. */
   public int totalRequestsReceived() {
-    return totalRequestsReceived.get();
+    return tracking.totalRequestsReceived().get();
   }
 
   /**
@@ -454,12 +324,12 @@ public final class ControlledClickHouseServer implements AutoCloseable {
 
   /** The request URI (path + query string) from the most recent request, if any was received. */
   public @Nullable String receivedUri() {
-    return receivedUri.get();
+    return tracking.receivedUri().get();
   }
 
   /** Any header value from the most recent request, if any was received; {@code null} if absent. */
   public @Nullable String receivedHeader(final String name) {
-    final HttpHeaders headers = receivedHeaders.get();
+    final HttpHeaders headers = tracking.receivedHeaders().get();
     return headers == null ? null : headers.get(name);
   }
 
@@ -469,7 +339,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
    * #startAcceptingInsertsAndRespondingWithSummary}); {@code null} otherwise.
    */
   public byte @Nullable [] receivedRequestBody() {
-    return receivedBody.get();
+    return tracking.receivedBody().get();
   }
 
   /**
@@ -477,7 +347,7 @@ public final class ControlledClickHouseServer implements AutoCloseable {
    * payloads (e.g. {@code TabSeparated}/{@code CSV}) without the caller handling byte arrays.
    */
   public @Nullable String receivedRequestBodyAsString() {
-    final byte[] bytes = receivedBody.get();
+    final byte[] bytes = tracking.receivedBody().get();
     return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
   }
 

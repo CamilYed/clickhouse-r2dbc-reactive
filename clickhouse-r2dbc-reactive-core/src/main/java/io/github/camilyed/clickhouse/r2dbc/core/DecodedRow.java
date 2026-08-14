@@ -24,10 +24,10 @@ public record DecodedRow(Object[] values) {
 
   @Override
   public boolean equals(final Object other) {
-    if (!(other instanceof DecodedRow otherRow)) {
+    if (!(other instanceof DecodedRow(Object[] otherValues))) {
       return false;
     }
-    return Arrays.equals(values, otherRow.values);
+    return Arrays.equals(values, otherValues);
   }
 
   @Override

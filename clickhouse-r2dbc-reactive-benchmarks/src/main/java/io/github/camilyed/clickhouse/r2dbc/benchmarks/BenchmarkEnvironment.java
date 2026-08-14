@@ -70,13 +70,17 @@ public final class BenchmarkEnvironment {
   }
 
   private static void logEnvironmentMetadata() {
+    final String clickHouseVersion = queryAdminSql("SELECT version()").strip();
+    final String jdkVersion = System.getProperty("java.version");
+    final String osName = System.getProperty("os.name");
+    final String osArch = System.getProperty("os.arch");
     LOG.info(
         "Benchmark environment: clickHouseImage={}, clickHouseVersion={}, jdk={}, os={}/{}",
         CLICK_HOUSE_IMAGE,
-        queryAdminSql("SELECT version()").strip(),
-        System.getProperty("java.version"),
-        System.getProperty("os.name"),
-        System.getProperty("os.arch"));
+        clickHouseVersion,
+        jdkVersion,
+        osName,
+        osArch);
   }
 
   /** The running container's HTTP endpoint, e.g. {@code http://localhost:32821}. */
