@@ -4,8 +4,8 @@ import java.util.SplittableRandom;
 
 /**
  * The narrow, two-column table the point-query and burst-concurrency benchmarks read from — see
- * docs/PERFORMANCE.md's Phase 5 section ("Dataset") for why this is a separate, narrow table rather than
- * reusing the wide multi-type table: a narrow table isolates connection/protocol overhead from
+ * docs/PERFORMANCE.md's Phase 5 section ("Dataset") for why this is a separate, narrow table rather
+ * than reusing the wide multi-type table: a narrow table isolates connection/protocol overhead from
  * decode cost, which is exactly what the point-query benchmarks are meant to measure in isolation.
  *
  * <p>Seeded entirely server-side (no client-side row generation, no CSV round-trip) via {@code

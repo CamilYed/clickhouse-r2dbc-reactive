@@ -21,9 +21,9 @@ import org.openjdk.jmh.infra.Blackhole;
 
 /**
  * Diagnostic isolation benchmark for {@link StreamingScanBenchmark}'s confirmed, growing regression
- * (see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section — hypotheses H2/H3): consumes the exact
- * same query's response bytes, but never constructs a {@code RowBinaryWithNamesAndTypes} decoder on
- * either side. This isolates "HTTP transport + bridge/copy overhead" from "row
+ * (see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section — hypotheses H2/H3): consumes the
+ * exact same query's response bytes, but never constructs a {@code RowBinaryWithNamesAndTypes}
+ * decoder on either side. This isolates "HTTP transport + bridge/copy overhead" from "row
  * decode/materialization overhead" — if this benchmark shows the two drivers roughly matched, the
  * gap {@code StreamingScanBenchmark} measures lives in decode, not transport; if this benchmark
  * alone reproduces a meaningful share of that gap, transport/bridge cost (H2/H3) is a real

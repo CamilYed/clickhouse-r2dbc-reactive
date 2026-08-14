@@ -55,7 +55,9 @@ public class PointQueryBenchmark {
 
   private static final long ID_SEED = 42L;
 
-  /** Row-count tier — see docs/PERFORMANCE.md's Phase 5 "Dataset" table for what each tier is for. */
+  /**
+   * Row-count tier — see docs/PERFORMANCE.md's Phase 5 "Dataset" table for what each tier is for.
+   */
   @Param({"10000"})
   public long rows;
 
@@ -100,11 +102,11 @@ public class PointQueryBenchmark {
    *
    * <p>Previously, the one known asymmetry with {@link #clientV2} was that this driver materialized
    * each row into a {@code Map<String, Object>} while client-v2 read typed values directly off its
-   * reader with no intermediate collection — since docs/PERFORMANCE.md's Phase 5 "Optimization phase"
-   * section (hypothesis H1), {@link RowBinaryDecoder} now snapshots each row into a compact {@link
-   * DecodedRow} (a plain {@code Object[]}) instead, closing most of that gap. A transport-only
-   * benchmark (checksumming raw bytes, no decode at all) isolates protocol cost from decode cost
-   * separately — see {@code TransportOnlyStreamingBenchmark}.
+   * reader with no intermediate collection — since docs/PERFORMANCE.md's Phase 5 "Optimization
+   * phase" section (hypothesis H1), {@link RowBinaryDecoder} now snapshots each row into a compact
+   * {@link DecodedRow} (a plain {@code Object[]}) instead, closing most of that gap. A
+   * transport-only benchmark (checksumming raw bytes, no decode at all) isolates protocol cost from
+   * decode cost separately — see {@code TransportOnlyStreamingBenchmark}.
    */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {

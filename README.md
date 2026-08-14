@@ -1,10 +1,21 @@
 # ClickHouse R2DBC Reactive
 
+[![CI](https://github.com/CamilYed/clickhouse-r2dbc-reactive/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CamilYed/clickhouse-r2dbc-reactive/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-functional%20%2F%20pre--release-orange.svg)](#status)
+
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=coverage)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+
 [![Java](https://img.shields.io/badge/Java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
 [![Reactor](https://img.shields.io/badge/Reactor-Mono%20%7C%20Flux-blueviolet.svg)](https://projectreactor.io/)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-Client%20V2-FFCC01.svg)](https://github.com/ClickHouse/clickhouse-java)
+
+Not shown yet: a Maven Central version badge — added once the first release actually ships (see
+[Installation](#installation)), rather than a badge that would just read "not found" today.
 
 A fully reactive R2DBC driver for ClickHouse. It reuses
 [ClickHouse Java Client V2](https://github.com/ClickHouse/clickhouse-java)'s public row-decoding
@@ -27,6 +38,8 @@ The design direction started as a public design discussion with the ClickHouse t
 
 - [Why](#why)
 - [Status](#status)
+- [Installation](#installation)
+- [Usage](#usage)
 - [Performance](#performance)
 - [Known limitations](#known-limitations)
 - [What "fully reactive" means here](#what-fully-reactive-means-here)
@@ -72,6 +85,93 @@ to depend on today", kept up to date as things are found and fixed — treat thi
 of it, not the other way around.
 
 Expect breaking changes at every stage before a `0.1.0` release.
+
+## Installation
+
+**Not yet published to Maven Central** — see [Status](#status) and [Roadmap](#roadmap); publication
+is gated behind the Phase 5 performance work in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). The
+coordinates below are what a release will use once one exists — check
+[central.sonatype.com](https://central.sonatype.com/search?q=io.github.camilyed) or the badge at
+the top of this file before assuming a version is actually available.
+
+```kotlin
+dependencies {
+    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:<version>")
+}
+```
+
+Depending on `clickhouse-r2dbc-reactive-connector` alone is enough — it pulls in
+`clickhouse-r2dbc-reactive-core` and `clickhouse-r2dbc-reactive-transport-http` on the runtime
+classpath (they're `implementation`, not `api`, dependencies of the connector on purpose: they're
+this driver's own internals, not part of its public surface — see
+[Architecture direction](#architecture-direction)).
+
+### Building from source in the meantime
+
+```bash
+git clone https://github.com/CamilYed/clickhouse-r2dbc-reactive.git
+cd clickhouse-r2dbc-reactive
+./gradlew publishToMavenLocal
+```
+
+then depend on it with `mavenLocal()` in your `repositories { }` block and the version from
+`gradle.properties`/`-PreleaseVersion` (defaults to `0.1.0-SNAPSHOT`).
+
+## Usage
+
+The driver registers itself with the standard R2DBC `ServiceLoader` bootstrap path under the driver
+identifier `clickhouse` — no direct dependency on this driver's own classes is needed to obtain a
+`ConnectionFactory`.
+
+```java
+import io.r2dbc.spi.Connection;
+import io.r2dbc.spi.ConnectionFactories;
+import io.r2dbc.spi.ConnectionFactory;
+import reactor.core.publisher.Flux;
+
+ConnectionFactory connectionFactory =
+    ConnectionFactories.get("r2dbc:clickhouse://localhost:8123");
+// or, with authentication: "r2dbc:clickhouse://user:password@host:8123?ssl=true"
+
+Flux<String> names =
+    Flux.usingWhen(
+        connectionFactory.create(),
+        connection ->
+            Flux.from(
+                    connection
+                        .createStatement("SELECT name FROM users WHERE id = {id:UInt32}")
+                        .bind("id", 42)
+                        .execute())
+                .flatMap(result -> result.map((row, meta) -> row.get("name", String.class))),
+        Connection::close);
+```
+
+Named parameters (`{name:Type}`, ClickHouse's own binding syntax) are bound with
+`.bind("name", value)` — the type annotation in the SQL is what ClickHouse itself uses to interpret
+the bound value, this driver does not reinterpret or validate it.
+
+### Connection options
+
+Set through the R2DBC URL's query string or `ConnectionFactoryOptions.builder()` directly:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `host` | *(required)* | ClickHouse server host |
+| `port` | `8123` | ClickHouse HTTP interface port |
+| `ssl` | `false` | Use HTTPS |
+| `user` / `password` | none (anonymous) | HTTP basic auth against ClickHouse |
+| `connectTimeout` | none | See [`ClickHouseHttpTransport`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransport.java)'s Javadoc for why there's no implicit response timeout |
+| `sslRootCert` | none (JVM default trust store) | Classpath resource or filesystem path to a PEM-encoded trusted certificate, for self-signed/internal-CA servers — only meaningful with `ssl=true` |
+| `retryMaxAttempts` | `3` | Retries for failures before any request bytes reached the server — see [`RetryPolicy`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java) for exactly what qualifies |
+| `retryDelay` | `50ms` | Fixed delay between retry attempts |
+
+Spring Boot users configuring `spring.r2dbc.url=r2dbc:clickhouse://...` get all of the above for
+free through Spring's own R2DBC auto-configuration — see
+[`examples/spring-boot-webflux-demo`](examples/spring-boot-webflux-demo) for a complete, runnable
+reference application (hexagonal layering, `io.r2dbc.pool` wiring, a real ClickHouse schema with
+`LowCardinality`/`Enum8`/`IPv4` columns, and an analytics endpoint). Wrapping the connection factory
+in `io.r2dbc.pool`'s `ConnectionPool` — what `spring.r2dbc.pool.*` configures — is covered in
+[Connection pooling](#connection-pooling) below.
 
 ## Performance
 
