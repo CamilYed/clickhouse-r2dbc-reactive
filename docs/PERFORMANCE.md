@@ -17,9 +17,9 @@ same JVM build:
 
 | | |
 | --- | --- |
-| CPU | _pending — see the open item below_ |
-| RAM | _pending — see the open item below_ |
-| OS | _pending — see the open item below_ |
+| CPU | Apple M3 Pro, 12 cores (6 performance + 6 efficiency) |
+| RAM | 36 GB LPDDR5 |
+| OS | macOS, Apple Silicon (`Mac15,6`) |
 | JDK | OpenJDK 64-Bit Server VM, `21.0.8+9-LTS` (Temurin, via `sdkman`) |
 | ClickHouse | `clickhouse/clickhouse-server:latest` via Testcontainers — **not pinned to a specific version**, so "latest" can silently drift between runs; a real caveat, not yet addressed |
 | client-v2 (baseline) | `com.clickhouse:client-v2:0.9.0` |
@@ -115,8 +115,9 @@ designed (see below) but not yet built.
 > | `DecodedRow` redesign — **3-fork confirmed** (2026-08-14): `StreamingScanBenchmark` and `DecoderOnlyBenchmark`'s production path both beat `clientV2` at all three tiers | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
 > | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Widen `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes/concurrency levels) |
 > | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed** (2026-08-14): mean/p50–p99 win reproduced (~2.5–10% faster) at every concurrency level; tail (p999+) mixed, likely sample-count noise | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
-> | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | Machine spec (CPU/RAM/OS) for the Environment section above |
+> | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
 > | Performance charts — added to this file and to the main `README.md` (2026-08-14) | |
+> | Machine spec (CPU/RAM/OS) — filled in (2026-08-14): Apple M3 Pro, 36 GB, macOS | |
 >
 > See further down — search this file for "3-fork confirmation" — for the newest numbers, or jump
 > to the very last section for the current guardrail/priority list.
@@ -1326,7 +1327,8 @@ noise" rather than "wins everywhere."
 each). This answers two open items at once: whether the single-fork `StreamingScanBenchmark` numbers
 from "Redesign confirmed by a real build" above survive multi-fork, and whether the shipped
 `DecodedRow` decode path (not the old diagnostic harness) actually beats client-v2 once measured
-directly.
+directly. Raw console output kept verbatim at
+[docs/perf-runs/2026-08-14-streaming-scan-decoder-only-3fork.txt](perf-runs/2026-08-14-streaming-scan-decoder-only-3fork.txt).
 
 #### `StreamingScanBenchmark` — the win holds, the *shape* of the curve does not
 

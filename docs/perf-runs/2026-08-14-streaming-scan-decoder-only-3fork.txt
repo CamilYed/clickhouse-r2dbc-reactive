@@ -1,0 +1,258 @@
+Raw JMH console output — StreamingScanBenchmark + DecoderOnlyBenchmark, 3-fork run
+====================================================================================
+
+Date: 2026-08-14
+Machine: MacBook Pro (Mac15,6), Apple M3 Pro, 12 cores (6 performance + 6 efficiency), 36 GB RAM
+JDK: OpenJDK 64-Bit Server VM 21.0.8+9-LTS (Temurin, via sdkman)
+Wall clock: 01:18:49
+
+Command:
+    caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+      -Pjmh.includes="StreamingScanBenchmark|DecoderOnlyBenchmark" \
+      -Pjmh.forks=3 \
+      -Pjmh.warmupIterations=3
+
+This is the raw console output this run produced, kept verbatim for the record. The parsed,
+interpreted version of these numbers — including the per-fork histogram breakdown behind the
+StreamingScanBenchmark 1M-row tail spike, and the distinction between DecoderOnlyBenchmark's
+production decode path (ourDriver) and its historical H1/H2 diagnostic variants — lives in
+docs/PERFORMANCE.md, under "StreamingScanBenchmark/DecoderOnlyBenchmark, 3-fork confirmation
+(2026-08-14)". The full machine-readable result set (every percentile, every fork's raw histogram)
+is clickhouse-r2dbc-reactive-benchmarks/build/results/jmh/results.json, which is a Gradle build
+output and not committed to this repo — this file is the durable copy of what that run reported.
+
+------------------------------------------------------------------------------------------------
+
+# Run complete. Total time: 01:18:49
+
+REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+experiments, perform baseline and negative tests that provide experimental control, make sure
+the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+Do not assume the numbers tell you what you want them to tell.
+
+NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+extra caution when trusting the results, look into the generated code to check the benchmark still
+works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+different JVMs are already problematic, the performance difference caused by different Blackhole
+modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+
+Benchmark                                                                      (rows)    Mode     Cnt       Score      Error  Units
+DecoderOnlyBenchmark.clientV2                                                   10000  sample  115021     782.310 ±    0.692  us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.00                                    10000  sample             638.976             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.50                                    10000  sample             792.576             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.90                                    10000  sample             856.064             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.95                                    10000  sample             868.352             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.99                                    10000  sample             957.440             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.999                                   10000  sample            1282.003             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.9999                                  10000  sample            1352.699             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p1.00                                    10000  sample            1613.824             us/op
+DecoderOnlyBenchmark.clientV2                                                  100000  sample   12167    7399.581 ±    7.412  us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.00                                   100000  sample            6914.048             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.50                                   100000  sample            7331.840             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.90                                   100000  sample            7766.016             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.95                                   100000  sample            7880.704             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.99                                   100000  sample            8178.237             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.999                                  100000  sample            8582.463             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.9999                                 100000  sample            8892.960             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p1.00                                   100000  sample            8896.512             us/op
+DecoderOnlyBenchmark.clientV2                                                 1000000  sample    1084   83325.759 ±  360.072  us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.00                                  1000000  sample           77725.696             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.50                                  1000000  sample           82051.072             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.90                                  1000000  sample           88866.816             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.95                                  1000000  sample           89620.480             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.99                                  1000000  sample           90963.968             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.999                                 1000000  sample           92536.832             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p0.9999                                1000000  sample           92536.832             us/op
+DecoderOnlyBenchmark.clientV2:clientV2·p1.00                                  1000000  sample           92536.832             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop                                       10000  sample  110084     817.646 ±    0.579  us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.00            10000  sample             691.200             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.50            10000  sample             823.296             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.90            10000  sample             865.280             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.95            10000  sample             875.520             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.99            10000  sample             934.912             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.999           10000  sample            1316.864             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.9999          10000  sample            1374.173             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p1.00            10000  sample            1411.072             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop                                      100000  sample   10650    8455.484 ±   11.712  us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.00           100000  sample            7438.336             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.50           100000  sample            8470.528             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.90           100000  sample            8945.664             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.95           100000  sample            9093.120             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.99           100000  sample            9289.728             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.999          100000  sample            9940.140             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.9999         100000  sample           10761.088             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p1.00           100000  sample           10764.288             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop                                     1000000  sample    1041   86978.296 ±  190.771  us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.00          1000000  sample           81395.712             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.50          1000000  sample           86507.520             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.90          1000000  sample           89784.320             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.95          1000000  sample           90308.608             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.99          1000000  sample           91357.184             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.999         1000000  sample           92924.543             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p0.9999        1000000  sample           92930.048             us/op
+DecoderOnlyBenchmark.compactRowDirectLoop:compactRowDirectLoop·p1.00          1000000  sample           92930.048             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge                                     10000  sample  112280     801.400 ±    0.440  us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.00        10000  sample             701.440             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.50        10000  sample             794.624             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.90        10000  sample             831.488             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.95        10000  sample             840.704             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.99        10000  sample             883.712             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.999       10000  sample            1277.952             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.9999      10000  sample            1333.248             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p1.00        10000  sample            1773.568             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge                                    100000  sample   10657    8447.928 ±   14.744  us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.00       100000  sample            7512.064             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.50       100000  sample            8273.920             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.90       100000  sample            9093.120             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.95       100000  sample            9224.192             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.99       100000  sample            9519.104             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.999      100000  sample            9874.375             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.9999     100000  sample           10811.284             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p1.00       100000  sample           10813.440             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge                                   1000000  sample    1014   89014.563 ±  346.999  us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.00      1000000  sample           84148.224             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.50      1000000  sample           88342.528             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.90      1000000  sample           92209.152             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.95      1000000  sample           92930.048             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.99      1000000  sample           93716.480             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.999     1000000  sample          148655.964             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p0.9999    1000000  sample          148897.792             us/op
+DecoderOnlyBenchmark.compactRowFluxNoBridge:compactRowFluxNoBridge·p1.00      1000000  sample          148897.792             us/op
+DecoderOnlyBenchmark.ourDriver                                                  10000  sample  177635     506.595 ±    0.336  us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.00                                  10000  sample             436.736             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.50                                  10000  sample             500.736             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.90                                  10000  sample             529.408             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.95                                  10000  sample             540.672             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.99                                  10000  sample             591.872             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.999                                 10000  sample            1001.472             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.9999                                10000  sample            1061.348             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p1.00                                  10000  sample            1562.624             us/op
+DecoderOnlyBenchmark.ourDriver                                                 100000  sample   15685    5737.862 ±    6.743  us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.00                                 100000  sample            5292.032             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.50                                 100000  sample            5709.824             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.90                                 100000  sample            6070.272             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.95                                 100000  sample            6209.536             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.99                                 100000  sample            6497.403             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.999                                100000  sample            7162.380             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.9999                               100000  sample            7837.670             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p1.00                                 100000  sample            8126.464             us/op
+DecoderOnlyBenchmark.ourDriver                                                1000000  sample    1739   51885.744 ±   68.726  us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.00                                1000000  sample           49938.432             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.50                                1000000  sample           51773.440             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.90                                1000000  sample           52756.480             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.95                                1000000  sample           53084.160             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.99                                1000000  sample           54342.451             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.999                               1000000  sample           63706.235             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p0.9999                              1000000  sample           64094.208             us/op
+DecoderOnlyBenchmark.ourDriver:ourDriver·p1.00                                1000000  sample           64094.208             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow                                        10000  sample   96445     933.161 ±    0.755  us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.00              10000  sample             780.288             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.50              10000  sample             918.528             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.90              10000  sample             992.256             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.95              10000  sample            1040.384             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.99              10000  sample            1286.144             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.999             10000  sample            1484.800             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.9999            10000  sample            1602.399             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p1.00              10000  sample            1871.872             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow                                       100000  sample    9475    9498.509 ±   20.882  us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.00             100000  sample            8175.616             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.50             100000  sample            9666.560             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.90             100000  sample           10174.464             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.95             100000  sample           10371.072             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.99             100000  sample           11042.816             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.999            100000  sample           12093.751             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.9999           100000  sample           12894.208             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p1.00             100000  sample           12894.208             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow                                      1000000  sample     959   94350.655 ±  382.208  us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.00            1000000  sample           87687.168             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.50            1000000  sample           93192.192             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.90            1000000  sample           99483.648             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.95            1000000  sample          100270.080             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.99            1000000  sample          101842.944             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.999           1000000  sample          103677.952             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p0.9999          1000000  sample          103677.952             us/op
+DecoderOnlyBenchmark.ourDriverCompactRow:ourDriverCompactRow·p1.00            1000000  sample          103677.952             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy                                    10000  sample  200191     449.502 ±    0.248  us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.00      10000  sample             403.968             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.50      10000  sample             445.952             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.90      10000  sample             456.704             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.95      10000  sample             461.312             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.99      10000  sample             484.864             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.999     10000  sample             889.856             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.9999    10000  sample             936.940             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p1.00      10000  sample             990.208             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy                                   100000  sample   17910    5025.364 ±    3.476  us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.00     100000  sample            4792.320             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.50     100000  sample            4988.928             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.90     100000  sample            5185.536             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.95     100000  sample            5341.184             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.99     100000  sample            5472.256             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.999    100000  sample            6213.911             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.9999   100000  sample            7550.442             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p1.00     100000  sample            7757.824             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy                                  1000000  sample    1954   46102.497 ±   89.793  us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.00    1000000  sample           44695.552             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.50    1000000  sample           45613.056             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.90    1000000  sample           47382.528             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.95    1000000  sample           48037.888             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.99    1000000  sample           51511.296             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.999   1000000  sample           52961.935             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p0.9999  1000000  sample           53149.696             us/op
+DecoderOnlyBenchmark.ourDriverWithoutMapCopy:ourDriverWithoutMapCopy·p1.00    1000000  sample           53149.696             us/op
+StreamingScanBenchmark.clientV2                                                 10000  sample   19400    4637.282 ±   17.881  us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.00                                  10000  sample            2625.536             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.50                                  10000  sample            4628.480             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.90                                  10000  sample            5562.368             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.95                                  10000  sample            5718.016             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.99                                  10000  sample            6037.504             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.999                                 10000  sample            6710.870             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.9999                                10000  sample           23217.789             us/op
+StreamingScanBenchmark.clientV2:clientV2·p1.00                                  10000  sample           32243.712             us/op
+StreamingScanBenchmark.clientV2                                                100000  sample    4186   21514.032 ±   25.822  us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.00                                 100000  sample           19857.408             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.50                                 100000  sample           21495.808             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.90                                 100000  sample           22020.096             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.95                                 100000  sample           22183.936             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.99                                 100000  sample           22609.920             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.999                                100000  sample           24768.610             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.9999                               100000  sample           34406.400             us/op
+StreamingScanBenchmark.clientV2:clientV2·p1.00                                 100000  sample           34406.400             us/op
+StreamingScanBenchmark.clientV2                                               1000000  sample     602  150728.010 ±  452.065  us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.00                                1000000  sample          140509.184             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.50                                1000000  sample          151781.376             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.90                                1000000  sample          153878.528             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.95                                1000000  sample          154402.816             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.99                                1000000  sample          157540.680             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.999                               1000000  sample          163840.000             us/op
+StreamingScanBenchmark.clientV2:clientV2·p0.9999                              1000000  sample          163840.000             us/op
+StreamingScanBenchmark.clientV2:clientV2·p1.00                                1000000  sample          163840.000             us/op
+StreamingScanBenchmark.ourDriver                                                10000  sample   21475    4188.644 ±   15.554  us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.00                                10000  sample            2113.536             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.50                                10000  sample            4268.032             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.90                                10000  sample            4882.432             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.95                                10000  sample            5046.272             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.99                                10000  sample            6137.774             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.999                               10000  sample            7041.614             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.9999                              10000  sample           11190.698             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p1.00                                10000  sample           12697.600             us/op
+StreamingScanBenchmark.ourDriver                                               100000  sample    5295   17002.155 ±   27.627  us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.00                               100000  sample           12926.976             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.50                               100000  sample           16973.824             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.90                               100000  sample           17793.024             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.95                               100000  sample           18022.400             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.99                               100000  sample           18415.616             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.999                              100000  sample           19140.182             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.9999                             100000  sample           20971.520             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p1.00                               100000  sample           20971.520             us/op
+StreamingScanBenchmark.ourDriver                                              1000000  sample     657  138179.015 ± 2662.687  us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.00                              1000000  sample          123207.680             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.50                              1000000  sample          133431.296             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.90                              1000000  sample          149998.797             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.95                              1000000  sample          151519.232             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.99                              1000000  sample          158927.421             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.999                             1000000  sample          386924.544             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p0.9999                            1000000  sample          386924.544             us/op
+StreamingScanBenchmark.ourDriver:ourDriver·p1.00                              1000000  sample          386924.544             us/op
+
+Benchmark result is saved to /Users/kamil/Projects/claude/clickhouse-r2dbc-reactive/clickhouse-r2dbc-reactive-benchmarks/build/results/jmh/results.json
