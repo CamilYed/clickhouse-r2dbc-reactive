@@ -6,7 +6,10 @@ import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.r2dbc.spi.Result;
+import io.r2dbc.spi.Row;
+import io.r2dbc.spi.RowMetadata;
 import java.util.List;
+import java.util.function.BiFunction;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
@@ -76,9 +79,12 @@ class ClickHouseResultTest {
   void shouldRejectMappingWithoutAMappingFunction() {
     // given
     final ClickHouseResult result = resultOf(1);
+    // and
+    final BiFunction<Row, RowMetadata, Object> mappingFunction = null;
 
     // when / then
-    assertThatThrownBy(() -> result.map(null)).isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> result.map(mappingFunction))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
