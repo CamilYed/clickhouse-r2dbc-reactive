@@ -1,10 +1,21 @@
 # ClickHouse R2DBC Reactive
 
+[![CI](https://github.com/CamilYed/clickhouse-r2dbc-reactive/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CamilYed/clickhouse-r2dbc-reactive/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-functional%20%2F%20pre--release-orange.svg)](#status)
+
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=coverage)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=CamilYed_clickhouse-r2dbc-reactive&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=CamilYed_clickhouse-r2dbc-reactive)
+
 [![Java](https://img.shields.io/badge/Java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
 [![Reactor](https://img.shields.io/badge/Reactor-Mono%20%7C%20Flux-blueviolet.svg)](https://projectreactor.io/)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-Client%20V2-FFCC01.svg)](https://github.com/ClickHouse/clickhouse-java)
+
+Not shown yet: a Maven Central version badge — added once the first release actually ships (see
+[Installation](#installation)), rather than a badge that would just read "not found" today.
 
 A fully reactive R2DBC driver for ClickHouse. It reuses
 [ClickHouse Java Client V2](https://github.com/ClickHouse/clickhouse-java)'s public row-decoding
