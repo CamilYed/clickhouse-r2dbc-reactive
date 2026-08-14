@@ -136,11 +136,7 @@ class ClickHouseHttpTransportTlsTest {
     assertThatThrownBy(
             () ->
                 new ClickHouseHttpTransport(
-                    "http://localhost:8123",
-                    noAuthentication,
-                    null,
-                    null,
-                    trustedCertificatePem))
+                    "http://localhost:8123", noAuthentication, null, null, trustedCertificatePem))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("https://");
   }
