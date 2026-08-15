@@ -40,12 +40,17 @@ real transitive deps — not something unexpected), regenerate the file:
 ./scripts/regenerate-verification-metadata.sh
 ```
 
-This covers every module's main/test classpath *and* the
-`clickhouse-r2dbc-reactive-benchmarks` module's `jmh` source set — deliberately excluded from
-`build`/`check` (see that module's `build.gradle.kts`), so a plain `clean build` regeneration
-alone always misses its `jmhCompileClasspath`/`jmhRuntimeClasspath`, which is exactly the failure
-that kept recurring before this script existed. Review `git diff
-gradle/verification-metadata.xml` before committing.
+Passing `--write-verification-metadata` makes Gradle resolve every resolvable configuration in
+every module — root, every subproject (including the `clickhouse-r2dbc-reactive-benchmarks`
+module's `jmh` source set, which is otherwise excluded from `build`/`check`), `buildSrc`, and
+plugins — regardless of which task you ask for, so the script deliberately asks for the cheap
+`help` task rather than a real `clean build`: no compiling, no tests, no Docker/Testcontainers
+needed. Review `git diff gradle/verification-metadata.xml` before committing.
+
+Deliberately not `--dry-run`: per Gradle's own docs, `--dry-run` writes to a separate
+`gradle/verification-metadata.dryrun.xml` preview file, never to the real
+`gradle/verification-metadata.xml` — a mistake this script's own first draft made (looked like it
+worked, changed nothing).
 
 `.github/workflows/verification-metadata.yml` runs this same script automatically on any pull
 request (including Dependabot's) that touches `gradle/libs.versions.toml`, and pushes the
