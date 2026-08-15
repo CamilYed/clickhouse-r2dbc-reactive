@@ -304,10 +304,10 @@ public final class ClickHouseHttpTransport {
    * returned {@link ByteBufFlux} instead terminates with client-v2's public {@link ServerException}
    * — reused rather than reimplemented, since it already carries ClickHouse's own numeric error
    * code. {@link ClickHouseQuery#queryId()} is passed as {@link ServerException}'s own {@code
-   * queryId} constructor argument (available since client-v2 0.9.8 — see the version catalog),
-   * so it is available via {@link ServerException#getQueryId()} rather than folded into the
-   * message text. {@link ServerException#isRetryable()} is also available on this client-v2
-   * version, but this transport does not yet act on it — see {@link RetryPolicy}'s Javadoc.
+   * queryId} constructor argument (available since client-v2 0.9.8 — see the version catalog), so
+   * it is available via {@link ServerException#getQueryId()} rather than folded into the message
+   * text. {@link ServerException#isRetryable()} is also available on this client-v2 version, but
+   * this transport does not yet act on it — see {@link RetryPolicy}'s Javadoc.
    *
    * <p>{@link ClickHouseQuery#parameters()} — already encoded into ClickHouse's own wire format by
    * {@link ClickHouseQuery#withParameters(java.util.Map)} — are sent one {@code
@@ -522,8 +522,7 @@ public final class ClickHouseHttpTransport {
         .asString(StandardCharsets.UTF_8)
         .defaultIfEmpty("")
         .flatMap(
-            body ->
-                Mono.error(new ServerException(serverCode, body.strip(), httpStatus, queryId)));
+            body -> Mono.error(new ServerException(serverCode, body.strip(), httpStatus, queryId)));
   }
 
   private static boolean isError(final HttpClientResponse response) {
