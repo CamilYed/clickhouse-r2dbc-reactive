@@ -1197,6 +1197,36 @@ conversation), `Dynamic`/`Variant` types, automatic retry for writes based on se
 emulation, a large module-boundary refactor, or a driver-owned ORM/query DSL. `0.2.0` is about
 production predictability, not surface area.
 
+### PR 0 — bump client-v2 to 0.9.8 first
+
+Do this before PR 4 (statement timeout) and before any Phase 7 work that touches error/retry
+handling, ideally before PR 1 so nothing else is built against the stale API. This repo is
+currently pinned to `com.clickhouse:client-v2:0.9.0` (see the version catalog); a Dependabot PR
+bumping to `0.9.8` has been open, unreviewed, for over a week (PR #6) while it fixes exactly a gap
+this codebase's own comments flag:
+
+- `ClickHouseHttpTransport.queryWithSummary`'s Javadoc says outright: *"Our pinned client-v2
+  version predates that class's `queryId`/`isRetryable()` fields — re-check this Javadoc if
+  client-v2 is ever upgraded."* `0.9.8`'s changelog adds exactly those: `ClickHouseException`
+  becomes a shared root for `ServerException`/`ClientException`, and `isRetryable()` is added so a
+  caller can tell whether an exception happened in a retryable state.
+- HTTP `503 Service Unavailable` responses are now classified as connection-style failures and
+  retried by client-v2 by default, instead of being wrapped as a `ServerException`/`ServerRetryable`
+  fault — worth re-checking against this driver's own `isError`/`exceptionCode` handling in
+  `ClickHouseHttpTransport`, even though we only reuse client-v2's `ServerException` type and
+  row-decoders, never its HTTP client or its retry behavior.
+
+Scope: bump the version catalog entry, run the full test suite (this pulls in a newer
+`clickhouse-client`/`clickhouse-data` transitively too — check nothing in the RowBinary decode path
+regressed), regenerate `gradle/verification-metadata.xml` for the new artifact checksums, then
+re-check and update the `queryId`/`isRetryable()` Javadoc note above now that it's stale in the
+other direction (the fields exist now — decide whether folding `isRetryable()` into
+`ClickHouseR2dbcException.wrap` is worth a follow-up issue, without scope-creeping this PR into
+item 4.3's retry-safety work, which stays explicitly out of 0.2.0). Also merge or close the other
+five open Dependabot PRs (`org.sonarqube`, `actions/upload-artifact`, `actions/checkout`,
+`actions/setup-java`, `reactor-netty-http`, `reactor`) while in here — they're all green (CI
+checkmarks) and just sitting unreviewed, not something to solve mid-Phase-7 later.
+
 ### PR sequence
 
 One issue/branch/PR per item, in this order (each is independently mergeable; later ones don't
@@ -1204,10 +1234,11 @@ block on earlier ones except where noted):
 
 | PR | Scope | Depends on |
 | --- | --- | --- |
+| 0 | Bump client-v2 to 0.9.8 + merge outstanding Dependabot PRs | — |
 | 1 | Result consumption correctness (item 3) | — |
 | 2 | Row conversions (item 4) | — |
 | 3 | `Statement.add()` (item 5) | — |
-| 4 | Statement timeout (item 2) | — |
+| 4 | Statement timeout (item 2) | PR 0 (needs `isRetryable`/exception hierarchy from client-v2 0.9.8 for clean exception mapping) |
 | 5 | Transport pool options (item 1) — includes the config-object refactor for `ClickHouseHttpTransport` | — |
 | 6 | Decoder scheduler contract (item 11) | — |
 | 7 | Observability SPI (item 9/10) | benefits from PR 5's pool metrics being available, not blocked by it |
