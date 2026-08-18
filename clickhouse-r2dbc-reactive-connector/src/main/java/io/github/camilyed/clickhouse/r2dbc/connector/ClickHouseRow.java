@@ -7,11 +7,12 @@ import io.r2dbc.spi.RowMetadata;
 /**
  * A decoded row, backed by {@code core}'s already-decoded, positional {@link DecodedRow}.
  *
- * <p>{@link #get(int, Class)}/{@link #get(String, Class)} only cast the already-decoded value to
- * {@code type}; neither attempts any widening conversion beyond what {@code core}'s decoder already
- * produced (e.g. asking for {@code Long} when the decoded value is an {@code Integer} throws {@link
- * ClassCastException} rather than converting). Broader R2DBC type-conversion support is separately
- * scoped future work.
+ * <p>{@link #get(int, Class)}/{@link #get(String, Class)} route the already-decoded value through
+ * {@link ClickHouseValueConverter}: a direct match to {@code type} (or {@code null}) returns as-is,
+ * a controlled numeric or {@code ZonedDateTime}-derived conversion is attempted for the fixed
+ * matrices that class documents, and anything else throws {@link
+ * ClickHouseValueConversionException} — see that class's Javadoc for the full, deliberately
+ * limited conversion surface.
  *
  * <p>{@link #get(String, Class)} resolves {@code name} to a wire index via {@code metadata} (a
  * lookup built once per result, not once per row) and reads {@code row.valueAt(index)} directly —
@@ -41,7 +42,7 @@ final class ClickHouseRow implements Row {
     if (type == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("type must not be null");
     }
-    return type.cast(row.valueAt(index));
+    return ClickHouseValueConverter.convert(row.valueAt(index), type);
   }
 
   // See get(int, Class) above for why this defensive check is kept despite @NullMarked.
@@ -53,6 +54,6 @@ final class ClickHouseRow implements Row {
     if (type == null) { // NOSONAR - see get(int, Class) above
       throw new IllegalArgumentException("type must not be null");
     }
-    return type.cast(row.valueAt(metadata.indexOf(name)));
+    return ClickHouseValueConverter.convert(row.valueAt(metadata.indexOf(name)), type);
   }
 }
