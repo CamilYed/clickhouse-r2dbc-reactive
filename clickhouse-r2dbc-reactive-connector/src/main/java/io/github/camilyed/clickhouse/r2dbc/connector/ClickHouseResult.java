@@ -25,10 +25,9 @@ import reactor.core.publisher.Mono;
  * view of it: a second call to {@link #map}/{@link #getRowsUpdated}/{@link #flatMap} on the same
  * instance, on a filtered view after the original was already consumed, or vice versa, all throw
  * {@link IllegalStateException} (per the R2DBC spec's single-consumption contract), because a
- * {@link #filter} view shares its originating instance's {@link ResultConsumptionGuard} rather
- * than getting its own — see that class's Javadoc. Calling {@link #filter} itself after
- * consumption also throws, even though {@link #filter} is a lazy view and not itself a consuming
- * operation.
+ * {@link #filter} view shares its originating instance's {@link ResultConsumptionGuard} rather than
+ * getting its own — see that class's Javadoc. Calling {@link #filter} itself after consumption also
+ * throws, even though {@link #filter} is a lazy view and not itself a consuming operation.
  *
  * <p>A failure while consuming rows (e.g. a connection reset mid-stream, a local decode bug) is
  * mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link ClickHouseR2dbcException} ({@code

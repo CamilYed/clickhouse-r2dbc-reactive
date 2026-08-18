@@ -5,10 +5,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Enforces R2DBC's single-consumption contract for a {@link ClickHouseResult} and every {@link
  * ClickHouseResult#filter} view derived from it. A {@link ClickHouseResult} and its {@code
- * filter()}-derived views share one instance of this guard (see {@link
- * ClickHouseResult#filter}), rather than each getting its own, so consuming any one of them marks
- * every other one as consumed too - exactly the property {@link ClickHouseResult}'s own Javadoc
- * previously stated as an unenforced misuse.
+ * filter()}-derived views share one instance of this guard (see {@link ClickHouseResult#filter}),
+ * rather than each getting its own, so consuming any one of them marks every other one as consumed
+ * too - exactly the property {@link ClickHouseResult}'s own Javadoc previously stated as an
+ * unenforced misuse.
  */
 final class ResultConsumptionGuard {
 
