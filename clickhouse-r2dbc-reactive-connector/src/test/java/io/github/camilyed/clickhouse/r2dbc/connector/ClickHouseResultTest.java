@@ -60,6 +60,36 @@ class ClickHouseResultTest {
   }
 
   @Test
+  void shouldRejectConsumingTheOriginalAfterAFilteredViewWasAlreadyConsumed() {
+    // given
+    final ClickHouseResult result = resultOf(1, 2);
+    // and
+    final Result filtered = result.filter(segment -> true);
+    filtered.map((row, rowMetadata) -> row);
+
+    // when / then
+    // A filter()-derived view and the Result it was derived from share one consumption guard
+    // (see ResultConsumptionGuard's Javadoc) - consuming the view must mark the original
+    // consumed too, not just its own separate view.
+    assertThatThrownBy(() -> result.map((row, rowMetadata) -> row))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void shouldRejectFilteringAResultThatWasAlreadyConsumed() {
+    // given
+    final ClickHouseResult result = resultOf(1, 2);
+    result.map((row, rowMetadata) -> row);
+
+    // when / then
+    // filter() is a lazy view, not itself a consuming operation, but deriving a new view from an
+    // already-consumed Result is still the same single-consumption misuse the shared guard exists
+    // to catch.
+    assertThatThrownBy(() -> result.filter(segment -> true))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
   void shouldOnlySeeRowsMatchingTheFilterPredicate() {
     // given
     final ClickHouseResult result = resultOf(1, 2, 3);
