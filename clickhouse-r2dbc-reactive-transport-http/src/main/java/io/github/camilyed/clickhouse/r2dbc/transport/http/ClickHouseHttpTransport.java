@@ -313,7 +313,10 @@ public final class ClickHouseHttpTransport {
    * {@link ClickHouseQuery#withParameters(java.util.Map)} — are sent one {@code
    * param_<name>=<value>} query parameter per entry, alongside {@code query}, exactly as
    * ClickHouse's own parameterized- query mechanism expects (see {@code
-   * docs/CLIENT_V2_HTTP_REFERENCE.md}).
+   * docs/CLIENT_V2_HTTP_REFERENCE.md}). {@link ClickHouseQuery#settings()} are sent the same way but
+   * with no {@code param_} prefix — ClickHouse's own server settings (e.g. {@code
+   * max_execution_time}) are plain {@code <name>=<value>} request parameters, unrelated to the
+   * {@code {name:Type}} placeholder mechanism {@code parameters()} feeds.
    *
    * <p>Delegates to {@link #queryWithSummary} — see that method if the caller also needs
    * ClickHouse's reported written-row count for this query.
@@ -386,6 +389,7 @@ public final class ClickHouseHttpTransport {
                 "/?query="
                     + encode(query.sql())
                     + parameterQueryString(query)
+                    + settingsQueryString(query)
                     + JSON_AS_STRING_QUERY_PARAM)
             .response(
                 (httpResponse, content) ->
@@ -459,7 +463,11 @@ public final class ClickHouseHttpTransport {
                 })
             .doAfterRequest((request, connection) -> requestSent.set(true))
             .post()
-            .uri("/?query=" + encode(query.sql()) + parameterQueryString(query))
+            .uri(
+                "/?query="
+                    + encode(query.sql())
+                    + parameterQueryString(query)
+                    + settingsQueryString(query))
             .send(requestBody)
             .response(
                 (httpResponse, content) ->
@@ -503,6 +511,18 @@ public final class ClickHouseHttpTransport {
         .forEach(
             (name, value) ->
                 queryString.append("&param_").append(name).append('=').append(encode(value)));
+    return queryString.toString();
+  }
+
+  // Deliberately no "param_" prefix, unlike parameterQueryString above: these are raw ClickHouse
+  // server settings (e.g. max_execution_time), not values bound to a {name:Type} placeholder
+  // declared in the SQL text - see ClickHouseQuery.withSettings's Javadoc.
+  private static String settingsQueryString(final ClickHouseQuery query) {
+    final StringBuilder queryString = new StringBuilder();
+    query
+        .settings()
+        .forEach(
+            (name, value) -> queryString.append('&').append(name).append('=').append(encode(value)));
     return queryString.toString();
   }
 

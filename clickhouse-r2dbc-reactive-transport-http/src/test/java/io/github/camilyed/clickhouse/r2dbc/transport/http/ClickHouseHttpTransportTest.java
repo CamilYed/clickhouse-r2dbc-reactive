@@ -514,6 +514,44 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldSendAttachedSettingsAsPlainQueryParameters() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    final ClickHouseQuery query =
+        ClickHouseQuery.of("SELECT 1").withSettings(Map.of("max_execution_time", "5.000"));
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport.query(query).aggregate().asByteArray().block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedUri()).contains("max_execution_time=5.000");
+    }
+  }
+
+  @Test
+  void shouldNotSendAParamPrefixForSettings() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    final ClickHouseQuery query =
+        ClickHouseQuery.of("SELECT 1").withSettings(Map.of("max_execution_time", "5.000"));
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport.query(query).aggregate().asByteArray().block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedUri()).doesNotContain("param_max_execution_time");
+    }
+  }
+
+  @Test
   void shouldAskForJsonColumnsAsPlainStringsOnEveryQuery() {
     // given
     final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();

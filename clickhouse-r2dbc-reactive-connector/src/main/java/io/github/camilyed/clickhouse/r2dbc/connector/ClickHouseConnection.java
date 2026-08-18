@@ -13,6 +13,7 @@ import io.r2dbc.spi.ValidationDepth;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 
@@ -51,6 +52,7 @@ public final class ClickHouseConnection implements Connection {
 
   private final ClickHouseHttpTransport transport;
   private final AtomicBoolean closed = new AtomicBoolean(false);
+  private @Nullable Duration statementTimeout;
 
   ClickHouseConnection(final ClickHouseHttpTransport transport) {
     this.transport = transport;
@@ -96,7 +98,7 @@ public final class ClickHouseConnection implements Connection {
       throw new IllegalArgumentException("sql must not be null");
     }
     requireOpen();
-    return new ClickHouseStatement(transport, sql);
+    return new ClickHouseStatement(transport, sql, statementTimeout);
   }
 
   @Override
@@ -150,9 +152,27 @@ public final class ClickHouseConnection implements Connection {
     return Mono.error(new UnsupportedOperationException("Lock wait timeout is not supported yet"));
   }
 
+  /**
+   * Configures a server-side execution time limit — ClickHouse's own {@code max_execution_time}
+   * setting — inherited by every {@link Statement} this connection creates <em>after</em> this call
+   * (a snapshot at {@link #createStatement} time, not a live link back to this connection; a
+   * statement already created keeps whatever limit was in effect when it was created). Distinct from
+   * transport-level {@code responseTimeout} (how long to wait for HTTP response bytes) — this bounds
+   * how long ClickHouse itself is willing to keep running the query server-side, regardless of how
+   * promptly the client reads the response.
+   *
+   * <p>{@link Duration#ZERO} is an explicit, documented "no timeout" — matching {@code
+   * max_execution_time}'s own native meaning of {@code 0} (unlimited), not an accidental "time out
+   * immediately". A negative {@code timeout} is rejected with {@link IllegalArgumentException}, since
+   * no negative duration has a sensible meaning here.
+   */
   @Override
   public Publisher<Void> setStatementTimeout(final Duration timeout) {
-    return Mono.error(new UnsupportedOperationException("Statement timeout is not supported yet"));
+    if (timeout.isNegative()) {
+      return Mono.error(
+          new IllegalArgumentException("timeout must not be negative, got: " + timeout));
+    }
+    return Mono.fromRunnable(() -> statementTimeout = timeout);
   }
 
   @Override

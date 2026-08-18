@@ -148,6 +148,26 @@ class ClickHouseConnectionTest {
   }
 
   @Test
+  void shouldAcceptANonNegativeStatementTimeout() {
+    // when / then
+    StepVerifier.create(connection.setStatementTimeout(Duration.ofSeconds(5))).verifyComplete();
+  }
+
+  @Test
+  void shouldTreatZeroAsAnExplicitNoTimeout() {
+    // when / then
+    StepVerifier.create(connection.setStatementTimeout(Duration.ZERO)).verifyComplete();
+  }
+
+  @Test
+  void shouldRejectANegativeStatementTimeout() {
+    // when / then
+    StepVerifier.create(connection.setStatementTimeout(Duration.ofSeconds(-1)))
+        .expectError(IllegalArgumentException.class)
+        .verify();
+  }
+
+  @Test
   void shouldRejectInsertStreamingAfterClose() {
     // given
     Mono.from(connection.close()).block(Duration.ofSeconds(1));
