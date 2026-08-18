@@ -40,17 +40,24 @@ real transitive deps — not something unexpected), regenerate the file:
 ./scripts/regenerate-verification-metadata.sh
 ```
 
-Passing `--write-verification-metadata` makes Gradle resolve every resolvable configuration in
-every module — root, every subproject (including the `clickhouse-r2dbc-reactive-benchmarks`
-module's `jmh` source set, which is otherwise excluded from `build`/`check`), `buildSrc`, and
-plugins — regardless of which task you ask for, so the script deliberately asks for the cheap
-`help` task rather than a real `clean build`: no compiling, no tests, no Docker/Testcontainers
-needed. Review `git diff gradle/verification-metadata.xml` before committing.
+The script runs the exact same tasks CI runs (`clean build jacocoTestReport`, see
+`.github/workflows/ci.yml`), plus the `clickhouse-r2dbc-reactive-benchmarks` module's `jmh`
+source set explicitly (otherwise excluded from `build`/`check` — see that module's
+`build.gradle.kts`). Needs Docker running, same as a normal build. Review `git diff
+gradle/verification-metadata.xml` before committing.
 
-Deliberately not `--dry-run`: per Gradle's own docs, `--dry-run` writes to a separate
-`gradle/verification-metadata.dryrun.xml` preview file, never to the real
-`gradle/verification-metadata.xml` — a mistake this script's own first draft made (looked like it
-worked, changed nothing).
+Two wrong shortcuts this script tried first, in case either looks tempting to reintroduce:
+
+- `--dry-run` — per Gradle's own docs, writes to a separate `gradle/verification-metadata.dryrun.xml`
+  preview file, never to the real `gradle/verification-metadata.xml`. Looked like it worked
+  (fast, no errors), changed nothing.
+- The cheap `help` task instead of a real build — `--write-verification-metadata` does force
+  Gradle to resolve every resolvable configuration regardless of which task you ask for, and this
+  caught 11 of 12 missing artifacts after the client-v2 0.9.8 bump, but missed
+  `junit-bom-5.11.0.module` (Gradle Module Metadata), which only got resolved when the real
+  `clean build jacocoTestReport` task graph actually ran — the exact caveat Gradle's own docs
+  state: dependencies "only resolved during task execution... may not be included" by a `help`-only
+  run. `help` is a heuristic, not a guarantee; mirroring CI's real command is.
 
 `.github/workflows/verification-metadata.yml` runs this same script automatically on any pull
 request (including Dependabot's) that touches `gradle/libs.versions.toml`, and pushes the
