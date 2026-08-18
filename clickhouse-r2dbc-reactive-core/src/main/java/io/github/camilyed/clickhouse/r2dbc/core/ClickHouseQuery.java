@@ -12,8 +12,8 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * A query to send to ClickHouse: the SQL text, its {@code query_id}, any bound values for
- * ClickHouse's own {@code {name:Type}} parameterized-query placeholders, and any server-side
- * {@code settings} to apply while running it (e.g. {@code max_execution_time}).
+ * ClickHouse's own {@code {name:Type}} parameterized-query placeholders, and any server-side {@code
+ * settings} to apply while running it (e.g. {@code max_execution_time}).
  *
  * <p>{@code query_id} is ClickHouse's own request correlator — sent as a request header, echoed
  * back by the server in responses/errors, and required for server-side {@code KILL QUERY}
@@ -44,7 +44,9 @@ public record ClickHouseQuery(
     return new ClickHouseQuery(sql, UUID.randomUUID().toString(), Map.of(), Map.of());
   }
 
-  /** A query correlated with a caller-supplied {@code query_id}, no bound parameters, no settings. */
+  /**
+   * A query correlated with a caller-supplied {@code query_id}, no bound parameters, no settings.
+   */
   public static ClickHouseQuery of(final String sql, final String queryId) {
     return new ClickHouseQuery(sql, queryId, Map.of(), Map.of());
   }

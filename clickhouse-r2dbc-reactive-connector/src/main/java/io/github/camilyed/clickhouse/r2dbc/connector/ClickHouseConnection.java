@@ -156,15 +156,15 @@ public final class ClickHouseConnection implements Connection {
    * Configures a server-side execution time limit — ClickHouse's own {@code max_execution_time}
    * setting — inherited by every {@link Statement} this connection creates <em>after</em> this call
    * (a snapshot at {@link #createStatement} time, not a live link back to this connection; a
-   * statement already created keeps whatever limit was in effect when it was created). Distinct from
-   * transport-level {@code responseTimeout} (how long to wait for HTTP response bytes) — this bounds
-   * how long ClickHouse itself is willing to keep running the query server-side, regardless of how
-   * promptly the client reads the response.
+   * statement already created keeps whatever limit was in effect when it was created). Distinct
+   * from transport-level {@code responseTimeout} (how long to wait for HTTP response bytes) — this
+   * bounds how long ClickHouse itself is willing to keep running the query server-side, regardless
+   * of how promptly the client reads the response.
    *
    * <p>{@link Duration#ZERO} is an explicit, documented "no timeout" — matching {@code
    * max_execution_time}'s own native meaning of {@code 0} (unlimited), not an accidental "time out
-   * immediately". A negative {@code timeout} is rejected with {@link IllegalArgumentException}, since
-   * no negative duration has a sensible meaning here.
+   * immediately". A negative {@code timeout} is rejected with {@link IllegalArgumentException},
+   * since no negative duration has a sensible meaning here.
    */
   @Override
   public Publisher<Void> setStatementTimeout(final Duration timeout) {

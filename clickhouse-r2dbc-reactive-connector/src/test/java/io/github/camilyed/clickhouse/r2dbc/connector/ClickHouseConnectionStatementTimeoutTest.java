@@ -2,8 +2,8 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
+import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
@@ -25,7 +25,8 @@ class ClickHouseConnectionStatementTimeoutTest {
     // when
     try (final var server =
         ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-      final var connection = new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
+      final var connection =
+          new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
       Mono.from(connection.setStatementTimeout(Duration.ofSeconds(5))).block(Duration.ofSeconds(5));
 
       Flux.from(connection.createStatement("SELECT 1").execute()).blockLast(Duration.ofSeconds(5));
@@ -43,7 +44,8 @@ class ClickHouseConnectionStatementTimeoutTest {
     // when
     try (final var server =
         ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-      final var connection = new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
+      final var connection =
+          new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
 
       Flux.from(connection.createStatement("SELECT 1").execute()).blockLast(Duration.ofSeconds(5));
 
@@ -60,7 +62,8 @@ class ClickHouseConnectionStatementTimeoutTest {
     // when
     try (final var server =
         ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-      final var connection = new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
+      final var connection =
+          new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
       final var statement = connection.createStatement("SELECT 1");
       Mono.from(connection.setStatementTimeout(Duration.ofSeconds(5))).block(Duration.ofSeconds(5));
 
@@ -79,7 +82,8 @@ class ClickHouseConnectionStatementTimeoutTest {
     // when
     try (final var server =
         ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
-      final var connection = new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
+      final var connection =
+          new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
       Mono.from(connection.setStatementTimeout(Duration.ZERO)).block(Duration.ofSeconds(5));
 
       Flux.from(connection.createStatement("SELECT 1").execute()).blockLast(Duration.ofSeconds(5));

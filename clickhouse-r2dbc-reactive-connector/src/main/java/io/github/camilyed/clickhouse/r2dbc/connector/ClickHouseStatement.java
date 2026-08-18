@@ -50,9 +50,9 @@ import reactor.core.publisher.Mono;
  * scoped future work.
  *
  * <p>If {@link ClickHouseConnection#setStatementTimeout} was called on the owning connection before
- * this statement was created, every query this statement runs (each set in a batched {@link
- * #add()} sequence included) carries that limit as ClickHouse's own {@code max_execution_time}
- * server setting — see that method's Javadoc for the full contract.
+ * this statement was created, every query this statement runs (each set in a batched {@link #add()}
+ * sequence included) carries that limit as ClickHouse's own {@code max_execution_time} server
+ * setting — see that method's Javadoc for the full contract.
  *
  * <p>Any failure obtaining a {@link Result} — a ClickHouse server error, a transport failure, a
  * local decode bug — is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
@@ -86,8 +86,8 @@ final class ClickHouseStatement implements Statement {
    * {@code statementTimeout}, if given, is attached to every query this statement runs as
    * ClickHouse's own {@code max_execution_time} server setting — see {@link
    * ClickHouseConnection#setStatementTimeout} for the full contract (including {@link
-   * Duration#ZERO}'s explicit "no timeout" meaning). {@code null} means no connection-level
-   * timeout was in effect when this statement was created, so no such setting is sent at all.
+   * Duration#ZERO}'s explicit "no timeout" meaning). {@code null} means no connection-level timeout
+   * was in effect when this statement was created, so no such setting is sent at all.
    */
   ClickHouseStatement(
       final ClickHouseHttpTransport transport,
@@ -170,7 +170,8 @@ final class ClickHouseStatement implements Statement {
   private Mono<ClickHouseResult> executeOneBindingSet(final Map<String, Object> parameters) {
     ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(parameters);
     if (statementTimeout != null) {
-      query = query.withSettings(Map.of(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout)));
+      query =
+          query.withSettings(Map.of(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout)));
     }
     return transport.queryWithSummary(query).flatMap(ClickHouseResult::decode);
   }

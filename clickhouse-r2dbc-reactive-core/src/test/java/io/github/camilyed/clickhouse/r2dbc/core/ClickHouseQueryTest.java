@@ -146,7 +146,6 @@ class ClickHouseQueryTest {
     final ClickHouseQuery parameterized = query.withParameters(Map.of("a", 42));
 
     // then
-    assertThat(parameterized.settings())
-        .containsExactly(Map.entry("max_execution_time", "5.000"));
+    assertThat(parameterized.settings()).containsExactly(Map.entry("max_execution_time", "5.000"));
   }
 }

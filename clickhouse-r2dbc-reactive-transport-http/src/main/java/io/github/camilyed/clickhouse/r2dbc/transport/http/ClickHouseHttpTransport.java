@@ -313,8 +313,8 @@ public final class ClickHouseHttpTransport {
    * {@link ClickHouseQuery#withParameters(java.util.Map)} — are sent one {@code
    * param_<name>=<value>} query parameter per entry, alongside {@code query}, exactly as
    * ClickHouse's own parameterized- query mechanism expects (see {@code
-   * docs/CLIENT_V2_HTTP_REFERENCE.md}). {@link ClickHouseQuery#settings()} are sent the same way but
-   * with no {@code param_} prefix — ClickHouse's own server settings (e.g. {@code
+   * docs/CLIENT_V2_HTTP_REFERENCE.md}). {@link ClickHouseQuery#settings()} are sent the same way
+   * but with no {@code param_} prefix — ClickHouse's own server settings (e.g. {@code
    * max_execution_time}) are plain {@code <name>=<value>} request parameters, unrelated to the
    * {@code {name:Type}} placeholder mechanism {@code parameters()} feeds.
    *
@@ -522,7 +522,8 @@ public final class ClickHouseHttpTransport {
     query
         .settings()
         .forEach(
-            (name, value) -> queryString.append('&').append(name).append('=').append(encode(value)));
+            (name, value) ->
+                queryString.append('&').append(name).append('=').append(encode(value)));
     return queryString.toString();
   }
 
