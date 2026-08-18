@@ -77,3 +77,14 @@ and cancellation semantics.
 
 Formatting is enforced with [Spotless](https://github.com/diffplug/spotless) (Google Java Format).
 Run `./gradlew spotlessApply` to format before committing.
+
+A pre-commit hook that runs `spotlessApply` on staged Java files automatically lives at
+`.githooks/pre-commit` — it isn't wired in by default (a hook outside `.git/hooks` needs git told
+where to look), so enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, every commit touching a `.java` file runs Spotless first and re-stages whatever it
+reformats, so a commit never lands with formatting Spotless would immediately rewrite anyway.

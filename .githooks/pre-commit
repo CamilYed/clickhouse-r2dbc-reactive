@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# Auto-formats staged Java files with Spotless (Google Java Format) before each commit, so a
+# commit never lands with formatting Spotless would have rewritten anyway - the drift that kept
+# showing up as a separate manual "formatting" commit after the real change.
+#
+# Not wired in automatically (a hook outside .git/hooks isn't executed unless git is told to look
+# here): enable once per clone with
+#
+#   git config core.hooksPath .githooks
+#
+# See CONTRIBUTING.md.
+set -euo pipefail
+
+STAGED_JAVA_FILES="$(git diff --cached --name-only --diff-filter=ACM -- '*.java')"
+
+if [ -z "$STAGED_JAVA_FILES" ]; then
+  exit 0
+fi
+
+echo "pre-commit: running spotlessApply..."
+./gradlew spotlessApply --quiet
+
+# spotlessApply may have rewritten files that were already staged - re-stage exactly the files
+# this commit touched (not the whole working tree) so the commit includes the formatted version.
+echo "$STAGED_JAVA_FILES" | xargs -r git add
+
+exit 0
