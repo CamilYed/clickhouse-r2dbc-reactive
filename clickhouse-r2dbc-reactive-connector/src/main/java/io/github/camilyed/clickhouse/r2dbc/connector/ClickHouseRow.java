@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A decoded row, backed by {@code core}'s already-decoded, positional {@link DecodedRow}.
@@ -38,7 +39,7 @@ final class ClickHouseRow implements Row {
   // plain io.r2dbc.spi.Row method - external callers of the public R2DBC SPI aren't bound by
   // that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
   @Override
-  public <T> T get(final int index, final Class<T> type) {
+  public <T> @Nullable T get(final int index, final Class<T> type) {
     if (type == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("type must not be null");
     }
@@ -47,7 +48,7 @@ final class ClickHouseRow implements Row {
 
   // See get(int, Class) above for why this defensive check is kept despite @NullMarked.
   @Override
-  public <T> T get(final String name, final Class<T> type) {
+  public <T> @Nullable T get(final String name, final Class<T> type) {
     if (name == null) { // NOSONAR - see get(int, Class) above
       throw new IllegalArgumentException("name must not be null");
     }
