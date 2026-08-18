@@ -34,17 +34,17 @@ import reactor.core.publisher.Mono;
  * mapping is this driver's own convention, not something ClickHouse defines.
  *
  * <p>{@link #add()} snapshots the current binding set (every declared parameter must already be
- * bound, same check {@link #execute()} itself does) and starts a fresh one; {@link #execute()}
- * then runs every saved set, plus whatever is currently bound (the trailing set, implicitly
- * included exactly as if {@link #add()} had been called on it too — the standard R2DBC batch
- * contract), <em>sequentially</em> via {@code Flux.fromIterable(...).concatMap(...)}, emitting one
- * {@link Result} per set in binding order. Deliberately {@code concatMap}, not a concurrent
- * operator, for this first implementation: predictable ordering, simple per-set error semantics,
- * no surprise concurrency increase over calling {@link #execute()} once per set by hand. A large,
- * single multi-row {@code INSERT} should still use {@link
- * ClickHouseConnection#insertStreaming}'s streaming request body — that remains the documented
- * fast path; coalescing many small {@link #add()}-batched statements into one wire-level {@code
- * INSERT} is explicitly deferred, separately scoped future work.
+ * bound, same check {@link #execute()} itself does) and starts a fresh one; {@link #execute()} then
+ * runs every saved set, plus whatever is currently bound (the trailing set, implicitly included
+ * exactly as if {@link #add()} had been called on it too — the standard R2DBC batch contract),
+ * <em>sequentially</em> via {@code Flux.fromIterable(...).concatMap(...)}, emitting one {@link
+ * Result} per set in binding order. Deliberately {@code concatMap}, not a concurrent operator, for
+ * this first implementation: predictable ordering, simple per-set error semantics, no surprise
+ * concurrency increase over calling {@link #execute()} once per set by hand. A large, single
+ * multi-row {@code INSERT} should still use {@link ClickHouseConnection#insertStreaming}'s
+ * streaming request body — that remains the documented fast path; coalescing many small {@link
+ * #add()}-batched statements into one wire-level {@code INSERT} is explicitly deferred, separately
+ * scoped future work.
  *
  * <p>Any failure obtaining a {@link Result} — a ClickHouse server error, a transport failure, a
  * local decode bug — is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
