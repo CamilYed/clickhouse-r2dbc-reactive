@@ -1,11 +1,11 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 /**
- * Thrown by {@link ClickHouseValueConverter} when a decoded column value cannot be converted to
- * the caller-requested target type - either the requested numeric conversion is out of range or
+ * Thrown by {@link ClickHouseValueConverter} when a decoded column value cannot be converted to the
+ * caller-requested target type - either the requested numeric conversion is out of range or
  * non-integral (e.g. {@code BigDecimal("1.5")} to {@code Integer}), or no conversion is defined at
- * all between the decoded value's type and the requested one. One predictable, documented
- * exception type for every conversion failure, replacing the inconsistent mix of {@link
+ * all between the decoded value's type and the requested one. One predictable, documented exception
+ * type for every conversion failure, replacing the inconsistent mix of {@link
  * ClassCastException}/{@link ArithmeticException} a caller would otherwise see depending on which
  * conversion happened to be attempted.
  */

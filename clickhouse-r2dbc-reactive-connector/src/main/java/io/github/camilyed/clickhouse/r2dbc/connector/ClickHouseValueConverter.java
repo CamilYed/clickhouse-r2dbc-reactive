@@ -21,17 +21,17 @@ import org.jspecify.annotations.Nullable;
  *       Double}/{@link BigInteger}/{@link BigDecimal}, in any direction, via an exact {@link
  *       BigDecimal} intermediate - range-checked (no silent overflow: an out-of-range or
  *       non-integral request throws rather than truncating).
- *   <li>{@link ZonedDateTime}-derived: {@code DateTime}/{@code DateTime64} columns decode as
- *       {@link ZonedDateTime} (see {@code RowBinaryDecoder}); this class additionally allows
- *       reading one back as a {@link LocalDateTime}, {@link Instant}, or {@link OffsetDateTime} -
- *       each an unambiguous, lossless-for-the-requested-shape view of the same instant.
+ *   <li>{@link ZonedDateTime}-derived: {@code DateTime}/{@code DateTime64} columns decode as {@link
+ *       ZonedDateTime} (see {@code RowBinaryDecoder}); this class additionally allows reading one
+ *       back as a {@link LocalDateTime}, {@link Instant}, or {@link OffsetDateTime} - each an
+ *       unambiguous, lossless-for-the-requested-shape view of the same instant.
  * </ul>
  *
  * <p>Every other requested type that already matches the decoded value's own runtime type (e.g.
- * {@code String}, {@link java.util.UUID}, {@code LocalDate} for {@code Date}/{@code Date32},
- * {@link Boolean}) needs no conversion at all - the identity fast path below returns it directly -
- * so this class only ever has to handle the two matrices above. Every conversion failure throws
- * {@link ClickHouseValueConversionException}.
+ * {@code String}, {@link java.util.UUID}, {@code LocalDate} for {@code Date}/{@code Date32}, {@link
+ * Boolean}) needs no conversion at all - the identity fast path below returns it directly - so this
+ * class only ever has to handle the two matrices above. Every conversion failure throws {@link
+ * ClickHouseValueConversionException}.
  */
 final class ClickHouseValueConverter {
 

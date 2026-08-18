@@ -12,8 +12,8 @@ import org.jspecify.annotations.Nullable;
  * {@link ClickHouseValueConverter}: a direct match to {@code type} (or {@code null}) returns as-is,
  * a controlled numeric or {@code ZonedDateTime}-derived conversion is attempted for the fixed
  * matrices that class documents, and anything else throws {@link
- * ClickHouseValueConversionException} — see that class's Javadoc for the full, deliberately
- * limited conversion surface.
+ * ClickHouseValueConversionException} — see that class's Javadoc for the full, deliberately limited
+ * conversion surface.
  *
  * <p>{@link #get(String, Class)} resolves {@code name} to a wire index via {@code metadata} (a
  * lookup built once per result, not once per row) and reads {@code row.valueAt(index)} directly —
