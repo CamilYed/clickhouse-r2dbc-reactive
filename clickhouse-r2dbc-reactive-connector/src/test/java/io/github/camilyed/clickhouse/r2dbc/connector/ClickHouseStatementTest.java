@@ -117,4 +117,56 @@ class ClickHouseStatementTest {
     // when / then
     assertThatThrownBy(statement::execute).isInstanceOf(IllegalStateException.class);
   }
+
+  @Test
+  void shouldRejectAddingABindingSetWithUnboundDeclaredParameters() {
+    // given
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+
+    // when / then
+    assertThatThrownBy(statement::add).isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void shouldAcceptAddingABindingSetOnceAllParametersAreBound() {
+    // given
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    statement.bind("id", 1);
+
+    // when
+    final Object returned = statement.add();
+
+    // then
+    assertThat(returned).isSameAs(statement);
+  }
+
+  @Test
+  void shouldStartAFreshBindingSetAfterAdd() {
+    // given
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    statement.bind("id", 1);
+    statement.add();
+
+    // when / then
+    // add() must have started a brand new binding set - the trailing set is unbound again, so
+    // execute() (which validates the trailing set) rejects it exactly like a never-bound statement.
+    assertThatThrownBy(statement::execute).isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void shouldAllowExecutingAfterAddOnceTheTrailingSetIsAlsoFullyBound() {
+    // given
+    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    statement.bind("id", 1);
+    statement.add();
+    statement.bind("id", 2);
+
+    // when
+    // execute() only builds the (lazy, unsubscribed) Publisher here - no network call happens,
+    // consistent with every other test in this class staying hermetic.
+    final Object result = statement.execute();
+
+    // then
+    assertThat(result).isNotNull();
+  }
 }

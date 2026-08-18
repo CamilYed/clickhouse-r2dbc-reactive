@@ -117,6 +117,57 @@ class ClickHouseStatementAgainstRealClickHouseTest extends BaseClickHouseIntegra
   }
 
   @Test
+  void shouldExecuteEveryAddedBindingSetSequentiallyEmittingOneResultPerSet() {
+    // given
+    execute("CREATE TABLE statement_add_test (id UInt32) ENGINE = Memory");
+
+    // when
+    final List<Long> rowsUpdatedPerResult =
+        Flux.from(
+                connection()
+                    .createStatement("INSERT INTO statement_add_test VALUES ({id:UInt32})")
+                    .bind("id", 1)
+                    .add()
+                    .bind("id", 2)
+                    .add()
+                    .bind("id", 3)
+                    .execute())
+            .flatMap(Result::getRowsUpdated)
+            .collectList()
+            .block(Duration.ofSeconds(10));
+
+    // then
+    assertThat(rowsUpdatedPerResult).containsExactly(1L, 1L, 1L);
+  }
+
+  @Test
+  void shouldPersistARowForEveryAddedBindingSetIncludingTheTrailingOne() {
+    // given
+    execute("CREATE TABLE statement_add_persist_test (id UInt32) ENGINE = Memory");
+
+    // when
+    Flux.from(
+            connection()
+                .createStatement("INSERT INTO statement_add_persist_test VALUES ({id:UInt32})")
+                .bind("id", 1)
+                .add()
+                .bind("id", 2)
+                .execute())
+        .blockLast(Duration.ofSeconds(10));
+    final List<Integer> ids =
+        Flux.from(
+                connection()
+                    .createStatement("SELECT id FROM statement_add_persist_test ORDER BY id")
+                    .execute())
+            .flatMap(result -> result.map((row, rowMetadata) -> row.get("id", Integer.class)))
+            .collectList()
+            .block(Duration.ofSeconds(10));
+
+    // then
+    assertThat(ids).containsExactly(1, 2);
+  }
+
+  @Test
   void shouldRejectExecutingAParameterizedStatementWithAMissingBinding() {
     // given
     final var statement = connection().createStatement("SELECT 1 WHERE 1 = {id:UInt32}");

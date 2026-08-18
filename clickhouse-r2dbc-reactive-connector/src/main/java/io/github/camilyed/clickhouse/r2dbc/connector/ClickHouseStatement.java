@@ -5,11 +5,15 @@ import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Statement;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * A ClickHouse SQL statement, created via {@link ClickHouseConnection#createStatement(String)}.
@@ -27,9 +31,20 @@ import org.reactivestreams.Publisher;
  * or sent as a stray, unused request parameter. {@link #bind(int, Object)}/{@link #bindNull(int,
  * Class)} map {@code index} to the declared name at that position, in first- occurrence order —
  * ClickHouse's own placeholder syntax has no positional form of its own, so this index-to-name
- * mapping is this driver's own convention, not something ClickHouse defines. {@link #add()}
- * (batched bindings, i.e. one {@code Statement} executed once per saved binding set) is separately
- * scoped future work and still throws {@link UnsupportedOperationException}.
+ * mapping is this driver's own convention, not something ClickHouse defines.
+ *
+ * <p>{@link #add()} snapshots the current binding set (every declared parameter must already be
+ * bound, same check {@link #execute()} itself does) and starts a fresh one; {@link #execute()}
+ * then runs every saved set, plus whatever is currently bound (the trailing set, implicitly
+ * included exactly as if {@link #add()} had been called on it too — the standard R2DBC batch
+ * contract), <em>sequentially</em> via {@code Flux.fromIterable(...).concatMap(...)}, emitting one
+ * {@link Result} per set in binding order. Deliberately {@code concatMap}, not a concurrent
+ * operator, for this first implementation: predictable ordering, simple per-set error semantics,
+ * no surprise concurrency increase over calling {@link #execute()} once per set by hand. A large,
+ * single multi-row {@code INSERT} should still use {@link
+ * ClickHouseConnection#insertStreaming}'s streaming request body — that remains the documented
+ * fast path; coalescing many small {@link #add()}-batched statements into one wire-level {@code
+ * INSERT} is explicitly deferred, separately scoped future work.
  *
  * <p>Any failure obtaining a {@link Result} — a ClickHouse server error, a transport failure, a
  * local decode bug — is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
@@ -49,7 +64,8 @@ final class ClickHouseStatement implements Statement {
   private final ClickHouseHttpTransport transport;
   private final String sql;
   private final List<String> parameterNames;
-  private final Map<String, Object> boundValues = new LinkedHashMap<>();
+  private final List<Map<String, Object>> savedBindingSets = new ArrayList<>();
+  private Map<String, Object> boundValues = new LinkedHashMap<>();
 
   ClickHouseStatement(final ClickHouseHttpTransport transport, final String sql) {
     this.transport = transport;
@@ -59,7 +75,15 @@ final class ClickHouseStatement implements Statement {
 
   @Override
   public Statement add() {
-    throw new UnsupportedOperationException("Batched bindings are not supported yet");
+    requireAllParametersBound();
+    // Wraps (does not copy) the live boundValues map, then reassigns the field to a brand new
+    // LinkedHashMap - the wrapped map is never touched again through this.boundValues after this
+    // point, so it stays an accurate, effectively-immutable snapshot without needing a defensive
+    // copy. Collections.unmodifiableMap, not Map.copyOf: bindNull(...) can leave a null value in
+    // boundValues, which Map.copyOf/Map.of reject outright.
+    savedBindingSets.add(Collections.unmodifiableMap(boundValues));
+    boundValues = new LinkedHashMap<>();
+    return this;
   }
 
   // value is declared non-null under this module's @NullMarked contract, but this overrides a
@@ -109,6 +133,20 @@ final class ClickHouseStatement implements Statement {
 
   @Override
   public Publisher<? extends Result> execute() {
+    requireAllParametersBound();
+    final List<Map<String, Object>> bindingSets = new ArrayList<>(savedBindingSets);
+    bindingSets.add(boundValues);
+    return Flux.fromIterable(bindingSets)
+        .concatMap(this::executeOneBindingSet)
+        .onErrorMap(ClickHouseR2dbcException::wrap);
+  }
+
+  private Mono<ClickHouseResult> executeOneBindingSet(final Map<String, Object> parameters) {
+    final ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(parameters);
+    return transport.queryWithSummary(query).flatMap(ClickHouseResult::decode);
+  }
+
+  private void requireAllParametersBound() {
     if (boundValues.size() < parameterNames.size()) {
       throw new IllegalStateException(
           "Not all declared parameters have been bound: declared "
@@ -116,11 +154,6 @@ final class ClickHouseStatement implements Statement {
               + ", bound "
               + boundValues.keySet());
     }
-    final ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(boundValues);
-    return transport
-        .queryWithSummary(query)
-        .flatMap(ClickHouseResult::decode)
-        .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 
   private String nameAt(final int index) {
