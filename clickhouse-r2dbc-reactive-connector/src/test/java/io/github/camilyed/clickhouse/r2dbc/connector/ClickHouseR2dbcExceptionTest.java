@@ -25,7 +25,8 @@ class ClickHouseR2dbcExceptionTest {
   @Test
   void shouldUseTheServerExceptionsCodeAndMessageWhenFoundInTheCauseChain() {
     // given
-    final ServerException serverException = new ServerException(60, "Table not found");
+    final ServerException serverException =
+        new ServerException(60, "Table not found", 404, "query-id-1");
     final Throwable failure =
         new RuntimeException(
             "Failed to read header", new IOException("upstream error", serverException));

@@ -1,0 +1,70 @@
+name: Regenerate dependency verification metadata
+
+# Runs scripts/regenerate-verification-metadata.sh and pushes the result back onto the PR
+# branch whenever gradle/libs.versions.toml changes - a version bump almost always pulls in new
+# or changed transitive artifacts that gradle/verification-metadata.xml has no checksum for yet,
+# which otherwise fails every module's compileClasspath with "Dependency verification failed"
+# (see CONTRIBUTING.md). This turns that from a manual, error-prone chase (bump the version,
+# run the build, read which of N artifacts failed, regenerate, repeat) into one automatic commit
+# on the same PR - including Dependabot's own PRs, which are exactly the case this recurred on.
+#
+# Known limitation, not fixable without a PAT: a commit pushed with the built-in GITHUB_TOKEN
+# does not itself trigger CI.yml's pull_request build (GitHub's own loop-prevention rule for
+# Actions-authored pushes). After this workflow pushes a commit, re-run CI.yml manually
+# (Actions tab -> CI -> Re-run all jobs) or push any follow-up commit to get a green check.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - gradle/libs.versions.toml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    name: Regenerate verification-metadata.xml
+    # GITHUB_TOKEN can only push back to branches in this repo, not a fork's.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - name: Set up Java
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Regenerate verification metadata
+        run: ./scripts/regenerate-verification-metadata.sh
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- gradle/verification-metadata.xml; then
+            echo "No verification-metadata.xml changes needed."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add gradle/verification-metadata.xml
+          git commit -m "build: regenerate dependency verification metadata [skip ci]"
+          git push origin HEAD:"${{ github.event.pull_request.head.ref || github.ref_name }}"

@@ -19,11 +19,12 @@ import java.util.Objects;
  * <p>This mirrors client-v2's own default retry behavior (verified against our pinned {@code
  * client-v2} version — see the version catalog): {@code client-v2} retries by default only for
  * connection-level failures that occur before a response is received ({@code NoHttpResponse},
- * {@code ConnectTimeout}, {@code ConnectionRequestTimeout}, {@code SocketTimeout}), with no retry
- * based on ClickHouse's own server-side retryable error codes in that version ({@code
- * ServerException.isRetryable()} doesn't exist yet there). This type deliberately keeps that same
- * scope for now — retrying only pre-send failures — while leaving room to grow a
- * server-error-code-aware retry mode later without a breaking change to this record's shape.
+ * {@code ConnectTimeout}, {@code ConnectionRequestTimeout}, {@code SocketTimeout}). Our pinned
+ * client-v2 version does expose {@code ServerException.isRetryable()} for ClickHouse's own
+ * server-side retryable error codes, but this type deliberately does not act on it yet. This type
+ * deliberately keeps its current scope for now — retrying only pre-send failures — while leaving
+ * room to grow a server-error-code-aware retry mode later without a breaking change to this
+ * record's shape.
  */
 public record RetryPolicy(int maxAttempts, Duration delay) {
 

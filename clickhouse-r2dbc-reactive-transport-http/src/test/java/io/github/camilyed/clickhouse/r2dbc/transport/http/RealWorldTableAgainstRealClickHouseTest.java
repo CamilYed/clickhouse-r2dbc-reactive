@@ -8,6 +8,7 @@ import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest
 import io.github.camilyed.clickhouse.r2dbc.transport.http.abilities.RealClickHouseQueryAbility;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.time.LocalDate;
 import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Map;
@@ -35,11 +36,12 @@ import org.junit.jupiter.api.Test;
  *   <li><b>String</b> — covered ({@link #shouldDecodeStringTypes()}): {@code String}, {@code
  *       FixedString}.
  *   <li><b>Date and time</b> — partially covered ({@link #shouldDecodeDateAndTimeTypes()}): {@code
- *       Date}/{@code Date32}/{@code DateTime}/{@code DateTime64}. {@code Time}/{@code Time64} are
- *       <b>not</b> just untested — checked client-v2's {@code BinaryStreamReader} {@code readValue}
- *       switch directly and confirmed there is no case for them at all in our pinned version; a
- *       column of that type would throw {@code IllegalArgumentException("Unsupported data type")}.
- *       A real gap, not a gap in our tests.
+ *       Date}/{@code Date32} (decode as {@link java.time.LocalDate} as of client-v2 0.9.8 — see the
+ *       version catalog and that test's own comment) and {@code DateTime}/{@code DateTime64}
+ *       (decode as {@link java.time.ZonedDateTime}). {@code Time}/{@code Time64} gained a real case
+ *       in client-v2's {@code BinaryStreamReader} {@code readValue} switch as of 0.9.8 (absent at
+ *       0.9.0, where a column of that type would throw {@code IllegalArgumentException("Unsupported
+ *       data type")}) but are still untested here — now a genuine test gap, not a version gap.
  *   <li><b>Network</b> — covered ({@link #shouldDecodeNetworkTypes()}): {@code IPv4}, {@code IPv6}.
  *   <li><b>Composite</b> ({@code Array}/{@code Tuple}/{@code Map}/{@code Nested}) — {@code Map},
  *       {@code Tuple}, and {@code Array} covered ({@link #shouldDecodeMapType()}, {@link
@@ -227,8 +229,15 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     // then
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0))
-        .hasTypeAt("date_val", ZonedDateTime.class)
-        .hasTypeAt("date32_val", ZonedDateTime.class)
+        // Date/Date32 decode as LocalDate as of client-v2 0.9.8 (readDateAsLocalDate/
+        // readDate32AsLocalDate, unconditional - no typeHint involved) - a client-v2 change, not
+        // ours: at 0.9.0 both went through convertDateTime(..., typeHint) the same way
+        // DateTime/DateTime32/DateTime64 still do today, always producing a ZonedDateTime
+        // regardless of hint. LocalDate is the more correct fit for a type with no time-of-day or
+        // timezone component, so this is a real fix upstream, not a regression - see the version
+        // catalog for the pinned client-v2 version.
+        .hasTypeAt("date_val", LocalDate.class)
+        .hasTypeAt("date32_val", LocalDate.class)
         .hasTypeAt("datetime_val", ZonedDateTime.class)
         .hasTypeAt("datetime64_val", ZonedDateTime.class);
   }

@@ -562,6 +562,32 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldExposeTheQueryIdOnAServerException() {
+    // given
+    final String errorBody = "Code: 60. DB::Exception: Table default.missing doesn't exist";
+
+    // when
+    final Throwable thrown;
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithClickHouseError(60, errorBody, 404)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT * FROM missing", "query-id-1"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(5)));
+    }
+
+    // then
+    assertThat(thrown).isInstanceOf(ServerException.class);
+    assertThat(((ServerException) thrown).getQueryId()).isEqualTo("query-id-1");
+  }
+
+  @Test
   void shouldAuthenticateWithTheClickHouseUserAndKeyHeaderPairWhenConfigured() {
     // given
     final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
