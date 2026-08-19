@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.time.Duration;
@@ -8,6 +9,21 @@ import org.junit.jupiter.api.Test;
 class DriverObservationListenerTest {
 
   private static final SqlFingerprint A_FINGERPRINT = SqlFingerprint.of("SELECT 1");
+
+  @Test
+  void shouldReportNoopAsDisabled() {
+    // when / then
+    assertThat(DriverObservationListener.NOOP.isEnabled()).isFalse();
+  }
+
+  @Test
+  void shouldDefaultToEnabledForAListenerThatDoesNotOverrideIsEnabled() {
+    // given
+    final DriverObservationListener listener = new DriverObservationListener() {};
+
+    // when / then
+    assertThat(listener.isEnabled()).isTrue();
+  }
 
   @Test
   void shouldAcceptAQueryStartedEventWithoutThrowing() {

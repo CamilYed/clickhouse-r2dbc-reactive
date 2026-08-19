@@ -2,14 +2,6 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
-import io.github.camilyed.clickhouse.r2dbc.core.QueryCancelledEvent;
-import io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent;
-import io.github.camilyed.clickhouse.r2dbc.core.QueryFailedEvent;
-import io.github.camilyed.clickhouse.r2dbc.core.QueryStartedEvent;
-import io.github.camilyed.clickhouse.r2dbc.core.SqlFingerprint;
-import java.time.Duration;
-import java.time.Instant;
-import org.jspecify.annotations.Nullable;
 
 /**
  * Tracks one query attempt's lifecycle against a {@link DriverObservationListener}, from {@link
@@ -19,90 +11,60 @@ import org.jspecify.annotations.Nullable;
  * rather than each hand-rolling event construction and elapsed-time bookkeeping inline — the same
  * "small, focused, stateful collaborator" shape as {@link ResultConsumptionGuard}.
  *
+ * <p>A closed pair of variants rather than one class with an internal on/off flag: {@link
+ * ActiveQueryObservation} does the real work {@link DriverObservationListener}'s Javadoc describes
+ * (fingerprinting, timestamping, event construction/dispatch); {@link NoopQueryObservation} is a
+ * stateless singleton that does none of it. {@link #start} picks between them once, based on {@link
+ * DriverObservationListener#isEnabled()} — every caller downstream only ever sees the {@link
+ * QueryObservation} interface, never which variant it got, and {@link #isEnabled()} lets {@link
+ * ClickHouseResult#decode} and {@link ClickHouseConnection#insertStreaming} skip wiring their own
+ * per-chunk/per-row counters entirely when observation was never going to consume them.
+ *
  * <p><b>Not thread-safe</b>, deliberately: reactive streams guarantee serial (non-concurrent)
  * signal delivery to a single subscriber, and every method here is only ever called from within
  * that one subscriber's own callbacks for the query attempt this instance was created for.
  */
-final class QueryObservation {
-
-  private final DriverObservationListener listener;
-  private final String queryId;
-  private final OperationKind operationKind;
-  private final SqlFingerprint sqlFingerprint;
-  private final Instant startedAt;
-  private @Nullable Instant firstRowAt;
-
-  private QueryObservation(
-      final DriverObservationListener listener,
-      final String queryId,
-      final OperationKind operationKind,
-      final SqlFingerprint sqlFingerprint,
-      final Instant startedAt) {
-    this.listener = listener;
-    this.queryId = queryId;
-    this.operationKind = operationKind;
-    this.sqlFingerprint = sqlFingerprint;
-    this.startedAt = startedAt;
-  }
+sealed interface QueryObservation permits ActiveQueryObservation, NoopQueryObservation {
 
   /**
-   * Fires {@link DriverObservationListener#queryStarted} and returns a tracker for this attempt.
-   * {@code sql}'s fingerprint (see {@link SqlFingerprint}) is computed once, here, and reused for
-   * every subsequent event this attempt fires.
+   * Fires {@link DriverObservationListener#queryStarted} and returns a tracker for this attempt —
+   * or, when {@code listener.isEnabled()} is {@code false}, skips fingerprinting/timestamping/event
+   * construction entirely and returns the shared {@link NoopQueryObservation} instance instead. See
+   * {@link DriverObservationListener#isEnabled()}'s Javadoc for why that's a hard "don't bother",
+   * not just a filter applied after the fact.
    */
   static QueryObservation start(
       final DriverObservationListener listener,
       final String queryId,
       final OperationKind operationKind,
       final String sql) {
-    final SqlFingerprint fingerprint = SqlFingerprint.of(sql);
-    final QueryObservation observation =
-        new QueryObservation(listener, queryId, operationKind, fingerprint, Instant.now());
-    listener.queryStarted(new QueryStartedEvent(queryId, operationKind, fingerprint));
-    return observation;
-  }
-
-  /** Records that the first row has been received — every call after the first is a no-op. */
-  void firstRowReceived() {
-    if (firstRowAt == null) {
-      firstRowAt = Instant.now();
-    }
+    return listener.isEnabled()
+        ? ActiveQueryObservation.start(listener, queryId, operationKind, sql)
+        : NoopQueryObservation.INSTANCE;
   }
 
   /**
-   * Fires {@link DriverObservationListener#queryCompleted}. {@code timeToFirstRow} is {@link
-   * Duration#ZERO} if {@link #firstRowReceived()} was never called for this attempt — see {@link
-   * QueryCompletedEvent}'s Javadoc for why that's the documented, correct value for an {@link
-   * OperationKind#INSERT}, and simply means "no rows were ever consumed" for a {@link
-   * OperationKind#QUERY}.
+   * Whether this instance actually forwards to a real listener — {@code false} exactly when {@link
+   * #start} was given a disabled listener, letting a caller skip wiring counters that would only
+   * ever have fed a call this instance is never going to make.
    */
-  void completed(final long rowCount, final long byteCount) {
-    final Duration timeToFirstRow =
-        firstRowAt == null ? Duration.ZERO : Duration.between(startedAt, firstRowAt);
-    listener.queryCompleted(
-        new QueryCompletedEvent(
-            queryId,
-            operationKind,
-            sqlFingerprint,
-            elapsedSinceStart(),
-            timeToFirstRow,
-            rowCount,
-            byteCount));
-  }
+  boolean isEnabled();
+
+  /** Records that the first row has been received — every call after the first is a no-op. */
+  void firstRowReceived();
+
+  /**
+   * Fires {@link DriverObservationListener#queryCompleted}. {@code timeToFirstRow} is {@link
+   * java.time.Duration#ZERO} if {@link #firstRowReceived()} was never called for this attempt — see
+   * {@link io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why that's
+   * the documented, correct value for an {@link OperationKind#INSERT}, and simply means "no rows
+   * were ever consumed" for a {@link OperationKind#QUERY}.
+   */
+  void completed(long rowCount, long byteCount);
 
   /** Fires {@link DriverObservationListener#queryFailed}. */
-  void failed(final Throwable cause) {
-    listener.queryFailed(
-        new QueryFailedEvent(queryId, operationKind, sqlFingerprint, elapsedSinceStart(), cause));
-  }
+  void failed(Throwable cause);
 
   /** Fires {@link DriverObservationListener#queryCancelled}. */
-  void cancelled() {
-    listener.queryCancelled(
-        new QueryCancelledEvent(queryId, operationKind, sqlFingerprint, elapsedSinceStart()));
-  }
-
-  private Duration elapsedSinceStart() {
-    return Duration.between(startedAt, Instant.now());
-  }
+  void cancelled();
 }

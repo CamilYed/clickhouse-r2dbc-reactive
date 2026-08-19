@@ -130,7 +130,9 @@ built.
 > | `AggregationBenchmark` — **built** (2026-08-19): the "analytical aggregation" query shape (`GROUP BY` + `count()`/`avg()`/`quantile()`), designed since the first Phase 5 write-up, finally has a benchmark class | Wide multi-type decode / INSERT benchmarks — still designed, not built |
 > | `ConcurrencyBenchmark` `@Threads(8)` — **3-fork confirmed** (2026-08-19): mean→p99.9 regression and tail crossover both reproduced, not single-run noise; root cause still not isolated (see above) | Netty leak-detection lane (Phase 7 item 6) — never actually built, see ROADMAP.md's Definition of done |
 > | Hot-path code review — **done** (2026-08-19): every class on the decode/transport hot path read; two tunable-but-unbenchmarked constants confirmed as the only open placeholders, everything else confirmed already optimal (see below) | Benchmark `RESPONSE_CHUNK_DEMAND` (1/4/8/16) and `RowDecodingScheduler` worker count/queue capacity — both self-documented placeholders, neither tuned with real measurements yet |
-> | Second-opinion review cross-checked against the code (2026-08-19) — 8 new findings confirmed real by reading the source, best current lead for the `ConcurrencyBenchmark` regression (see below) | Fix the two confirmed correctness/security bugs (`FluxInputStreamBridge#read(len=0)` contract, `Authentication`/`TransportOptions` `toString()` credential leak) and benchmark the NOOP-observability-overhead + `ByteBuf` copy fixes — none built yet |
+> | Second-opinion review cross-checked against the code (2026-08-19) — 8 new findings confirmed real by reading the source, best current lead for the `ConcurrencyBenchmark` regression (see below) | Benchmark the `ByteBuf` copy fix, `ListDecodingRowBinaryReader` schema/hint caching, `Authentication.Basic` precomputed header, `FluxInputStreamBridge` queue swap — none built yet |
+> | Two correctness/security bugs fixed and merged (2026-08-19): `FluxInputStreamBridge#read(len=0)` contract, `Authentication`/`TransportOptions` `toString()` credential leak | |
+> | **NOOP observability fast path — built and 3-fork benchmarked (2026-08-19) via the new `PublicApiPointQueryBenchmark`.** Confirmed: ~4.3% less allocation, 24% fewer GC events, ~34% less GC time. **Not confirmed:** any point-query latency win — this workload is network-round-trip-bound, so GC savings don't show up at the latency level. First-ever "Level 2" number logged too: this driver is ~5.2% slower than client-v2 on mean latency but allocates ~3.97× less. See the dedicated section below. | Test whether the allocation win shows up as a latency win under concurrency/burst instead of a single point query — `BoundedPoolConcurrencyBenchmark`'s territory, not yet tried with observation on/off |
 > | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
 > | Performance charts — added to this file and to the main `README.md` (2026-08-14) | |
 > | Machine spec (CPU/RAM/OS) — filled in (2026-08-14): Apple M3 Pro, 36 GB, macOS | |
@@ -1631,6 +1633,89 @@ confirm they're still the only two such placeholders left in the hot path, which
 
 ---
 
+### `PublicApiPointQueryBenchmark` — the missing "Level 2" benchmark, finally built (2026-08-19)
+
+This file's own "Comparison levels" section (above) designed a "Public R2DBC SPI" level from the
+very first Phase 5 write-up: `ClickHouseConnection`/`ClickHouseStatement`/`ClickHouseResult` (what an
+actual driver consumer calls) vs client-v2's `Client` API directly. It never got built — every
+benchmark class in this suite calls `ClickHouseHttpTransport`/`RowBinaryDecoder` directly instead,
+the "Level 1: raw transport + decode" design. That gap surfaced concretely while trying to schedule a
+benchmark run to confirm the NOOP-observability-fast-path fix above: `QueryObservation` (where that
+fix lives) is a `connector`-module collaborator, and **nothing in this suite had ever exercised the
+`connector` module at all** — see the correction box just above for the full account of the wrong
+claim this caught.
+
+`clickhouse-r2dbc-reactive-benchmarks/.../PublicApiPointQueryBenchmark.java` — three `@Benchmark`
+methods, one query shape (the same single-row parameterized lookup `PointQueryBenchmark` already
+uses against `PointQueryTable`):
+
+- `ourDriverNoopObservation` — through the public R2DBC SPI (`Connection`/`Statement`/`Result`
+  only, obtained via `ClickHouseConnectionFactory.from(...)`, never a package-private `connector`
+  class), with no `DriverObservationListener` configured — the default, so every query takes the
+  `NoopQueryObservation`/`decodePlain` fast path.
+- `ourDriverEnabledObservation` — identical setup, the one difference being an anonymous
+  `DriverObservationListener` that overrides nothing (every callback stays the inherited no-op
+  default). The delta between this and `ourDriverNoopObservation` isolates `ActiveQueryObservation`'s
+  own fingerprinting/timestamping/counting cost from every other variable, since both methods run
+  against long-lived connections opened once in `@Setup(Level.Trial)` — transport, decode, and JIT
+  warmup are held constant.
+- `clientV2` — same as `PointQueryBenchmark#clientV2`, included so this level also answers what this
+  file's own design always said it should: what does a real consumer of this driver pay, R2DBC-shape
+  translation included, relative to client-v2's own API.
+
+Run command:
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=PublicApiPointQueryBenchmark -Pjmh.forks=3 -Pjmh.warmupIterations=3 -Pjmh.profilers=gc
+```
+
+`-Pjmh.profilers=gc` is included from the start here (rather than added in a later pass, as
+`DecoderOnlyBenchmark`'s `-prof gc` run was) since the whole point of this benchmark is measuring an
+allocation-shaped cost (`SqlFingerprint`/`Instant`/event-record construction) — sample-time deltas
+alone would show *that* something changed but not *why*.
+
+#### Run for real (2026-08-19, 3 forks × 3 warmup/measurement iterations, `-prof gc`)
+
+| | mean (µs/op) | B/op | GC events | GC time (ms, summed over 9 samples) |
+| --- | --- | --- | --- | --- |
+| `clientV2` | 1141.4 | 95,313 | 90 | 52 |
+| `ourDriverEnabledObservation` | 1194.0 | 25,109 | 25 | 38 |
+| `ourDriverNoopObservation` | 1201.1 | 24,028 | 19 | 25 |
+
+**The allocation win is real and confirmed; the latency win is not — and that's a legitimate result,
+not a failed one, once the workload is understood.**
+
+- **NOOP vs. enabled observation, isolating `ActiveQueryObservation`'s own cost:** allocation drops
+  ~4.3% (25,109 → 24,028 B/op), GC event count drops 24% (25 → 19 across the 9 sampled
+  iterations), GC time drops ~34% (38ms → 25ms). All three point the same direction and are
+  consistent with what the fix does — skip `SqlFingerprint`/`Instant.now()`/event-record
+  construction entirely instead of building and discarding it. **Mean latency did not improve** —
+  `ourDriverNoopObservation` (1201.1µs) was actually ~0.6% *slower* than
+  `ourDriverEnabledObservation` (1194.0µs), a difference inside noise but nominally the wrong
+  direction, not the right one. Read honestly rather than explained away: this benchmark's ~1.2ms
+  per-op cost is a real network round trip to a real ClickHouse container; the entire GC time this
+  fix saves (13ms) is spent across roughly 75,000 operations each taking ~1.2ms — i.e., on the order
+  of 90 *seconds* of total measured wall time per benchmark. 13ms saved out of ~90,000ms is
+  statistically invisible at the latency level even though it's a real, measurable allocation
+  reduction. **This workload is network-round-trip-bound, not allocation/GC-bound** — the fix does
+  exactly what it was built to do, it just doesn't show up as a point-query latency win, and this
+  benchmark shape was never going to be the one to show it. A concurrency/burst shape (many
+  in-flight queries sharing a bounded pool, `BoundedPoolConcurrencyBenchmark`'s territory) or a
+  high-QPS scenario where GC pressure itself becomes a scheduling factor is a more honest place to
+  look for a latency-level effect, if one exists at all.
+- **First-ever "Level 2" number: this driver vs. client-v2 through the public API.**
+  `ourDriverNoopObservation` is ~5.2% slower than `clientV2` on mean latency (1201.1µs vs.
+  1141.4µs) for this single-row parameterized lookup — the R2DBC-shape translation cost this level
+  was designed to measure, now actually measured for the first time. Allocation tells the opposite
+  story just as clearly: this driver allocates ~3.97× less per operation than client-v2 (24,028
+  B/op vs. 95,313 B/op) and triggers roughly 4.7× fewer GC events (19 vs. 90). Not yet investigated
+  further — a single point-query run doesn't say whether the ~5.2% gap is connection-factory
+  overhead, R2DBC `Row`/`RowMetadata` wrapper allocation (`ClickHouseRow`/`ClickHouseRowSegment`,
+  already flagged as a low-priority finding above), or something else in the SPI translation path;
+  logged here as the first real Level 2 data point, not a conclusion.
+
+---
+
 ### Second-opinion review (ChatGPT, `main`@`6a5d000`) — cross-checked against the actual code (2026-08-19)
 
 A second, independently-produced static review (`docs/CLAUDE_CODE_REVIEW_JDK21.md`-style report,
@@ -1743,8 +1828,23 @@ Findings 5 and 8 are correctness/security bugs, not benchmark-gated performance 
 TDD workflow applies to both directly (a red test proving the leak/contract violation, then the
 smallest fix). Findings 1–4, 6, 7 are real, confirmed, unbenchmarked hot-path candidates, additive
 to (not a replacement for) this file's own `RESPONSE_CHUNK_DEMAND`/`RowDecodingScheduler`-sizing
-open items above — **findings 1–3 (observability's always-on cost) are now the single best-evidenced
-lead for the `ConcurrencyBenchmark`/10k-row ~5-6% regression this file has been trying to explain all
-along**, since they're the one hot-path cost that exists in this driver's request path with no
-equivalent in client-v2's, confirmed present on every query regardless of configuration.
+open items above.
+
+> [!WARNING]
+> **Correction (2026-08-19, later the same day).** An earlier version of this section claimed
+> findings 1–3 (observability's always-on cost) were "the single best-evidenced lead for the
+> `ConcurrencyBenchmark`/10k-row ~5-6% regression." That claim was wrong, caught while trying to
+> actually schedule the confirming benchmark run: `ConcurrencyBenchmark` and `PointQueryBenchmark`
+> — every benchmark in this suite, in fact — call `ClickHouseHttpTransport`/`RowBinaryDecoder`
+> directly (this file's own "Level 1: raw transport + decode" design, see "Comparison levels"
+> above), never `ClickHouseConnection`/`ClickHouseStatement`/`ClickHouseResult`. `QueryObservation`
+> (where findings 1–3 live) is a `connector`-module collaborator only `ClickHouseResult.decode`
+> calls — **no benchmark in this suite ever exercised it, so it cannot be the explanation for a
+> regression measured entirely outside the code path it lives in.** "Level 2: Public R2DBC SPI" was
+> designed in this file from the start but never actually built — a real, separate gap from the
+> mistaken claim above, now fixed: see `PublicApiPointQueryBenchmark` below, built specifically to
+> measure findings 1–3's real cost (and only that cost — deliberately holding transport/decode/JIT
+> warmup constant by comparing two connections that differ in exactly `isEnabled()`). Left here
+> rather than silently edited away, per this file's own stated discipline of keeping the
+> investigation's record intact.
 

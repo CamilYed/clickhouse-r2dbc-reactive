@@ -110,4 +110,49 @@ class QueryObservationTest {
     // and
     assertThat(listener.cancelledEvents().getFirst().queryId()).isEqualTo("query-1");
   }
+
+  @Test
+  void shouldReportItselfEnabledWhenTheListenerIsEnabled() {
+    // when
+    final QueryObservation observation =
+        QueryObservation.start(listener, "query-1", OperationKind.QUERY, "SELECT 1");
+
+    // then
+    assertThat(observation.isEnabled()).isTrue();
+  }
+
+  @Test
+  void shouldReportItselfDisabledWhenTheListenerIsDisabled() {
+    // when
+    final QueryObservation observation =
+        QueryObservation.start(
+            RecordingDriverObservationListener.disabled(),
+            "query-1",
+            OperationKind.QUERY,
+            "SELECT 1");
+
+    // then
+    assertThat(observation.isEnabled()).isFalse();
+  }
+
+  @Test
+  void shouldNeverCallADisabledListenerThroughTheFullLifecycle() {
+    // given
+    final RecordingDriverObservationListener disabledListener =
+        RecordingDriverObservationListener.disabled();
+    final QueryObservation observation =
+        QueryObservation.start(disabledListener, "query-1", OperationKind.QUERY, "SELECT 1");
+
+    // when
+    observation.firstRowReceived();
+    observation.completed(3, 42);
+    observation.failed(new RuntimeException("boom"));
+    observation.cancelled();
+
+    // then
+    assertThat(disabledListener.startedEvents()).isEmpty();
+    assertThat(disabledListener.completedEvents()).isEmpty();
+    assertThat(disabledListener.failedEvents()).isEmpty();
+    assertThat(disabledListener.cancelledEvents()).isEmpty();
+  }
 }

@@ -19,6 +19,29 @@ public final class RecordingDriverObservationListener implements DriverObservati
   private final List<QueryCompletedEvent> completed = new ArrayList<>();
   private final List<QueryFailedEvent> failed = new ArrayList<>();
   private final List<QueryCancelledEvent> cancelled = new ArrayList<>();
+  private final boolean enabled;
+
+  public RecordingDriverObservationListener() {
+    this(true);
+  }
+
+  private RecordingDriverObservationListener(final boolean enabled) {
+    this.enabled = enabled;
+  }
+
+  /**
+   * A variant reporting {@link #isEnabled()} as {@code false} — still records anything it's called
+   * with, so a test can assert the connector actually stopped calling it, rather than merely
+   * trusting {@link #isEnabled()}'s own return value.
+   */
+  public static RecordingDriverObservationListener disabled() {
+    return new RecordingDriverObservationListener(false);
+  }
+
+  @Override
+  public boolean isEnabled() {
+    return enabled;
+  }
 
   @Override
   public void queryStarted(final QueryStartedEvent event) {

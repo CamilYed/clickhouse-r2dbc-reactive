@@ -261,7 +261,10 @@ public final class ClickHouseConnection implements Connection {
    * data} before the request completed (not necessarily every byte {@code data} would ever have
    * emitted, if the request fails partway through); {@code rowCount} is {@code
    * response.writtenRows()}; {@code timeToFirstRow} is always {@link Duration#ZERO} (see {@link
-   * io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why).
+   * io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why). When {@link
+   * DriverObservationListener#isEnabled()} is {@code false}, {@code data} is streamed straight
+   * through with no byte-counting wrapper at all, for the same reason {@link
+   * ClickHouseResult#decode} skips its own per-chunk/per-row counters — see that method's Javadoc.
    */
   // sql/data are declared non-null under this module's @NullMarked contract, but this is a
   // public entry point external callers reach without JSpecify tooling of their own - failing
@@ -279,7 +282,9 @@ public final class ClickHouseConnection implements Connection {
         QueryObservation.start(observationListener, query.queryId(), OperationKind.INSERT, sql);
     final AtomicLong sentByteCount = new AtomicLong();
     final Flux<ByteBuffer> observedData =
-        Flux.from(data).doOnNext(buffer -> sentByteCount.addAndGet(buffer.remaining()));
+        observation.isEnabled()
+            ? Flux.from(data).doOnNext(buffer -> sentByteCount.addAndGet(buffer.remaining()))
+            : Flux.from(data);
     return transport
         .insertWithSummary(query, observedData)
         .flatMap(response -> response.body().aggregate().asByteArray().thenReturn(response))

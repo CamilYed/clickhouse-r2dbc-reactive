@@ -88,6 +88,20 @@ public final class BenchmarkEnvironment {
     return CLICK_HOUSE.getHttpUrl();
   }
 
+  /**
+   * The running container's host, parsed from {@link #httpUrl()} — for benchmarks that build a
+   * {@code ConnectionFactoryOptions} (host/port, not a single base-URL string) rather than
+   * constructing a transport directly.
+   */
+  public static String host() {
+    return URI.create(httpUrl()).getHost();
+  }
+
+  /** The running container's mapped port, parsed from {@link #httpUrl()} — see {@link #host()}. */
+  public static int port() {
+    return URI.create(httpUrl()).getPort();
+  }
+
   /** The username Testcontainers configured this container with. */
   public static String username() {
     return CLICK_HOUSE.getUsername();
