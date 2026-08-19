@@ -84,6 +84,34 @@ public abstract class BaseClickHouseIntegrationTest {
   }
 
   /**
+   * Creates a database with the given name if it doesn't already exist — for tests that need to
+   * prove behavior against a non-default database (e.g. the R2DBC {@code DATABASE} connection
+   * option), rather than every test implicitly running against whatever database the container's
+   * configured user defaults to.
+   */
+  protected static void createDatabase(final String name) {
+    executeAdminSql("CREATE DATABASE IF NOT EXISTS `" + name + "`");
+  }
+
+  /**
+   * Creates a ClickHouse user with the given plaintext password (which may be the empty string)
+   * and grants it full access — for tests that need to prove real authentication behavior (e.g.
+   * that an R2DBC connection with a {@code user} but no {@code password} option actually
+   * authenticates with an empty password) against a user whose password is not the container's
+   * own default credentials.
+   */
+  protected static void createUserWithPassword(final String username, final String password) {
+    final String escapedPassword = password.replace("'", "''");
+    executeAdminSql(
+        "CREATE USER IF NOT EXISTS `"
+            + username
+            + "` IDENTIFIED WITH plaintext_password BY '"
+            + escapedPassword
+            + "'");
+    executeAdminSql("GRANT ALL ON *.* TO `" + username + "` WITH GRANT OPTION");
+  }
+
+  /**
    * Whether ClickHouse's own {@code system.processes} table currently lists a query with the given
    * {@code query_id} as still running — checked entirely from outside this driver, over the same
    * plain, driver-independent {@link HttpClient} {@link #dropAllTables} uses. This is the one way

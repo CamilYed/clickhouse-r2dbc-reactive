@@ -68,6 +68,16 @@ for the full scoping and acceptance criteria this release was built against.
 
 ### Fixed
 
+- **`ConnectionFactoryOptions.DATABASE` is now honored** — `ClickHouseConnectionFactory.from(...)`
+  previously read `host`/`port`/`ssl`/`user`/`password`/etc. but silently ignored a configured
+  `database`, so `r2dbc:clickhouse://host:8123/analytics`-style URLs (or the equivalent typed
+  option) ran every query against the connecting user's default database instead. Now sent as
+  `X-ClickHouse-Database` on every request once configured.
+- **A `user` option with no accompanying `password` no longer authenticates with the literal
+  four-character password `"null"`** — `String.valueOf(password)` on a `null` `CharSequence`
+  produces the string `"null"`, which `ClickHouseConnectionFactory.from(...)` was sending as the
+  actual HTTP Basic password. Now sends an empty password in that case, matching what a user
+  configured with no password on the server side actually expects.
 - Real-ClickHouse TCK runs surfaced and fixed two correctness bugs introduced while wiring up the
   compatibility lane: `Statement.bind(name, value)` didn't unwrap `io.r2dbc.spi.Parameter` (from
   `Parameters.in(...)`), sending a garbage literal instead of the bound value;

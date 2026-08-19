@@ -35,7 +35,8 @@ public record TransportOptions(
     @Nullable Integer pendingAcquireMaxCount,
     @Nullable Duration pendingAcquireTimeout,
     @Nullable Duration maxIdleTime,
-    @Nullable Duration maxLifeTime) {
+    @Nullable Duration maxLifeTime,
+    @Nullable String database) {
 
   public TransportOptions {
     requirePositive(maxConnections, "maxConnections");
@@ -57,6 +58,7 @@ public record TransportOptions(
         null,
         null,
         null,
+        null,
         null);
   }
 
@@ -71,7 +73,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withResponseTimeout(final @Nullable Duration responseTimeout) {
@@ -85,7 +88,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withConnectTimeout(final @Nullable Duration connectTimeout) {
@@ -99,7 +103,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withTrustedCertificatePem(final byte @Nullable [] trustedCertificatePem) {
@@ -113,7 +118,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withRetryPolicy(final RetryPolicy retryPolicy) {
@@ -127,7 +133,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withMaxConnections(final @Nullable Integer maxConnections) {
@@ -141,7 +148,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withPendingAcquireMaxCount(
@@ -156,7 +164,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withPendingAcquireTimeout(
@@ -171,7 +180,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withMaxIdleTime(final @Nullable Duration maxIdleTime) {
@@ -185,7 +195,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   public TransportOptions withMaxLifeTime(final @Nullable Duration maxLifeTime) {
@@ -199,7 +210,30 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
+  }
+
+  /**
+   * The database to select via {@code X-ClickHouse-Database} on every request this transport
+   * sends — {@code null} (the default) means "use the connecting user's own default database",
+   * matching ClickHouse's own server-side behavior when no database is specified. Wired from
+   * R2DBC's standard {@code ConnectionFactoryOptions.DATABASE} by {@code
+   * ClickHouseConnectionFactory.from}.
+   */
+  public TransportOptions withDatabase(final @Nullable String database) {
+    return new TransportOptions(
+        authentication,
+        responseTimeout,
+        connectTimeout,
+        trustedCertificatePem,
+        retryPolicy,
+        maxConnections,
+        pendingAcquireMaxCount,
+        pendingAcquireTimeout,
+        maxIdleTime,
+        maxLifeTime,
+        database);
   }
 
   // The generated record equals/hashCode/toString compare trustedCertificatePem by array
@@ -223,7 +257,8 @@ public record TransportOptions(
             Integer otherPendingAcquireMaxCount,
             Duration otherPendingAcquireTimeout,
             Duration otherMaxIdleTime,
-            Duration otherMaxLifeTime))) {
+            Duration otherMaxLifeTime,
+            String otherDatabase))) {
       return false;
     }
     return Objects.equals(authentication, otherAuthentication)
@@ -235,7 +270,8 @@ public record TransportOptions(
         && Objects.equals(pendingAcquireMaxCount, otherPendingAcquireMaxCount)
         && Objects.equals(pendingAcquireTimeout, otherPendingAcquireTimeout)
         && Objects.equals(maxIdleTime, otherMaxIdleTime)
-        && Objects.equals(maxLifeTime, otherMaxLifeTime);
+        && Objects.equals(maxLifeTime, otherMaxLifeTime)
+        && Objects.equals(database, otherDatabase);
   }
 
   @Override
@@ -250,7 +286,8 @@ public record TransportOptions(
         pendingAcquireMaxCount,
         pendingAcquireTimeout,
         maxIdleTime,
-        maxLifeTime);
+        maxLifeTime,
+        database);
   }
 
   @Override
@@ -276,6 +313,8 @@ public record TransportOptions(
         + maxIdleTime
         + ", maxLifeTime="
         + maxLifeTime
+        + ", database="
+        + database
         + ']';
   }
 

@@ -36,6 +36,7 @@ public final class ClickHouseHttpTransport {
 
   private static final String FORMAT_HEADER = "X-ClickHouse-Format";
   private static final String QUERY_ID_HEADER = "X-ClickHouse-Query-Id";
+  private static final String DATABASE_HEADER = "X-ClickHouse-Database";
   private static final String EXCEPTION_CODE_HEADER = "X-ClickHouse-Exception-Code";
   private static final String SUMMARY_HEADER = "X-ClickHouse-Summary";
   private static final Pattern WRITTEN_ROWS_PATTERN =
@@ -59,6 +60,7 @@ public final class ClickHouseHttpTransport {
   private final HttpClient httpClient;
   private final Authentication authentication;
   private final RetryPolicy retryPolicy;
+  private final @Nullable String database;
 
   public ClickHouseHttpTransport(final String baseUrl) {
     this(baseUrl, TransportOptions.defaults());
@@ -251,6 +253,7 @@ public final class ClickHouseHttpTransport {
     this.httpClient = client;
     this.authentication = options.authentication();
     this.retryPolicy = options.retryPolicy();
+    this.database = options.database();
   }
 
   // Every setter below is called only when the corresponding TransportOptions field is non-null,
@@ -376,6 +379,9 @@ public final class ClickHouseHttpTransport {
                 headers -> {
                   headers.set(FORMAT_HEADER, "RowBinaryWithNamesAndTypes");
                   headers.set(QUERY_ID_HEADER, query.queryId());
+                  if (database != null) {
+                    headers.set(DATABASE_HEADER, database);
+                  }
                   authentication.addTo(headers);
                 })
             .doAfterRequest((request, connection) -> requestSent.set(true))
@@ -454,6 +460,9 @@ public final class ClickHouseHttpTransport {
                 headers -> {
                   headers.set(FORMAT_HEADER, "RowBinaryWithNamesAndTypes");
                   headers.set(QUERY_ID_HEADER, query.queryId());
+                  if (database != null) {
+                    headers.set(DATABASE_HEADER, database);
+                  }
                   authentication.addTo(headers);
                 })
             .doAfterRequest((request, connection) -> requestSent.set(true))
