@@ -17,7 +17,7 @@ on:
           - AUTOMATIC
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
@@ -169,6 +169,7 @@ jobs:
           echo "Central Portal deployment ID: $DEPLOYMENT_ID"
 
       - name: Wait for Central Portal validation or publication
+        id: wait-for-central
         env:
           DEPLOYMENT_ID: ${{ steps.central-upload.outputs.deployment_id }}
         run: |
@@ -201,11 +202,13 @@ jobs:
             if [ "$STATE" = "VALIDATED" ] && [ "$PUBLISHING_TYPE" = "USER_MANAGED" ]; then
               echo "Central Portal deployment is validated and waiting for manual Publish."
               echo "Open Central Portal, inspect the deployment, and click Publish when ready."
+              echo "final_state=VALIDATED" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
             if [ "$STATE" = "PUBLISHED" ]; then
               echo "Central Portal deployment is published."
+              echo "final_state=PUBLISHED" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
@@ -215,3 +218,64 @@ jobs:
 
           echo "Timed out waiting for Central Portal deployment."
           exit 1
+
+      # Everything below only runs once Central Portal has actually PUBLISHED the artifacts - not
+      # merely VALIDATED (the USER_MANAGED state where a human still has to click Publish in the
+      # Central Portal UI). Tagging/releasing on VALIDATED would let the Git tag and GitHub Release
+      # point at a commit whose artifacts aren't actually live on Central yet, breaking the "tag,
+      # release, and Central artifact all point at the same, actually-published commit" guarantee
+      # this step exists for (ROADMAP.md Phase 7 item 13). For USER_MANAGED releases, re-run this
+      # workflow (or trigger a small follow-up) once you've clicked Publish in Central Portal so
+      # these steps run against the now-PUBLISHED deployment.
+      - name: Create Git tag
+        if: steps.wait-for-central.outputs.final_state == 'PUBLISHED'
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$RELEASE_VERSION" -m "Release v$RELEASE_VERSION"
+          git push origin "v$RELEASE_VERSION"
+
+      - name: Extract release notes from CHANGELOG.md
+        if: steps.wait-for-central.outputs.final_state == 'PUBLISHED'
+        id: release-notes
+        run: |
+          set -euo pipefail
+
+          # CHANGELOG.md sections are headed "## [X.Y.Z] - ..." or "## [Unreleased] - X.Y.Z (...)".
+          # Extract the body between this release's heading and the next "## " heading, so release
+          # notes always come from the same file a human reading the repo would read - never
+          # hand-retyped and liable to drift from it.
+          NOTES_FILE="$(mktemp)"
+          awk -v version="$RELEASE_VERSION" '
+            /^## / {
+              if (in_section) { exit }
+              if ($0 ~ "\\[" version "\\]") { in_section = 1; next }
+            }
+            in_section { print }
+          ' CHANGELOG.md > "$NOTES_FILE"
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "No CHANGELOG.md section found for version $RELEASE_VERSION - add one before releasing."
+            exit 1
+          fi
+
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            cat "$NOTES_FILE"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.wait-for-central.outputs.final_state == 'PUBLISHED'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES: ${{ steps.release-notes.outputs.notes }}
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' "$RELEASE_NOTES" > release-notes.md
+          gh release create "v$RELEASE_VERSION" \
+            --title "v$RELEASE_VERSION" \
+            --notes-file release-notes.md

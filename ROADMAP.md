@@ -1247,20 +1247,35 @@ block on earlier ones except where noted):
 
 ### Definition of done for 0.2.0
 
-- [ ] Users control the physical transport pool without writing their own Java constructor call.
-- [ ] The transport's pending-acquire queue is bounded and has a timeout, both configurable.
-- [ ] Statement timeout works against a real ClickHouse server.
-- [ ] `Result` has unambiguous single-consumption semantics, including across `filter()` views.
-- [ ] Typed `Row.get` has controlled, tested conversions for the P0 type matrix.
-- [ ] `Statement.add()` works correctly (sequential, one `Result` per binding set).
-- [ ] Cancellation/timeout/error paths leave no `ByteBuf` leaks (leak-detector lane passes).
-- [ ] A test actively protects the Netty event loop from a blocking decode call.
-- [ ] It's written down which R2DBC compatibility cases are supported vs. deliberately unsupported.
-- [ ] README documents the outer R2DBC pool and inner transport pool as one coherent story (already
-      true today; re-verify after PR 5).
+- [x] Users control the physical transport pool without writing their own Java constructor call —
+      PR 5, the `transport...` `ConnectionFactoryOptions`/URL query options.
+- [x] The transport's pending-acquire queue is bounded and has a timeout, both configurable — PR 5,
+      `transportPendingAcquireMaxCount`/`transportPendingAcquireTimeout`.
+- [x] Statement timeout works against a real ClickHouse server — PR 4,
+      `Connection.setStatementTimeout` backed by `max_execution_time`.
+- [x] `Result` has unambiguous single-consumption semantics, including across `filter()` views —
+      PR 1, the shared consumption guard.
+- [x] Typed `Row.get` has controlled, tested conversions for the P0 type matrix — PR 2.
+- [x] `Statement.add()` works correctly (sequential, one `Result` per binding set) — PR 3.
+- [ ] Cancellation/timeout/error paths leave no `ByteBuf` leaks (leak-detector lane passes) — **item
+      6 was never actually implemented.** Checked directly, not assumed: no
+      `-Dio.netty.leakDetection.level=paranoid` JVM arg exists anywhere in the build (`grep` across
+      every `build.gradle.kts` finds nothing), and no PR in the [PR sequence](#pr-sequence) table
+      above scoped it — the table jumps from item 5 (PR 4) to item 11 (PR 6) with no item-6 row.
+      This box cannot honestly be checked yet; either scope a PR 9b for it before cutting `0.2.0`,
+      or explicitly move it to a documented follow-up and re-word this line accordingly — but not
+      silently claim done.
+- [x] A test actively protects the Netty event loop from a blocking decode call — PR 6, the
+      driver-owned `RowDecodingScheduler` plus its ownership/threading tests.
+- [x] It's written down which R2DBC compatibility cases are supported vs. deliberately unsupported —
+      PR 8, `docs/R2DBC_COMPATIBILITY.md` + `ClickHouseR2dbcSpiCompatibilityTest`.
+- [x] README documents the outer R2DBC pool and inner transport pool as one coherent story —
+      re-verified after PR 5; the "no R2DBC option" gap the section used to call out is closed.
 - [ ] The release has a changelog entry, a Git tag, and a GitHub Release pointing at the same commit
-      as the Maven Central artifact.
-- [ ] A benchmark baseline is recorded (docs/PERFORMANCE.md) but is not a flaky PR gate.
+      as the Maven Central artifact — PR 9 adds `CHANGELOG.md` and wires tag/Release creation into
+      `release.yml`; this box checks once an actual `0.2.0` release runs through it end to end.
+- [ ] A benchmark baseline is recorded (docs/PERFORMANCE.md) but is not a flaky PR gate — recorded
+      for `0.1.0` already; re-confirm nothing in Phase 7 regressed it before cutting `0.2.0`.
 
 ## Working with Claude / IntelliJ
 
