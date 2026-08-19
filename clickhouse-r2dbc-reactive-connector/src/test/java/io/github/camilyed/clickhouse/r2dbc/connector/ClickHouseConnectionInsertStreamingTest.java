@@ -104,7 +104,8 @@ class ClickHouseConnectionInsertStreamingTest {
 
       // then
       assertThat(listener.startedEvents()).hasSize(1);
-      assertThat(listener.startedEvents().getFirst().operationKind()).isEqualTo(OperationKind.INSERT);
+      assertThat(listener.startedEvents().getFirst().operationKind())
+          .isEqualTo(OperationKind.INSERT);
       // and
       assertThat(listener.completedEvents()).hasSize(1);
       assertThat(listener.completedEvents().getFirst().rowCount()).isEqualTo(2L);

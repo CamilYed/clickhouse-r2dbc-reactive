@@ -78,10 +78,10 @@ final class ClickHouseResult implements Result {
    * that method's Javadoc for why every blocking decode call must run there rather than on
    * whichever thread ends up consuming the returned {@link Result}.
    *
-   * <p>{@code observation}'s {@code queryCompleted}/{@code queryFailed}/{@code queryCancelled}
-   * fire based on the returned {@link ClickHouseResult}'s own row {@link Flux} — its terminal
-   * signal, not this method's — since that {@link Flux} is only actually subscribed to later, when
-   * a caller consumes the {@link Result} via {@link #map}/{@link #flatMap}; see {@link
+   * <p>{@code observation}'s {@code queryCompleted}/{@code queryFailed}/{@code queryCancelled} fire
+   * based on the returned {@link ClickHouseResult}'s own row {@link Flux} — its terminal signal,
+   * not this method's — since that {@link Flux} is only actually subscribed to later, when a caller
+   * consumes the {@link Result} via {@link #map}/{@link #flatMap}; see {@link
    * io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why a caller that
    * never does so never triggers those events at all.
    */

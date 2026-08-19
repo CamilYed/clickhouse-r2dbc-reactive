@@ -10,7 +10,8 @@ import org.junit.jupiter.api.Test;
 
 class QueryObservationTest {
 
-  private final RecordingDriverObservationListener listener = new RecordingDriverObservationListener();
+  private final RecordingDriverObservationListener listener =
+      new RecordingDriverObservationListener();
 
   @Test
   void shouldFireQueryStartedImmediatelyWhenStarted() {
@@ -59,7 +60,8 @@ class QueryObservationTest {
     assertThat(listener.completedEvents().getFirst().rowCount()).isEqualTo(3);
     assertThat(listener.completedEvents().getFirst().byteCount()).isEqualTo(42);
     assertThat(listener.completedEvents().getFirst().queryId()).isEqualTo("query-1");
-    assertThat(listener.completedEvents().getFirst().operationKind()).isEqualTo(OperationKind.QUERY);
+    assertThat(listener.completedEvents().getFirst().operationKind())
+        .isEqualTo(OperationKind.QUERY);
   }
 
   @Test

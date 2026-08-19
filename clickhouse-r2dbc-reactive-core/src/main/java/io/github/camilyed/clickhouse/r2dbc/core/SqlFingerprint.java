@@ -6,10 +6,10 @@ import java.security.NoSuchAlgorithmException;
 
 /**
  * A short, stable, non-reversible identifier for a SQL statement's exact text — attached to a
- * {@link DriverObservationEvent} in place of the SQL itself, which must never be logged or
- * exported to a metrics/tracing backend (it may embed values via string concatenation, even though
- * this driver's own bind mechanism never does). Two instances are equal exactly when the SQL text
- * they were computed from is character-for-character identical; any difference, including
+ * {@link DriverObservationEvent} in place of the SQL itself, which must never be logged or exported
+ * to a metrics/tracing backend (it may embed values via string concatenation, even though this
+ * driver's own bind mechanism never does). Two instances are equal exactly when the SQL text they
+ * were computed from is character-for-character identical; any difference, including
  * whitespace-only changes, produces a different fingerprint.
  */
 public record SqlFingerprint(String value) {

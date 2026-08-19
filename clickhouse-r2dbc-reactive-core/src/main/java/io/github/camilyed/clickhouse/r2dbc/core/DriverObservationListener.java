@@ -20,8 +20,8 @@ public interface DriverObservationListener {
   default void queryStarted(final QueryStartedEvent event) {}
 
   /**
-   * A query's outcome is fully known and successful — see {@link QueryCompletedEvent}'s Javadoc
-   * for exactly when this does and doesn't fire.
+   * A query's outcome is fully known and successful — see {@link QueryCompletedEvent}'s Javadoc for
+   * exactly when this does and doesn't fire.
    */
   default void queryCompleted(final QueryCompletedEvent event) {}
 

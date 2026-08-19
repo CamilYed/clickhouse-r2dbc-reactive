@@ -44,7 +44,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   }
 
   ClickHouseConnectionFactory(
-      final ClickHouseHttpTransport transport, final DriverObservationListener observationListener) {
+      final ClickHouseHttpTransport transport,
+      final DriverObservationListener observationListener) {
     this.transport = transport;
     this.observationListener = observationListener;
   }
@@ -146,7 +147,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
             .withMaxLifeTime(transportMaxLifeTime);
 
     final DriverObservationListener observationListener =
-        observationListenerOption(options, ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER);
+        observationListenerOption(
+            options, ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER);
 
     return new ClickHouseConnectionFactory(
         new ClickHouseHttpTransport(baseUrl, transportOptions), observationListener);

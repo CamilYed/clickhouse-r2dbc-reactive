@@ -274,7 +274,8 @@ public final class ClickHouseConnection implements Connection {
         .insertWithSummary(query, observedData)
         .flatMap(response -> response.body().aggregate().asByteArray().thenReturn(response))
         .doOnNext(
-            response -> observation.completed(response.writtenRows().getAsLong(), sentByteCount.get()))
+            response ->
+                observation.completed(response.writtenRows().getAsLong(), sentByteCount.get()))
         .map(response -> (Result) ClickHouseResult.forInsert(response.writtenRows().getAsLong()))
         .doOnError(observation::failed)
         .doOnCancel(observation::cancelled)

@@ -13,10 +13,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Proves {@link Slf4jDriverObservationListener} handles every event type without throwing — this
- * project has no log-content-capturing test infrastructure (see {@code
- * ClickHouseHttpTransport}'s own untested best-effort-KILL-QUERY WARN log for the established
- * precedent), so, same as there, the logging call itself is exercised but its rendered output is
- * not asserted.
+ * project has no log-content-capturing test infrastructure (see {@code ClickHouseHttpTransport}'s
+ * own untested best-effort-KILL-QUERY WARN log for the established precedent), so, same as there,
+ * the logging call itself is exercised but its rendered output is not asserted.
  */
 class Slf4jDriverObservationListenerTest {
 

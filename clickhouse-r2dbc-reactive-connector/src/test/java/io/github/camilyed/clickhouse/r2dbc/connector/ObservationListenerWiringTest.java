@@ -20,13 +20,15 @@ import reactor.core.publisher.Mono;
  */
 class ObservationListenerWiringTest {
 
-  private final RecordingDriverObservationListener listener = new RecordingDriverObservationListener();
+  private final RecordingDriverObservationListener listener =
+      new RecordingDriverObservationListener();
 
   @Test
   void shouldNotifyTheConfiguredListenerOfAQueryThatConsumesItsRows() {
     // given
     final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
-    try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
       final ConnectionFactoryOptions options =
           ConnectionFactoryOptions.builder()
               .option(ConnectionFactoryOptions.HOST, "localhost")
@@ -46,7 +48,8 @@ class ObservationListenerWiringTest {
       // then
       assertThat(rowCount).isEqualTo(1L);
       assertThat(listener.startedEvents()).hasSize(1);
-      assertThat(listener.startedEvents().getFirst().operationKind()).isEqualTo(OperationKind.QUERY);
+      assertThat(listener.startedEvents().getFirst().operationKind())
+          .isEqualTo(OperationKind.QUERY);
       // and
       assertThat(listener.completedEvents()).hasSize(1);
       assertThat(listener.completedEvents().getFirst().rowCount()).isEqualTo(1L);
@@ -60,7 +63,8 @@ class ObservationListenerWiringTest {
   void shouldNotNotifyAnyListenerWhenACallerOnlyReadsRowsUpdated() {
     // given
     final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
-    try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
       final ConnectionFactoryOptions options =
           ConnectionFactoryOptions.builder()
               .option(ConnectionFactoryOptions.HOST, "localhost")

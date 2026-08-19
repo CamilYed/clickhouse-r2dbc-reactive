@@ -19,9 +19,9 @@ import org.jspecify.annotations.Nullable;
  * rather than each hand-rolling event construction and elapsed-time bookkeeping inline — the same
  * "small, focused, stateful collaborator" shape as {@link ResultConsumptionGuard}.
  *
- * <p><b>Not thread-safe</b>, deliberately: reactive streams guarantee serial (non-concurrent) signal
- * delivery to a single subscriber, and every method here is only ever called from within that one
- * subscriber's own callbacks for the query attempt this instance was created for.
+ * <p><b>Not thread-safe</b>, deliberately: reactive streams guarantee serial (non-concurrent)
+ * signal delivery to a single subscriber, and every method here is only ever called from within
+ * that one subscriber's own callbacks for the query attempt this instance was created for.
  */
 final class QueryObservation {
 
