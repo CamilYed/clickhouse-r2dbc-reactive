@@ -32,9 +32,19 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * synchronous {@link HttpClient}, deliberately not through this project's own reactive transport,
  * so cleanup never depends on — or silently masks a bug in — the very driver code these tests exist
  * to verify.
+ *
+ * <p>The server image/tag is read from the {@value #IMAGE_ENV_VAR} environment variable, defaulting
+ * to {@value #DEFAULT_IMAGE} when unset — a plain environment variable, not a {@code -D} system
+ * property, since Gradle {@code Test} tasks inherit the build process's environment into the forked
+ * test JVM automatically, with no extra {@code build.gradle.kts} wiring needed. This is what lets a
+ * CI lane run the exact same test classes against a different ClickHouse version without touching
+ * any Java source — see {@code .github/workflows/nightly.yml}'s version matrix.
  */
 @Testcontainers
 public abstract class BaseClickHouseIntegrationTest {
+
+  private static final String IMAGE_ENV_VAR = "CLICKHOUSE_TESTCONTAINERS_IMAGE";
+  private static final String DEFAULT_IMAGE = "clickhouse/clickhouse-server:latest";
 
   /**
    * Constructor for subclasses; there is no state to initialize beyond the shared static container.
@@ -42,8 +52,12 @@ public abstract class BaseClickHouseIntegrationTest {
   protected BaseClickHouseIntegrationTest() {}
 
   @Container
-  private static final ClickHouseContainer CLICK_HOUSE =
-      new ClickHouseContainer("clickhouse/clickhouse-server:latest");
+  private static final ClickHouseContainer CLICK_HOUSE = new ClickHouseContainer(resolveImage());
+
+  private static String resolveImage() {
+    final String fromEnv = System.getenv(IMAGE_ENV_VAR);
+    return fromEnv == null || fromEnv.isBlank() ? DEFAULT_IMAGE : fromEnv;
+  }
 
   private static final HttpClient ADMIN_HTTP_CLIENT = HttpClient.newHttpClient();
 

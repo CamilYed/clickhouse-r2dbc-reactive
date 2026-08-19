@@ -31,5 +31,16 @@ dependencies {
     // (BaseClickHouseIntegrationTest and friends) transitively — see ROADMAP.md's module map.
     testImplementation(project(":clickhouse-r2dbc-reactive-testkit"))
 
+    // For ClickHouseR2dbcSpiCompatibilityTest — the official R2DBC SPI Technology Compatibility
+    // Kit, run against a real ClickHouse server. r2dbc-spi-test's TestKit<T> requires a
+    // JdbcOperations handle to the same database purely for TCK fixture setup/teardown, hence
+    // spring-jdbc and the ClickHouse JDBC driver alongside it; classifier "all" is the shaded jar
+    // (bundles clickhouse-jdbc's own transitive deps) so DriverManager/SimpleDriverDataSource can
+    // load it with no separate dependency management of its own. None of these three are ever a
+    // production dependency of this module.
+    testImplementation(libs.r2dbc.spi.test)
+    testImplementation(libs.spring.jdbc)
+    testImplementation("com.clickhouse:clickhouse-jdbc:${libs.versions.clickhouse.client.v2.get()}:all")
+
     testRuntimeOnly(libs.junit.platform.launcher)
 }

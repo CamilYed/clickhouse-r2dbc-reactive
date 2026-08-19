@@ -1,5 +1,10 @@
 name: CI
 
+# The fast PR lane: Spotless, the full unit + real-ClickHouse-integration test suite (against
+# whatever BaseClickHouseIntegrationTest's default image resolves to - see that class's Javadoc),
+# and SonarCloud, on every push/PR. See nightly.yml for the heavier, scheduled multi-ClickHouse-
+# version matrix (ROADMAP.md Phase 7 item 12) that doesn't gate every PR.
+
 on:
   push:
     branches:

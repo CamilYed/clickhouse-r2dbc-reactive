@@ -1,0 +1,67 @@
+name: Nightly ClickHouse compatibility matrix
+
+# Heavier lane than ci.yml's fast PR gate, per ROADMAP.md Phase 7 item 12: the same full build,
+# run against more than one ClickHouse server version, on a schedule rather than every PR - a
+# multi-version Testcontainers matrix adds real wall-clock time and isn't something every push
+# should wait on.
+#
+# Deliberately scoped to the version matrix only for now. JMH smoke/regression checks and larger
+# concurrency tests (also named in item 12) are NOT wired into this workflow yet - a real
+# regression gate needs a baseline-comparison strategy this repo doesn't have yet (see
+# docs/PERFORMANCE.md's Phase 5 section: "JMH as a full run stays out of the PR gate - measurement
+# noise would produce too many false positives as a hard gate", which applies just as much to an
+# unattended nightly job with nobody watching it fire). That's separately scoped future work, not
+# silently skipped.
+#
+# "Minimum supported ClickHouse version" (also named in item 12) is deliberately not claimed here
+# either - this repo has never actually verified a minimum, so the matrix below only covers two
+# verified reference points (newest, and the specific stable release already used for reproducible
+# benchmark runs) rather than inventing an unverified floor. See docs/R2DBC_COMPATIBILITY.md.
+
+on:
+  schedule:
+    # 04:00 UTC daily - outside typical working hours for this project's contributors.
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test (ClickHouse ${{ matrix.clickhouse-image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        clickhouse-image:
+          # Newest supported - same image ci.yml's fast PR lane implicitly runs against, pinned
+          # explicitly here so a matrix failure names the version, not just "latest".
+          - "clickhouse/clickhouse-server:latest"
+          # Current stable reference point - the exact tag docs/PERFORMANCE.md's benchmark numbers
+          # were recorded against (clickhouse-r2dbc-reactive-benchmarks/.../BenchmarkEnvironment.java),
+          # reused here so "current stable" means the same thing in both places.
+          - "clickhouse/clickhouse-server:26.7.3.19"
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build and test against ${{ matrix.clickhouse-image }}
+        env:
+          CLICKHOUSE_TESTCONTAINERS_IMAGE: ${{ matrix.clickhouse-image }}
+        run: ./gradlew clean build

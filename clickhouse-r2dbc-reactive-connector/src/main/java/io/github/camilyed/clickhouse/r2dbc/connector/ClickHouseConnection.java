@@ -212,8 +212,18 @@ public final class ClickHouseConnection implements Connection {
             "ClickHouse does not support configurable isolation levels"));
   }
 
+  // Mono.defer, not a plain if/return: closed state must be read at subscription time, not when
+  // validate(...) is called to build the Publisher. A caller may reasonably build several
+  // Publishers up front and subscribe to them later, in sequence, with a close() Publisher
+  // interleaved between them (exactly what the R2DBC TCK's own validate() test does via
+  // Flux.concat) - deferring keeps this method truthful about the connection's state at the moment
+  // each returned Publisher is actually run, not at the moment it was assembled.
   @Override
   public Publisher<Boolean> validate(final ValidationDepth depth) {
+    return Mono.defer(() -> validateNow(depth));
+  }
+
+  private Mono<Boolean> validateNow(final ValidationDepth depth) {
     if (closed.get()) {
       return Mono.just(false);
     }
