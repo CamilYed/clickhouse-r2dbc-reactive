@@ -335,6 +335,16 @@ cancelled) still exists, just far less often than before this was implemented �
 > something like Spring's `DatabaseClient`. `Dynamic`/`Variant` remain unsupported — newer, less
 > settled experimental types.
 
+> [!NOTE]
+> **Transactions, savepoints, generated keys, and `Blob`/`Clob` binding are deliberately
+> unsupported** — ClickHouse itself has no equivalent concept for any of them, so this driver fails
+> loudly (`UnsupportedOperationException`) rather than silently pretending otherwise. See
+> [docs/R2DBC_COMPATIBILITY.md](docs/R2DBC_COMPATIBILITY.md) for the full, written-up answer to
+> "where does this driver match the R2DBC SPI" — backed by
+> [`ClickHouseR2dbcSpiCompatibilityTest`](clickhouse-r2dbc-reactive-connector/src/test/java/io/github/camilyed/clickhouse/r2dbc/connector/ClickHouseR2dbcSpiCompatibilityTest.java)
+> actually running the official R2DBC SPI Technology Compatibility Kit against a real ClickHouse
+> server, not just a claim.
+
 ## What "fully reactive" means here
 
 Returning a reactive type is a necessary but insufficient condition. A driver is treated as

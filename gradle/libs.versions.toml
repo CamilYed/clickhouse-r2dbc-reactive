@@ -17,6 +17,7 @@ bouncycastle = "1.85"
 jmh = "1.37"
 jmh-gradle-plugin = "0.7.3"
 hdrhistogram = "2.2.2"
+spring-jdbc = "7.0.7"
 
 [plugins]
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
@@ -36,8 +37,17 @@ reactor-netty-http = { module = "io.projectreactor.netty:reactor-netty-http", ve
 
 r2dbc-spi = { module = "io.r2dbc:r2dbc-spi", version.ref = "r2dbc-spi" }
 r2dbc-pool = { module = "io.r2dbc:r2dbc-pool", version.ref = "r2dbc-pool" }
+# Test-only: the official R2DBC SPI Technology Compatibility Kit (TestKit<T>) - see
+# ClickHouseR2dbcSpiCompatibilityTest in clickhouse-r2dbc-reactive-connector. Version-aligned with
+# r2dbc-spi itself since it's published from the same repository/release train.
+r2dbc-spi-test = { module = "io.r2dbc:r2dbc-spi-test", version.ref = "r2dbc-spi" }
 
 clickhouse-client-v2 = { module = "com.clickhouse:client-v2", version.ref = "clickhouse-client-v2" }
+
+# Test-only: r2dbc-spi-test's TestKit<T> requires a JdbcOperations handle to the same database for
+# TCK fixture setup/teardown - see ClickHouseR2dbcSpiCompatibilityTest's Javadoc. Never a production
+# dependency of this driver.
+spring-jdbc = { module = "org.springframework:spring-jdbc", version.ref = "spring-jdbc" }
 
 hdrhistogram = { module = "org.hdrhistogram:HdrHistogram", version.ref = "hdrhistogram" }
 
