@@ -6,10 +6,15 @@ import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Hooks;
 import reactor.test.StepVerifier;
 
 class RowBinaryDecoderTest {
@@ -94,10 +99,12 @@ class RowBinaryDecoderTest {
     // RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes()'s Javadoc) - a single-row
     // fixture
     // would make even emitting row 1 block forever on that look-ahead. An explicit initial request
-    // of 1 (rather than StepVerifier's default unbounded demand) means Flux.generate's own request
-    // loop stops naturally after emitting exactly that one row and goes idle, rather than
-    // immediately trying to generate a third row it would otherwise block forever reading -
-    // thenCancel() then cancels a genuinely idle subscription, not a still-running generation loop.
+    // of
+    // 1 (rather than StepVerifier's default unbounded demand) means Flux.generate's own request
+    // loop
+    // stops naturally after emitting exactly that one row and goes idle, rather than immediately
+    // trying to generate a third row it would otherwise block forever reading - thenCancel() then
+    // cancels a genuinely idle subscription, not a still-running generation loop.
     final AtomicBoolean sourceCancelled = new AtomicBoolean();
     final Flux<ByteBuffer> source =
         Flux.just(ByteBuffer.wrap(RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes()))
@@ -134,5 +141,73 @@ class RowBinaryDecoderTest {
 
     // then
     assertThat(sourceCancelled.get()).isTrue();
+  }
+
+  @Test
+  void shouldRouteACloseFailureToReactorsErrorDroppedHookInsteadOfSwallowingItSilently() {
+    // given - a source whose Subscription#cancel() itself throws, standing in for the underlying
+    // stream failing to close during cancellation. RowBinaryDecoder#closeReader (Flux.generate's
+    // disposal hook) wraps such a failure and, per its Javadoc, relies on FluxGenerate's own
+    // cleanup() to route it to Reactor's Operators.onErrorDropped rather than propagating it back
+    // to the cancelling subscriber - a temporary global Hooks.onErrorDropped is therefore the only
+    // black-box way to observe that this path is actually reached, not silently discarded.
+    final List<Throwable> droppedErrors = new CopyOnWriteArrayList<>();
+    Hooks.onErrorDropped(droppedErrors::add);
+    final AtomicBoolean emitted = new AtomicBoolean();
+    final Flux<ByteBuffer> source =
+        Flux.from(
+            (Publisher<ByteBuffer>)
+                downstream ->
+                    downstream.onSubscribe(new FailingCancelSubscription(downstream, emitted)));
+
+    try {
+      // when
+      StepVerifier.create(RowBinaryDecoder.decodeRows(source), 1)
+          .expectNextCount(1)
+          .thenCancel()
+          .verify(Duration.ofSeconds(5));
+
+      // then
+      assertThat(droppedErrors).hasSize(1);
+      // and
+      assertThat(droppedErrors.get(0))
+          .hasMessageContaining("Failed to close the row decoder's underlying stream")
+          .cause()
+          .isInstanceOf(IllegalStateException.class)
+          .hasMessage("cancel failed");
+    } finally {
+      Hooks.resetOnErrorDropped();
+    }
+  }
+
+  /**
+   * A {@link Subscription} that emits one two-row chunk on its first {@link #request(long)} and
+   * never completes on its own, but throws on {@link #cancel()} - simulating the underlying stream
+   * failing to close, for {@link
+   * #shouldRouteACloseFailureToReactorsErrorDroppedHookInsteadOfSwallowingItSilently()}.
+   */
+  private static final class FailingCancelSubscription implements Subscription {
+
+    private final Subscriber<? super ByteBuffer> downstream;
+    private final AtomicBoolean emitted;
+
+    private FailingCancelSubscription(
+        final Subscriber<? super ByteBuffer> downstream, final AtomicBoolean emitted) {
+      this.downstream = downstream;
+      this.emitted = emitted;
+    }
+
+    @Override
+    public void request(final long n) {
+      if (emitted.compareAndSet(false, true)) {
+        downstream.onNext(
+            ByteBuffer.wrap(RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes()));
+      }
+    }
+
+    @Override
+    public void cancel() {
+      throw new IllegalStateException("cancel failed");
+    }
   }
 }
