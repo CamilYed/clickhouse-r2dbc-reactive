@@ -29,6 +29,11 @@ import org.jspecify.annotations.Nullable;
  */
 final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormatReader {
 
+  // Both fixed for the lifetime of this reader once the header is parsed - see columns()/
+  // listHints()'s Javadoc for why caching them here, instead of recomputing per row, is safe.
+  private @Nullable List<ClickHouseColumn> cachedColumns;
+  private Class<?> @Nullable [] cachedListHints;
+
   ListDecodingRowBinaryReader(
       final InputStream inputStream,
       final QuerySettings querySettings,
@@ -38,14 +43,14 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
 
   @Override
   protected boolean readRecord(final Object[] values) throws IOException {
-    final List<ClickHouseColumn> columns = getSchema().getColumns();
+    final List<ClickHouseColumn> columns = columns();
     if (columns.isEmpty()) {
       return false;
     }
+    final Class<?>[] listHints = listHints(columns);
     for (int i = 0; i < columns.size(); i++) {
-      final ClickHouseColumn column = columns.get(i);
       try {
-        values[i] = binaryStreamReader.readValue(column, listHintFor(column));
+        values[i] = binaryStreamReader.readValue(columns.get(i), listHints[i]);
       } catch (final EOFException e) {
         if (i == 0) {
           endReached();
@@ -55,6 +60,41 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
       }
     }
     return true;
+  }
+
+  /**
+   * {@link #getSchema()}'s columns, read once and reused for every subsequent row instead of
+   * re-fetched by {@link #readRecord} on every single one — the schema is fixed once the header is
+   * parsed (client-v2 does not re-parse or change it mid-result), so calling {@link #getSchema()}
+   * {@code R} times (once per row) for a fixed answer was pure repeated work, not something the
+   * decode contract requires. See docs/PERFORMANCE.md's "second-opinion review" section (finding 4)
+   * for how this was found.
+   */
+  private List<ClickHouseColumn> columns() {
+    List<ClickHouseColumn> columns = cachedColumns;
+    if (columns == null) {
+      columns = getSchema().getColumns();
+      cachedColumns = columns;
+    }
+    return columns;
+  }
+
+  /**
+   * One {@link #listHintFor(ClickHouseColumn)} result per column of {@code columns}, computed once
+   * for the whole result rather than re-evaluated for every row — same fixed-per-result reasoning
+   * as {@link #columns()}, turning the {@code R × C} repeated {@code Array}/{@code Nested} type
+   * checks {@link #readRecord} used to perform into a one-time {@code C}-sized precomputation.
+   */
+  private Class<?>[] listHints(final List<ClickHouseColumn> columns) {
+    Class<?>[] listHints = cachedListHints;
+    if (listHints == null) {
+      listHints = new Class<?>[columns.size()];
+      for (int i = 0; i < columns.size(); i++) {
+        listHints[i] = listHintFor(columns.get(i));
+      }
+      cachedListHints = listHints;
+    }
+    return listHints;
   }
 
   /**
