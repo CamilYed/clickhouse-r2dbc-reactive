@@ -24,13 +24,13 @@ import org.springframework.jdbc.datasource.SimpleDriverDataSource;
  * {@link ConnectionFactory} under test connects to, purely so the TCK can set up/tear down its own
  * fixture tables outside of this driver's own code path — the TCK's own design, not something this
  * test invented (see {@link TestKit}'s own Javadoc). {@code com.clickhouse:clickhouse-jdbc} and
- * {@code org.springframework:spring-jdbc} are test-only dependencies of this module for exactly that
- * reason; neither is ever a production dependency of this driver.
+ * {@code org.springframework:spring-jdbc} are test-only dependencies of this module for exactly
+ * that reason; neither is ever a production dependency of this driver.
  *
- * <p>The parameter placeholder type is always {@code Nullable(Int32)} (see {@link #getPlaceholder}):
- * every TCK test that binds a value binds either an {@code Integer} or {@code null}, and ClickHouse
- * requires a column/parameter to be explicitly {@code Nullable(...)} before a {@code NULL} can be
- * bound to it at all.
+ * <p>The parameter placeholder type is always {@code Nullable(Int32)} (see {@link
+ * #getPlaceholder}): every TCK test that binds a value binds either an {@code Integer} or {@code
+ * null}, and ClickHouse requires a column/parameter to be explicitly {@code Nullable(...)} before a
+ * {@code NULL} can be bound to it at all.
  */
 class ClickHouseR2dbcSpiCompatibilityTest extends BaseClickHouseIntegrationTest
     implements TestKit<String> {
@@ -129,11 +129,13 @@ class ClickHouseR2dbcSpiCompatibilityTest extends BaseClickHouseIntegrationTest
   @Override
   public void transactionRollback() {}
 
-  @Disabled("ClickHouse: no savepoint support (requires a transaction, which this driver doesn't implement)")
+  @Disabled(
+      "ClickHouse: no savepoint support (requires a transaction, which this driver doesn't implement)")
   @Override
   public void savePoint() {}
 
-  @Disabled("ClickHouse: no savepoint support (requires a transaction, which this driver doesn't implement)")
+  @Disabled(
+      "ClickHouse: no savepoint support (requires a transaction, which this driver doesn't implement)")
   @Override
   public void savePointStartsTransaction() {}
 
@@ -146,7 +148,8 @@ class ClickHouseR2dbcSpiCompatibilityTest extends BaseClickHouseIntegrationTest
   @Override
   public void blobInsert() {}
 
-  @Disabled("ClickHouse has no BLOB type; this driver does not implement io.r2dbc.spi.Blob extraction")
+  @Disabled(
+      "ClickHouse has no BLOB type; this driver does not implement io.r2dbc.spi.Blob extraction")
   @Override
   public void blobSelect() {}
 
@@ -154,7 +157,8 @@ class ClickHouseR2dbcSpiCompatibilityTest extends BaseClickHouseIntegrationTest
   @Override
   public void clobInsert() {}
 
-  @Disabled("ClickHouse has no CLOB type; this driver does not implement io.r2dbc.spi.Clob extraction")
+  @Disabled(
+      "ClickHouse has no CLOB type; this driver does not implement io.r2dbc.spi.Clob extraction")
   @Override
   public void clobSelect() {}
 
@@ -164,11 +168,13 @@ class ClickHouseR2dbcSpiCompatibilityTest extends BaseClickHouseIntegrationTest
   // UnsupportedOperationException) - itself the honest answer here, not something to work around.
   // -----------------------------------------------------------------------------------------
 
-  @Disabled("ClickHouse has no generated-key mechanism; returnGeneratedValues() throws UnsupportedOperationException (the R2DBC SPI's own unoverridden default)")
+  @Disabled(
+      "ClickHouse has no generated-key mechanism; returnGeneratedValues() throws UnsupportedOperationException (the R2DBC SPI's own unoverridden default)")
   @Override
   public void returnGeneratedValues() {}
 
-  @Disabled("Same root cause as returnGeneratedValues(): the SPI default throws UnsupportedOperationException, not the IllegalArgumentException this TCK test expects for a null argument")
+  @Disabled(
+      "Same root cause as returnGeneratedValues(): the SPI default throws UnsupportedOperationException, not the IllegalArgumentException this TCK test expects for a null argument")
   @Override
   public void returnGeneratedValuesFails() {}
 
@@ -176,15 +182,18 @@ class ClickHouseR2dbcSpiCompatibilityTest extends BaseClickHouseIntegrationTest
   // Misc SPI edges this driver deliberately doesn't match today.
   // -----------------------------------------------------------------------------------------
 
-  @Disabled("This driver defers all bind-value handling to query encoding at execute() time (see ClickHouseQuery#withParameters) rather than validating a value's type eagerly inside bind() - bind(identifier, Class.class) does not synchronously throw IllegalArgumentException the way this TCK test expects")
+  @Disabled(
+      "This driver defers all bind-value handling to query encoding at execute() time (see ClickHouseQuery#withParameters) rather than validating a value's type eagerly inside bind() - bind(identifier, Class.class) does not synchronously throw IllegalArgumentException the way this TCK test expects")
   @Override
   public void bindFails() {}
 
-  @Disabled("ClickHouse's HTTP INSERT response carries no body/segments for Statement.execute() - writtenRows is only ever available via Result#getRowsUpdated(); this driver never emits a Result.UpdateCount segment (see ClickHouseResult's Javadoc)")
+  @Disabled(
+      "ClickHouse's HTTP INSERT response carries no body/segments for Statement.execute() - writtenRows is only ever available via Result#getRowsUpdated(); this driver never emits a Result.UpdateCount segment (see ClickHouseResult's Javadoc)")
   @Override
   public void segmentInsertEmitsUpdateCount() {}
 
-  @Disabled("Not verified against this driver: ClickHouse's HTTP interface executes one statement per request and is not exercised here as returning multiple result sets for one semicolon-separated multi-statement query")
+  @Disabled(
+      "Not verified against this driver: ClickHouse's HTTP interface executes one statement per request and is not exercised here as returning multiple result sets for one semicolon-separated multi-statement query")
   @Override
   public void compoundStatement() {}
 }

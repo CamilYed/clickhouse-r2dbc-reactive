@@ -52,8 +52,7 @@ public abstract class BaseClickHouseIntegrationTest {
   protected BaseClickHouseIntegrationTest() {}
 
   @Container
-  private static final ClickHouseContainer CLICK_HOUSE =
-      new ClickHouseContainer(resolveImage());
+  private static final ClickHouseContainer CLICK_HOUSE = new ClickHouseContainer(resolveImage());
 
   private static String resolveImage() {
     final String fromEnv = System.getenv(IMAGE_ENV_VAR);
