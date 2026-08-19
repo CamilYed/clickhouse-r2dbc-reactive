@@ -26,25 +26,26 @@ import reactor.core.publisher.Flux;
  * Level 1 "analytical aggregation" — the query shape docs/PERFORMANCE.md's Phase 5 "Query mix"
  * design named but never built: {@code GROUP BY} + {@code count()}/{@code avg()}/{@code
  * quantile()}, ClickHouse's actual core use case, not a synthetic point/scan stand-in. Unlike
- * {@link StreamingScanBenchmark} (result size grows with {@code rows}) or {@link PointQueryBenchmark}
- * (a single row), this benchmark's result set is always small and fixed (100 groups) regardless of
- * {@code rows} — what scales with {@code rows} instead is the amount of work ClickHouse itself does
- * server-side to compute the aggregation. That makes this class measure something neither of the
- * other two do: small-result-set decode/round-trip overhead layered on top of a query whose
- * *server-side* cost scales with the input tier, rather than a client-side decode cost that scales
- * with the result size.
+ * {@link StreamingScanBenchmark} (result size grows with {@code rows}) or {@link
+ * PointQueryBenchmark} (a single row), this benchmark's result set is always small and fixed (100
+ * groups) regardless of {@code rows} — what scales with {@code rows} instead is the amount of work
+ * ClickHouse itself does server-side to compute the aggregation. That makes this class measure
+ * something neither of the other two do: small-result-set decode/round-trip overhead layered on top
+ * of a query whose *server-side* cost scales with the input tier, rather than a client-side decode
+ * cost that scales with the result size.
  *
- * <p>Reuses {@link PointQueryTable} rather than a dedicated table — no schema needs a literal {@code
- * category} column when {@code id % 100} already buckets a uniform {@code id} range (1..{@code rows})
- * into 100 roughly-even groups, giving {@code GROUP BY} real work to do without adding another
- * dataset class this suite would need to keep in sync with {@link PointQueryTable}'s own seeding.
+ * <p>Reuses {@link PointQueryTable} rather than a dedicated table — no schema needs a literal
+ * {@code category} column when {@code id % 100} already buckets a uniform {@code id} range
+ * (1..{@code rows}) into 100 roughly-even groups, giving {@code GROUP BY} real work to do without
+ * adding another dataset class this suite would need to keep in sync with {@link PointQueryTable}'s
+ * own seeding.
  *
- * <p>{@code quantile(0.95)(...)} is explicitly wrapped in {@code toFloat64(...)} rather than applied
- * directly to the {@code Decimal(18,4)} {@code amount} column — ClickHouse's {@code quantile}
- * function's return type for a {@code Decimal} input isn't pinned down across versions the way {@code
- * avg()}'s always-{@code Float64} return is (checked directly against ClickHouse's own aggregate
- * function docs), so casting explicitly keeps the wire type — and therefore which typed getter {@link
- * #clientV2} reads it with — deterministic instead of guessed.
+ * <p>{@code quantile(0.95)(...)} is explicitly wrapped in {@code toFloat64(...)} rather than
+ * applied directly to the {@code Decimal(18,4)} {@code amount} column — ClickHouse's {@code
+ * quantile} function's return type for a {@code Decimal} input isn't pinned down across versions
+ * the way {@code avg()}'s always-{@code Float64} return is (checked directly against ClickHouse's
+ * own aggregate function docs), so casting explicitly keeps the wire type — and therefore which
+ * typed getter {@link #clientV2} reads it with — deterministic instead of guessed.
  *
  * <p><b>Not yet compiled or run in this session</b> (no JDK 21 available) — same caveat as every
  * other production/benchmark change made this way in this project; the {@code
@@ -104,16 +105,14 @@ public class AggregationBenchmark {
   /**
    * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decodeRows},
    * draining and blackhole-consuming every decoded group row — the same "consume the whole row,
-   * don't assert per-field types" pattern {@link PointQueryBenchmark}/{@link StreamingScanBenchmark}
-   * already use for this driver's side, since {@code decodeRows} needs no per-column getter calls.
+   * don't assert per-field types" pattern {@link PointQueryBenchmark}/{@link
+   * StreamingScanBenchmark} already use for this driver's side, since {@code decodeRows} needs no
+   * per-column getter calls.
    */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body =
-        ourTransport
-            .query(ClickHouseQuery.of(AGGREGATION_SQL))
-            .asByteArray()
-            .map(ByteBuffer::wrap);
+        ourTransport.query(ClickHouseQuery.of(AGGREGATION_SQL)).asByteArray().map(ByteBuffer::wrap);
     final long rowCount =
         RowBinaryDecoder.decodeRows(body)
             .doOnNext(blackhole::consume)
