@@ -212,7 +212,8 @@ public record TransportOptions(
       return true;
     }
     if (!(obj
-        instanceof TransportOptions(
+        instanceof
+        TransportOptions(
             Authentication otherAuthentication,
             Duration otherResponseTimeout,
             Duration otherConnectTimeout,
