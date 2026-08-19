@@ -437,27 +437,42 @@ whether you configure it or not.
 2. **Transport-level pool** — `ClickHouseHttpTransport`'s own Reactor Netty `ConnectionProvider`,
    pooling the actual TCP connections. This is the pool this project's non-blocking architecture is
    actually built around, and it's shared by *every* `ClickHouseConnection` this factory produces,
-   regardless of how many R2DBC-SPI-level connections layer 1 hands out above it — sizeable via
-   `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)`. Confirmed (not assumed) to
-   correctly reuse one TCP connection across sequential queries — for both a `.next()`-style
-   single-row consumption pattern and a fully-drained stream — in
+   regardless of how many R2DBC-SPI-level connections layer 1 hands out above it. Confirmed (not
+   assumed) to correctly reuse one TCP connection across sequential queries — for both a
+   `.next()`-style single-row consumption pattern and a fully-drained stream — in
    [`ClickHouseHttpTransportConnectionReuseTest`](clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransportConnectionReuseTest.java),
    including against Reactor Netty's own debug-level pool logging (`Channel acquired`/`Releasing
    channel`/`Channel cleaned` against the same channel ID across requests) as independent
    confirmation — an earlier draft of that investigation suspected a bug here and was wrong; see the
    test's own Javadoc for why the first diagnostic signal was misleading.
 
-   **What you actually accept here, and its current gap.** `maxConnections` is the only knob this
-   driver exposes over the Netty pool, and only through the plain Java constructor above — there is
-   **no `maxConnections` R2DBC connection option today**, so a Spring Boot app configuring
-   `spring.r2dbc.url=r2dbc:clickhouse://...` (the path almost everyone actually uses) always gets
-   this pool at Reactor Netty's own defaults, with no way to size it through the URL or
-   `application.yml`. Every other Netty pool knob (`maxIdleTime`, `maxLifeTime`,
-   `pendingAcquireTimeout`, `pendingAcquireMaxCount`, leasing strategy) isn't exposed at all yet —
-   not through the constructor, not through R2DBC options.
+   **Configuring it.** Five `transport...` R2DBC connection options — deliberately not `pool...`, so
+   they're never confused with `spring.r2dbc.pool.*` above, which configures the *other*,
+   R2DBC-SPI-level pool — map directly onto Reactor Netty's own `ConnectionProvider.Builder`:
+
+   | R2DBC option | Reactor Netty `ConnectionProvider.Builder` method | Meaning |
+   | --- | --- | --- |
+   | `transportMaxConnections` | `maxConnections` | Physical TCP connections open to ClickHouse at once, per remote host |
+   | `transportPendingAcquireMaxCount` | `pendingAcquireMaxCount` | How many acquire requests queue once `transportMaxConnections` is saturated, before new ones fail fast |
+   | `transportPendingAcquireTimeout` | `pendingAcquireTimeout` | How long a queued acquire waits before failing with a pool-timeout error |
+   | `transportMaxIdleTime` | `maxIdleTime` | How long an idle pooled connection sits before it's closed and evicted |
+   | `transportMaxLifeTime` | `maxLifeTime` | Max total lifetime of a pooled connection, regardless of idle activity |
+
+   All five default to Reactor Netty's own default (see the table below) when not set — this driver
+   never invents a default of its own. Available both via `ConnectionFactoryOptions` (typed values,
+   e.g. `.option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, 8)`) and via the
+   R2DBC URL query string (e.g. `r2dbc:clickhouse://host?transportMaxConnections=8`, Duration values
+   as ISO-8601 text, e.g. `transportPendingAcquireTimeout=PT2S`) — so a Spring Boot app configuring
+   `spring.r2dbc.url=r2dbc:clickhouse://...` (the path almost everyone actually uses) can size this
+   pool the same way it configures everything else, no separate Java-only path needed. An invalid
+   value (e.g. a negative duration, a non-positive connection count) fails fast at factory creation,
+   never silently falling back to a default. Every construction path through `ClickHouseHttpTransport`
+   routes through one `TransportOptions` config object internally, so these five options and every
+   other transport-level setting (`responseTimeout`, a custom trusted certificate, `RetryPolicy`,
+   ...) compose freely instead of each needing its own constructor overload.
 
    **Reactor Netty's own defaults, since nothing here is required reading to use this driver** —
-   this is what `ConnectionProvider.create(name)` gives you when `maxConnections` is left unset:
+   this is what `ConnectionProvider.create(name)` gives you when nothing above is set:
 
    | Setting | Default | Meaning |
    | --- | --- | --- |

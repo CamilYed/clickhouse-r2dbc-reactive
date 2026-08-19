@@ -50,6 +50,47 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
    */
   public static final Option<Duration> RETRY_DELAY = Option.valueOf("retryDelay");
 
+  /**
+   * The maximum number of connections in the underlying Reactor Netty HTTP connection pool — the
+   * transport-level pool, distinct from any R2DBC-level pool (e.g. {@code
+   * io.r2dbc.pool.ConnectionPool}) a caller layers on top; see the README's "Connection pooling"
+   * section. Named {@code transport...}, not {@code pool...}, specifically so it's never confused
+   * with {@code spring.r2dbc.pool.*}, which configures that other, R2DBC-level pool. Defaults to
+   * Reactor Netty's own default (see {@code TransportOptions}'s Javadoc) when not set.
+   */
+  public static final Option<Integer> TRANSPORT_MAX_CONNECTIONS =
+      Option.valueOf("transportMaxConnections");
+
+  /**
+   * The maximum number of acquisitions allowed to queue once {@link #TRANSPORT_MAX_CONNECTIONS} is
+   * reached, before further acquisitions are rejected outright rather than queued. Defaults to
+   * Reactor Netty's own default when not set.
+   */
+  public static final Option<Integer> TRANSPORT_PENDING_ACQUIRE_MAX_COUNT =
+      Option.valueOf("transportPendingAcquireMaxCount");
+
+  /**
+   * How long a queued acquisition waits for a connection to free up before failing. Defaults to
+   * Reactor Netty's own default when not set.
+   */
+  public static final Option<Duration> TRANSPORT_PENDING_ACQUIRE_TIMEOUT =
+      Option.valueOf("transportPendingAcquireTimeout");
+
+  /**
+   * How long a pooled connection may sit idle before it's closed and evicted from the pool.
+   * Defaults to Reactor Netty's own default (no idle eviction) when not set.
+   */
+  public static final Option<Duration> TRANSPORT_MAX_IDLE_TIME =
+      Option.valueOf("transportMaxIdleTime");
+
+  /**
+   * The maximum total lifetime of a pooled connection, regardless of how recently it was used,
+   * before it's closed and evicted from the pool. Defaults to Reactor Netty's own default (no
+   * lifetime limit) when not set.
+   */
+  public static final Option<Duration> TRANSPORT_MAX_LIFE_TIME =
+      Option.valueOf("transportMaxLifeTime");
+
   @Override
   public ConnectionFactory create(final ConnectionFactoryOptions connectionFactoryOptions) {
     return ClickHouseConnectionFactory.from(connectionFactoryOptions);
