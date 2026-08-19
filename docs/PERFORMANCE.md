@@ -110,8 +110,9 @@ smoothed over:
 
 What's left before this file is "done": a `-prof gc` pass on the 1M tail spike; the pool-matched
 `@Threads(8)` control experiment described below; widening `BoundedPoolConcurrencyBenchmark`'s
-matrix (more pool sizes, higher concurrency); and the wide multi-type decode/aggregation/INSERT
-benchmarks, which are designed (see below) but not yet built.
+matrix (more pool sizes, higher concurrency); actually running `AggregationBenchmark` (built
+2026-08-19, see below); and the wide multi-type decode/INSERT benchmarks, still designed but not
+built.
 
 ---
 
@@ -125,8 +126,10 @@ benchmarks, which are designed (see below) but not yet built.
 > | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | A pool-matched `@Threads(8)` control experiment to isolate whether `ConcurrencyBenchmark`'s regression is caused by blocking callers or by unmatched pools (currently both variables differ at once — see 2026-08-19 section) |
 > | `DecodedRow` redesign — **3-fork confirmed** (2026-08-14): `StreamingScanBenchmark` and `DecoderOnlyBenchmark`'s production path both beat `clientV2` at all three tiers | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
 > | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Widen `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes/concurrency levels) |
-> | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed, three independent runs** (2026-08-14 ×2, 2026-08-19): direction (this driver faster) holds every time, magnitude varies run to run (~1–10%) | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
+> | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed, three independent runs** (2026-08-14 ×2, 2026-08-19): direction (this driver faster) holds every time, magnitude varies run to run (~1–10%) | Run `AggregationBenchmark` (built 2026-08-19, not yet compiled/run — no JDK 21 in the environment that wrote it) |
+> | `AggregationBenchmark` — **built** (2026-08-19): the "analytical aggregation" query shape (`GROUP BY` + `count()`/`avg()`/`quantile()`), designed since the first Phase 5 write-up, finally has a benchmark class | Wide multi-type decode / INSERT benchmarks — still designed, not built |
 > | `ConcurrencyBenchmark` `@Threads(8)` — **3-fork confirmed** (2026-08-19): mean→p99.9 regression and tail crossover both reproduced, not single-run noise; root cause still not isolated (see above) | Netty leak-detection lane (Phase 7 item 6) — never actually built, see ROADMAP.md's Definition of done |
+> | Hot-path code review — **done** (2026-08-19): every class on the decode/transport hot path read; two tunable-but-unbenchmarked constants confirmed as the only open placeholders, everything else confirmed already optimal (see below) | Benchmark `RESPONSE_CHUNK_DEMAND` (1/4/8/16) and `RowDecodingScheduler` worker count/queue capacity — both self-documented placeholders, neither tuned with real measurements yet |
 > | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
 > | Performance charts — added to this file and to the main `README.md` (2026-08-14) | |
 > | Machine spec (CPU/RAM/OS) — filled in (2026-08-14): Apple M3 Pro, 36 GB, macOS | |
@@ -1351,6 +1354,10 @@ run so far, typically by low single digits to mid single digits, on a single sha
 isolation from other processes" is the honest version.** A tighter estimate would need either many
 more forks in one run, or a dedicated, isolated benchmarking machine — neither attempted yet.
 
+<p align="center">
+  <img src="images/bounded-pool-run-to-run-variance.png" width="70%" alt="BoundedPoolConcurrencyBenchmark mean-latency win margin across three independent runs, showing the direction is stable but the magnitude varies run to run">
+</p>
+
 ---
 
 ### `ConcurrencyBenchmark` `@Threads(8)`, 3-fork confirmation (2026-08-19)
@@ -1397,6 +1404,10 @@ so treat those two rows as directionally right, not precise.
   blocking-vs-non-blocking calling style" — the two benchmarks were never designed to change only
   one variable at a time, so neither confirms nor rules out either explanation on its own.
 
+<p align="center">
+  <img src="images/concurrency-threads8-percentile-crossover.png" width="70%" alt="ConcurrencyBenchmark @Threads(8) latency by percentile, this driver vs client-v2, showing the crossover from slower (mean-p99.9) to dramatically faster (p99.99-max)">
+</p>
+
 **Proposed control experiment, not yet built** (naming it explicitly rather than leaving the
 open question implicit, per this project's own benchmarking discipline): a
 `ConcurrencyBenchmark`-shaped variant — `@Threads(8)`, blocking calls on both sides, same
@@ -1410,6 +1421,37 @@ under blocking-style contention specifically) and would be worth a `-prof gc`/as
 before drawing conclusions, per the JMH tooling's own standing reminder about not reading numbers
 without asking why they are what they are. Not built in this session — a real decision for whoever
 picks this up next, not a small "while I'm in here" addition.
+
+---
+
+### `AggregationBenchmark` — the analytical aggregation shape, finally built (2026-08-19)
+
+The "Query mix" design section above named `SELECT category, count(), avg(amount),
+quantile(0.95)(amount) FROM t GROUP BY category ORDER BY count() DESC` back when this whole file
+was written and never got a benchmark class. Built now: `AggregationBenchmark`, reusing
+`PointQueryTable` (`id % 100` buckets the existing uniform `id` range into 100 groups — no new
+dataset class needed) instead of a literal `category` column, and casting `quantile`'s input
+explicitly (`quantile(0.95)(toFloat64(amount))`) so its wire type is pinned to `Float64` rather than
+left to whatever a given ClickHouse version returns for a `Decimal` input — see the class's own
+Javadoc for the full reasoning.
+
+Unlike every other benchmark on this page, the result set this one decodes is always small and
+fixed (100 rows) regardless of the `rows` tier — what scales with `rows` instead is how much
+server-side aggregation work ClickHouse does to produce it. That makes it a genuinely different
+shape from `StreamingScanBenchmark` (client-side decode cost scales with result size) or
+`PointQueryBenchmark` (fixed tiny everything): closer to "how much does small-result-set
+round-trip/decode overhead cost on top of a query whose *server* cost scales with input size,"
+which is what most real ClickHouse analytics queries actually look like.
+
+**Not yet compiled or run** — no JDK 21 in the environment that wrote it, same caveat as every
+other change made this way in this project. `getDouble(int)`/`getLong(int)` on
+`ClickHouseBinaryFormatReader` (via its `ClickHouseFormatReader` parent interface) were confirmed to
+exist by reading the actual mounted `clickhouse-java` source before use, not assumed — the one
+genuinely new client-v2 API surface this class exercises. Run it with:
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=AggregationBenchmark -Pjmh.forks=3 -Pjmh.warmupIterations=3
+```
 
 ---
 
@@ -1523,4 +1565,66 @@ understanding the investigation's own history, actively misleading if mistaken f
 performs today." **Kept in the summary table above with an explicit "never shipped" label for exactly
 this reason**, rather than deleted — the investigation log's own discipline is to keep the record, not
 to quietly drop numbers that don't fit the current story.
+
+---
+
+### Hot-path code review (2026-08-19) — what's tunable, what's already optimal
+
+A read-through of every class on the decode/transport hot path, driven by the explicit request to
+"thoroughly review the code and look for optimizations" now that this project is in its performance
+phase. Distinguishes genuinely open tuning candidates from paths already fixed by the H0/H1 work
+above — the point is not to re-litigate what's already been measured, but to check what hasn't been.
+
+**Two concrete, already-self-documented tuning candidates — neither benchmarked yet:**
+
+1. **`RowBinaryDecoder.RESPONSE_CHUNK_DEMAND = 4`** — how many upstream `ByteBuffer` chunks are
+   requested at a time from the transport `Flux`. The class's own Javadoc already flags this as a
+   placeholder: chosen for "a reasonable balance," never measured. A `-Pjmh.profilers=gc` sweep over
+   a few values (1, 4, 8, 16) against `StreamingScanBenchmark`'s 1M-row tier would show whether it
+   affects throughput/tail latency at all, or whether Reactor's own prefetch/backpressure machinery
+   already makes this a non-factor.
+2. **`RowDecodingScheduler.DEFAULT_WORKER_COUNT` (`availableProcessors()`) and
+   `DEFAULT_QUEUED_TASK_CAPACITY` (`10_000`)** — sizes the bounded scheduler every blocking
+   client-v2 decode call runs on (PR6). Same status as item 1: the class's own Javadoc calls both
+   values "unbenchmarked placeholders," explicitly deferred to this phase. `BoundedPoolConcurrencyBenchmark`
+   already exercises concurrent decode load, so re-running it with `RowDecodingScheduler.create(n, c)`
+   at a couple of alternate worker counts (e.g. `availableProcessors() * 2`) would answer this
+   directly without a new benchmark class.
+
+**Confirmed already optimal — no action, checked rather than assumed:**
+
+- **`ListDecodingRowBinaryReader#nextRowValues`** — one `Object[].clone()` per row plus client-v2's
+  own fixed `next()` cost. This is the exact path `DecoderOnlyBenchmark`'s "production path" 3-fork
+  numbers above measure (35–38% faster than client-v2), and its own Javadoc already documents why
+  the `clone()` is the minimum achievable cost given the decision not to depend on client-v2's
+  `.internal` package (Phase 0 boundary) — nothing found beyond what H1 already fixed.
+- **`ClickHouseRowMetadata`** — name→index resolution is a `HashMap<String, Integer>` built once in
+  the constructor (once per `Result`, not per row or per `get()` call); `ClickHouseRow.get(String,
+  Class)` and `getColumnMetadata(String)` both just call `indexOf(name)` against it. Already O(1)
+  per lookup with no re-derivation — confirmed by reading the class, not assumed from the Javadoc's
+  own claim.
+- **`ClickHouseHttpTransport.query`/`queryWithSummary`/`insertWithSummary`** — streamed via
+  `ByteBufFlux`/`Unpooled.wrappedBuffer`, no whole-body aggregation, no defensive copy of insert
+  data. Nothing found beyond the already-shipped design.
+
+**Minor, low-priority finding, not acted on:**
+
+- **`ClickHouseResult.map()`/`flatMap()` allocate one `ClickHouseRow` per row** (`flatMap`
+  additionally one `ClickHouseRowSegment` record per row). Not a bug: the underlying `DecodedRow`
+  payload each of these wraps is already the compact `Object[]` from the H1 redesign, so this is a
+  small, fixed per-row wrapper cost, not a copy of the row data itself — and `flatMap`'s per-row
+  `Publisher` creation is mandated by the R2DBC SPI's own `Function<Segment, Publisher<T>>` contract
+  (`Result.flatMap`), not something this driver can avoid while still implementing that interface
+  correctly. Noted here so it isn't re-discovered and mistaken for something actionable; not queued
+  as a work item.
+
+**Net effect on the open-items list:** items 1 and 2 above are new, concrete, benchmarkable tuning
+candidates — distinct from the still-open pool-matched `@Threads(8)` control experiment (a
+*measurement* gap) in that these are *parameter* gaps: the code already works, the only question is
+whether `4`/`availableProcessors()`/`10_000` are the right numbers. Both are cheap to test (re-run
+existing benchmarks with the constant changed, no new benchmark class needed) and were deliberately
+left as placeholders for exactly this phase, per their own Javadoc — this review's job was to
+confirm they're still the only two such placeholders left in the hot path, which, after reading
+`RowBinaryDecoder`, `DecodedRow`, `ClickHouseResult`, `ClickHouseRow`, `ClickHouseRowMetadata`,
+`RowDecodingScheduler`, `ListDecodingRowBinaryReader`, and `ClickHouseHttpTransport`, they are.
 
