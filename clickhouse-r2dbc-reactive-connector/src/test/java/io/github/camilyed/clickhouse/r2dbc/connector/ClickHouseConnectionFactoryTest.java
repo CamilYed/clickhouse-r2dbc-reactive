@@ -315,9 +315,9 @@ class ClickHouseConnectionFactoryTest {
   @Test
   void shouldAcceptAUserOptionWithNoAccompanyingPasswordOption() {
     // given - the real proof that this authenticates with an empty password, not the literal
-    // string "null", is ClickHouseConnectionFactoryAgainstRealClickHouseTest's
-    // shouldAuthenticateWithEmptyPasswordWhenUserIsPresentAndPasswordIsAbsent; this test only
-    // covers that building the factory itself doesn't blow up.
+    // string "null", is ClickHouseConnectionFactoryAuthenticationTest's
+    // shouldSendAnEmptyPasswordWhenUserIsPresentAndPasswordIsAbsent; this test only covers that
+    // building the factory itself doesn't blow up.
     final ConnectionFactoryOptions options =
         ConnectionFactoryOptions.builder()
             .option(ConnectionFactoryOptions.HOST, "localhost")
