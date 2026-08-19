@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
 import io.r2dbc.spi.Result;
@@ -31,10 +32,13 @@ import reactor.core.publisher.Flux;
 final class ClickHouseBatch implements Batch {
 
   private final ClickHouseHttpTransport transport;
+  private final RowDecodingScheduler decodingScheduler;
   private final List<String> statements = new ArrayList<>();
 
-  ClickHouseBatch(final ClickHouseHttpTransport transport) {
+  ClickHouseBatch(
+      final ClickHouseHttpTransport transport, final RowDecodingScheduler decodingScheduler) {
     this.transport = transport;
+    this.decodingScheduler = decodingScheduler;
   }
 
   // sql is declared non-null under this module's @NullMarked contract, but this overrides a
@@ -57,7 +61,7 @@ final class ClickHouseBatch implements Batch {
   private Publisher<ClickHouseResult> executeOne(final String sql) {
     return transport
         .queryWithSummary(ClickHouseQuery.of(sql))
-        .flatMap(ClickHouseResult::decode)
+        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler))
         .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 }

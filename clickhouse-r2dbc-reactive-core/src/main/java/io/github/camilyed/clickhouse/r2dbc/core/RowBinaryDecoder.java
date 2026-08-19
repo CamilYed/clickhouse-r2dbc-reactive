@@ -11,15 +11,17 @@ import java.util.List;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SynchronousSink;
-import reactor.core.scheduler.Schedulers;
+import reactor.core.scheduler.Scheduler;
 
 /**
  * Decodes a {@code RowBinaryWithNamesAndTypes} response body into rows.
  *
  * <p>Wraps client-v2's {@link RowBinaryWithNamesAndTypesFormatReader} — reused here only for
  * decoding, never for transport — around the blocking {@link FluxInputStreamBridge}. Reading a row
- * blocks the calling thread, so callers must subscribe on a dedicated worker, never on the
- * event-loop thread the source {@code Flux<ByteBuffer>} was produced on.
+ * blocks the calling thread; {@link #decode} moves that blocking work onto a caller-owned {@link
+ * RowDecodingScheduler} explicitly, rather than relying on whichever thread happens to be driving
+ * the subscription — see that method's Javadoc for exactly why "whichever thread happens to
+ * request" is not good enough here.
  *
  * <p>Uses {@link ListDecodingRowBinaryReader} rather than the base reader directly, so {@code
  * Array}/{@code Nested} columns decode as plain {@code List}s instead of client-v2's {@code
@@ -58,6 +60,14 @@ public final class RowBinaryDecoder {
 
   /**
    * Decodes {@code source} into rows, in wire column order. See {@link #decode} for name access.
+   *
+   * <p>Deliberately raw and synchronous — every blocking client-v2 call this method makes runs on
+   * whatever thread subscribes/requests, with no scheduler of its own, unlike {@link #decode}. Only
+   * safe against an already-in-memory or otherwise non-event-loop {@code source} (benchmarks, or a
+   * test feeding a hermetic {@code Flux.just(...)} directly); never call this against a source
+   * backed by a live Reactor Netty response the way the shipped connector's production path does —
+   * that path goes through {@link #decode}, not this method, specifically to get {@link
+   * RowDecodingScheduler}'s off-event-loop guarantee.
    */
   public static Flux<DecodedRow> decodeRows(final Flux<ByteBuffer> source) {
     return Flux.generate(() -> newReader(source), RowBinaryDecoder::emitNextRow);
@@ -68,18 +78,30 @@ public final class RowBinaryDecoder {
    * and one subscription to {@code source} — unlike {@link #decodeRows}, which discards the schema
    * client-v2 already reads off the wire before the first row.
    *
-   * <p>Constructing the reader blocks (it eagerly reads the {@code RowBinaryWithNamesAndTypes}
-   * header — see {@link ListDecodingRowBinaryReader}), so that construction runs on {@link
-   * Schedulers#boundedElastic()}, never on the caller's thread. For a real transport that thread is
-   * Reactor Netty's event loop; blocking it here would stall every other query sharing it.
+   * <p>Every blocking client-v2 call this method's result ever makes — constructing the reader
+   * (which eagerly reads the {@code RowBinaryWithNamesAndTypes} header, see {@link
+   * ListDecodingRowBinaryReader}) <b>and</b> every subsequent {@link
+   * ListDecodingRowBinaryReader#nextRowValues()} call the returned {@link DecodedResult#rows()}
+   * makes as it's consumed — runs on {@code scheduler}, never on the thread that happens to request
+   * the next row. For a real transport that thread is Reactor Netty's event loop; blocking it here
+   * would stall every other query sharing it. This is deliberately not just the reader-construction
+   * step: a {@code Flux.generate} source with no {@code subscribeOn} of its own runs its generator
+   * function on whatever thread calls {@code request()}, which — once the response headers have
+   * already arrived asynchronously — is the event-loop thread that delivered them, not the thread
+   * that originally subscribed. See {@link RowDecodingScheduler}'s Javadoc for who owns {@code
+   * scheduler} and disposes it.
    */
-  public static Mono<DecodedResult> decode(final Flux<ByteBuffer> source) {
+  public static Mono<DecodedResult> decode(
+      final Flux<ByteBuffer> source, final RowDecodingScheduler scheduler) {
+    final Scheduler reactorScheduler = scheduler.asReactorScheduler();
     return Mono.fromCallable(() -> newReader(source))
-        .subscribeOn(Schedulers.boundedElastic())
+        .subscribeOn(reactorScheduler)
         .map(
             reader ->
                 new DecodedResult(
-                    columnsOf(reader), Flux.generate(() -> reader, RowBinaryDecoder::emitNextRow)));
+                    columnsOf(reader),
+                    Flux.generate(() -> reader, RowBinaryDecoder::emitNextRow)
+                        .subscribeOn(reactorScheduler)));
   }
 
   private static List<ColumnDescriptor> columnsOf(final ListDecodingRowBinaryReader reader) {

@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.RetryPolicy;
@@ -23,12 +24,16 @@ import reactor.core.publisher.Mono;
  *
  * <p>Every {@link Connection} produced by {@link #create()} shares this factory's single {@link
  * ClickHouseHttpTransport} — and therefore its connection pool — rather than each opening its own.
+ * Every produced {@link Connection} likewise shares this factory's single {@link
+ * RowDecodingScheduler}, disposed together with this factory rather than recreated per connection —
+ * see that class's Javadoc for the full ownership contract.
  */
 public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
   private static final int DEFAULT_HTTP_PORT = 8123;
 
   private final ClickHouseHttpTransport transport;
+  private final RowDecodingScheduler decodingScheduler = RowDecodingScheduler.defaults();
 
   ClickHouseConnectionFactory(final ClickHouseHttpTransport transport) {
     this.transport = transport;
@@ -200,7 +205,7 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
   @Override
   public Mono<ClickHouseConnection> create() {
-    return Mono.fromSupplier(() -> new ClickHouseConnection(transport));
+    return Mono.fromSupplier(() -> new ClickHouseConnection(transport, decodingScheduler));
   }
 
   @Override

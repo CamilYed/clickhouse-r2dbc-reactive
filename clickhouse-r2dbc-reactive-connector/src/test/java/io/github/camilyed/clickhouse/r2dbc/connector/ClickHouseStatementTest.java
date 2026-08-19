@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.util.NoSuchElementException;
 import org.junit.jupiter.api.Test;
@@ -14,10 +15,15 @@ class ClickHouseStatementTest {
   private final ClickHouseHttpTransport transport =
       new ClickHouseHttpTransport("http://localhost:1");
 
+  // No decoding happens in any assertion below either - execute() only builds a lazy Publisher,
+  // never subscribed to here - so this scheduler is likewise never actually used.
+  private final RowDecodingScheduler decodingScheduler = RowDecodingScheduler.defaults();
+
   @Test
   void shouldAcceptBindingAKnownNamedParameter() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when
     final Object returned = statement.bind("id", 5);
@@ -29,7 +35,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingAnUnknownNamedParameter() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(() -> statement.bind("missing", 5))
@@ -39,7 +46,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingANullValueByName() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(() -> statement.bind("id", null))
@@ -49,7 +57,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingANullValueByIndex() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(() -> statement.bind(0, null)).isInstanceOf(IllegalArgumentException.class);
@@ -59,7 +68,7 @@ class ClickHouseStatementTest {
   void shouldBindByIndexInFirstOccurrenceOrder() {
     // given
     final ClickHouseStatement statement =
-        new ClickHouseStatement(transport, "SELECT {b:String}, {a:UInt32}");
+        new ClickHouseStatement(transport, "SELECT {b:String}, {a:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(() -> statement.bind(2, "out of range"))
@@ -70,7 +79,7 @@ class ClickHouseStatementTest {
   void shouldAcceptBindingNullToAKnownNamedParameter() {
     // given
     final ClickHouseStatement statement =
-        new ClickHouseStatement(transport, "SELECT {id:Nullable(UInt32)}");
+        new ClickHouseStatement(transport, "SELECT {id:Nullable(UInt32)}", decodingScheduler);
 
     // when
     final Object returned = statement.bindNull("id", Integer.class);
@@ -82,7 +91,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingNullToAnUnknownNamedParameter() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(() -> statement.bindNull("missing", Integer.class))
@@ -92,7 +102,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingNullWithoutATypeByIndex() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(() -> statement.bindNull(0, null))
@@ -102,7 +113,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectBindingNullWithoutATypeByName() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(() -> statement.bindNull("id", null))
@@ -112,7 +124,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectExecutingWithUnboundDeclaredParameters() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(statement::execute).isInstanceOf(IllegalStateException.class);
@@ -121,7 +134,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldRejectAddingABindingSetWithUnboundDeclaredParameters() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
 
     // when / then
     assertThatThrownBy(statement::add).isInstanceOf(IllegalStateException.class);
@@ -130,7 +144,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldAcceptAddingABindingSetOnceAllParametersAreBound() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
     statement.bind("id", 1);
 
     // when
@@ -143,7 +158,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldStartAFreshBindingSetAfterAdd() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
     statement.bind("id", 1);
     statement.add();
 
@@ -156,7 +172,8 @@ class ClickHouseStatementTest {
   @Test
   void shouldAllowExecutingAfterAddOnceTheTrailingSetIsAlsoFullyBound() {
     // given
-    final ClickHouseStatement statement = new ClickHouseStatement(transport, "SELECT {id:UInt32}");
+    final ClickHouseStatement statement =
+        new ClickHouseStatement(transport, "SELECT {id:UInt32}", decodingScheduler);
     statement.bind("id", 1);
     statement.add();
     statement.bind("id", 2);

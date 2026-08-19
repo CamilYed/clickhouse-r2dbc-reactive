@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
 import io.r2dbc.spi.Connection;
@@ -51,11 +52,21 @@ public final class ClickHouseConnection implements Connection {
       "ClickHouse does not support transactions";
 
   private final ClickHouseHttpTransport transport;
+  private final RowDecodingScheduler decodingScheduler;
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private @Nullable Duration statementTimeout;
 
-  ClickHouseConnection(final ClickHouseHttpTransport transport) {
+  /**
+   * {@code decodingScheduler} is shared, unchanged, with every {@link Statement}/{@link Batch} this
+   * connection creates — owned by, and disposed together with, the {@code
+   * ClickHouseConnectionFactory} that created this connection, exactly like {@code transport} and
+   * its underlying connection pool already are (see this class's own Javadoc). See {@link
+   * RowDecodingScheduler}'s Javadoc for the full ownership contract.
+   */
+  ClickHouseConnection(
+      final ClickHouseHttpTransport transport, final RowDecodingScheduler decodingScheduler) {
     this.transport = transport;
+    this.decodingScheduler = decodingScheduler;
   }
 
   @Override
@@ -81,7 +92,7 @@ public final class ClickHouseConnection implements Connection {
   @Override
   public Batch createBatch() {
     requireOpen();
-    return new ClickHouseBatch(transport);
+    return new ClickHouseBatch(transport, decodingScheduler);
   }
 
   @Override
@@ -98,7 +109,7 @@ public final class ClickHouseConnection implements Connection {
       throw new IllegalArgumentException("sql must not be null");
     }
     requireOpen();
-    return new ClickHouseStatement(transport, sql, statementTimeout);
+    return new ClickHouseStatement(transport, sql, statementTimeout, decodingScheduler);
   }
 
   @Override

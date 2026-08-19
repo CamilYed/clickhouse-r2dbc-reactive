@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.R2dbcException;
@@ -24,7 +25,10 @@ class ClickHouseStatementErrorMappingTest {
     try (final var server =
         ControlledClickHouseServer.startRespondingWithClickHouseError(60, "Table not found", 404)) {
       final var statement =
-          new ClickHouseStatement(new ClickHouseHttpTransport(server.baseUrl()), "SELECT 1");
+          new ClickHouseStatement(
+              new ClickHouseHttpTransport(server.baseUrl()),
+              "SELECT 1",
+              RowDecodingScheduler.defaults());
 
       // when
       final Throwable thrown =
