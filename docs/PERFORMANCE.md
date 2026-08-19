@@ -132,7 +132,7 @@ built.
 > | Hot-path code review — **done** (2026-08-19): every class on the decode/transport hot path read; two tunable-but-unbenchmarked constants confirmed as the only open placeholders, everything else confirmed already optimal (see below) | Benchmark `RESPONSE_CHUNK_DEMAND` (1/4/8/16) and `RowDecodingScheduler` worker count/queue capacity — both self-documented placeholders, neither tuned with real measurements yet |
 > | Second-opinion review cross-checked against the code (2026-08-19) — 8 new findings confirmed real by reading the source, best current lead for the `ConcurrencyBenchmark` regression (see below) | Benchmark the `ByteBuf` copy fix, `ListDecodingRowBinaryReader` schema/hint caching, `Authentication.Basic` precomputed header, `FluxInputStreamBridge` queue swap — none built yet |
 > | Two correctness/security bugs fixed and merged (2026-08-19): `FluxInputStreamBridge#read(len=0)` contract, `Authentication`/`TransportOptions` `toString()` credential leak | |
-> | **NOOP observability fast path — built (2026-08-19), not yet benchmarked.** `DriverObservationListener#isEnabled()` added; `QueryObservation`/`ClickHouseResult.decode`/`Connection.insertStreaming` skip fingerprinting, timestamping, and per-chunk/per-row counters entirely when disabled, instead of computing and discarding them. See the dedicated section below. | Run `PublicApiPointQueryBenchmark` (below) — the first "Level 2: Public R2DBC SPI" benchmark this suite has ever had, built specifically to measure this fix, since every existing benchmark bypasses the `connector` module entirely (see the correction box below) |
+> | **NOOP observability fast path — built and 3-fork benchmarked (2026-08-19) via the new `PublicApiPointQueryBenchmark`.** Confirmed: ~4.3% less allocation, 24% fewer GC events, ~34% less GC time. **Not confirmed:** any point-query latency win — this workload is network-round-trip-bound, so GC savings don't show up at the latency level. First-ever "Level 2" number logged too: this driver is ~5.2% slower than client-v2 on mean latency but allocates ~3.97× less. See the dedicated section below. | Test whether the allocation win shows up as a latency win under concurrency/burst instead of a single point query — `BoundedPoolConcurrencyBenchmark`'s territory, not yet tried with observation on/off |
 > | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
 > | Performance charts — added to this file and to the main `README.md` (2026-08-14) | |
 > | Machine spec (CPU/RAM/OS) — filled in (2026-08-14): Apple M3 Pro, 36 GB, macOS | |
@@ -1663,7 +1663,7 @@ uses against `PointQueryTable`):
   file's own design always said it should: what does a real consumer of this driver pay, R2DBC-shape
   translation included, relative to client-v2's own API.
 
-Not yet run — no JDK 21 in the environment that built this class. Run command:
+Run command:
 
 ```
 caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=PublicApiPointQueryBenchmark -Pjmh.forks=3 -Pjmh.warmupIterations=3 -Pjmh.profilers=gc
@@ -1673,6 +1673,46 @@ caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.inclu
 `DecoderOnlyBenchmark`'s `-prof gc` run was) since the whole point of this benchmark is measuring an
 allocation-shaped cost (`SqlFingerprint`/`Instant`/event-record construction) — sample-time deltas
 alone would show *that* something changed but not *why*.
+
+#### Run for real (2026-08-19, 3 forks × 3 warmup/measurement iterations, `-prof gc`)
+
+| | mean (µs/op) | B/op | GC events | GC time (ms, summed over 9 samples) |
+| --- | --- | --- | --- | --- |
+| `clientV2` | 1141.4 | 95,313 | 90 | 52 |
+| `ourDriverEnabledObservation` | 1194.0 | 25,109 | 25 | 38 |
+| `ourDriverNoopObservation` | 1201.1 | 24,028 | 19 | 25 |
+
+**The allocation win is real and confirmed; the latency win is not — and that's a legitimate result,
+not a failed one, once the workload is understood.**
+
+- **NOOP vs. enabled observation, isolating `ActiveQueryObservation`'s own cost:** allocation drops
+  ~4.3% (25,109 → 24,028 B/op), GC event count drops 24% (25 → 19 across the 9 sampled
+  iterations), GC time drops ~34% (38ms → 25ms). All three point the same direction and are
+  consistent with what the fix does — skip `SqlFingerprint`/`Instant.now()`/event-record
+  construction entirely instead of building and discarding it. **Mean latency did not improve** —
+  `ourDriverNoopObservation` (1201.1µs) was actually ~0.6% *slower* than
+  `ourDriverEnabledObservation` (1194.0µs), a difference inside noise but nominally the wrong
+  direction, not the right one. Read honestly rather than explained away: this benchmark's ~1.2ms
+  per-op cost is a real network round trip to a real ClickHouse container; the entire GC time this
+  fix saves (13ms) is spent across roughly 75,000 operations each taking ~1.2ms — i.e., on the order
+  of 90 *seconds* of total measured wall time per benchmark. 13ms saved out of ~90,000ms is
+  statistically invisible at the latency level even though it's a real, measurable allocation
+  reduction. **This workload is network-round-trip-bound, not allocation/GC-bound** — the fix does
+  exactly what it was built to do, it just doesn't show up as a point-query latency win, and this
+  benchmark shape was never going to be the one to show it. A concurrency/burst shape (many
+  in-flight queries sharing a bounded pool, `BoundedPoolConcurrencyBenchmark`'s territory) or a
+  high-QPS scenario where GC pressure itself becomes a scheduling factor is a more honest place to
+  look for a latency-level effect, if one exists at all.
+- **First-ever "Level 2" number: this driver vs. client-v2 through the public API.**
+  `ourDriverNoopObservation` is ~5.2% slower than `clientV2` on mean latency (1201.1µs vs.
+  1141.4µs) for this single-row parameterized lookup — the R2DBC-shape translation cost this level
+  was designed to measure, now actually measured for the first time. Allocation tells the opposite
+  story just as clearly: this driver allocates ~3.97× less per operation than client-v2 (24,028
+  B/op vs. 95,313 B/op) and triggers roughly 4.7× fewer GC events (19 vs. 90). Not yet investigated
+  further — a single point-query run doesn't say whether the ~5.2% gap is connection-factory
+  overhead, R2DBC `Row`/`RowMetadata` wrapper allocation (`ClickHouseRow`/`ClickHouseRowSegment`,
+  already flagged as a low-priority finding above), or something else in the SPI translation path;
+  logged here as the first real Level 2 data point, not a conclusion.
 
 ---
 
