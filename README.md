@@ -252,7 +252,7 @@ Every number below is from a real ClickHouse server (Testcontainers), 3-JMH-fork
 | Scenario | Result |
 | --- | --- |
 | Full table scan (10k/100k/1M rows) | 🟢 8–21% faster mean, at every tier tested |
-| Decode cost alone, no network (production decode path) | 🟢 22–38% faster mean — the clearest architectural win in the whole suite |
+| Decode cost alone, no network (production decode path) | 🟡 mixed as of the latest (2026-08-19) re-run: 14–18% lower latency at 10k/1M rows, ~4% higher at 100k rows — the earlier "22–38% lower" figure was measured against `client-v2:0.9.0`; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for both runs side by side and why the divergence looks like a `client-v2` version effect, not a regression in this driver |
 | Matched 8-connection pool, 8/32/128 concurrent async queries | 🟢 ~5–6% faster mean, consistent at every concurrency level |
 | Single-row point lookup / `SELECT 1` floor | 🟢 6–7% faster mean |
 

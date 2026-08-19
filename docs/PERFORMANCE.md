@@ -65,7 +65,7 @@ reruns below), so treat single-fork rows as a first signal, not a final answer.
 | `StreamingScanBenchmark` @ 10k rows | Full scan, small | 🟢 this driver ~9.7% faster (mean) | **3-fork confirmed (2026-08-14)** |
 | `StreamingScanBenchmark` @ 100k rows | Full scan, medium | 🟢 this driver ~21.0% faster (mean) | **3-fork confirmed (2026-08-14)** |
 | `StreamingScanBenchmark` @ 1M rows | Full scan, large | 🟢 this driver ~8.3% faster (mean/p50–p99) — 🟡 p99.9/max spiked to 387ms vs client-v2's 164ms, traced to 3–4 outlier samples in one of three forks, not a reproducible pattern | **3-fork confirmed (2026-08-14)** — see the dedicated section below before trusting the tail number either way |
-| `DecoderOnlyBenchmark`, production path (`ourDriver`) | Raw decode cost, no network, **current shipped code** (`RowBinaryDecoder`/`DecodedRow`) | 🟢 this driver ~35% faster @ 10k, ~22% faster @ 100k, ~38% faster @ 1M | **3-fork confirmed (2026-08-14)** — answers the open question the row below left hanging |
+| `DecoderOnlyBenchmark`, production path (`ourDriver`) | Raw decode cost, no network, **current shipped code** (`RowBinaryDecoder`/`DecodedRow`) | 🟢 this driver ~35% lower latency @ 10k, ~22% lower @ 100k, ~38% lower @ 1M | **3-fork confirmed (2026-08-14)** — answers the open question the row below left hanging. **Re-run 2026-08-19 against client-v2 0.9.8 (was 0.9.0) diverges at 100k — see the dedicated section near the end of this file before quoting either run in isolation.** |
 | `DecoderOnlyBenchmark`, H1/H2 diagnostic variants (`ourDriverCompactRow`, `compactRowDirectLoop`, `compactRowFluxNoBridge`) | An earlier, since-superseded decode strategy considered during the redesign, kept only for the H1/H2 investigation's own record | 🔴 4–28% slower than client-v2 — **describes a path that was never shipped**, not the driver you get today | 3-fork confirmed (2026-08-13/14) — historical, see the H2 section |
 | `ConcurrencyBenchmark` `@Threads(8)`, mean → p99.9 | 8 concurrent threads, blocking, both sides' *default* (unmatched) pools | 🔴 ~6% slower (mean), degrading to ~16% slower at p99, still ~5% slower at p99.9 | **3-fork confirmed (2026-08-19)** — direction and shape reproduced, see below; root cause (blocking callers vs. unmatched pools — two variables, not isolated) still open |
 | `ConcurrencyBenchmark` `@Threads(8)`, p99.99 → max | Same run, extreme tail | 🟢 ~3% faster at p99.99, ~56% faster at max | **3-fork confirmed (2026-08-19)** — crossover point moved from p99.9 (single-fork run) to between p99.9 and p99.99 |
@@ -130,7 +130,8 @@ built.
 > | `AggregationBenchmark` — **built** (2026-08-19): the "analytical aggregation" query shape (`GROUP BY` + `count()`/`avg()`/`quantile()`), designed since the first Phase 5 write-up, finally has a benchmark class | Wide multi-type decode / INSERT benchmarks — still designed, not built |
 > | `ConcurrencyBenchmark` `@Threads(8)` — **3-fork confirmed** (2026-08-19): mean→p99.9 regression and tail crossover both reproduced, not single-run noise; root cause still not isolated (see above) | Netty leak-detection lane (Phase 7 item 6) — never actually built, see ROADMAP.md's Definition of done |
 > | Hot-path code review — **done** (2026-08-19): every class on the decode/transport hot path read; two tunable-but-unbenchmarked constants confirmed as the only open placeholders, everything else confirmed already optimal (see below) | Benchmark `RESPONSE_CHUNK_DEMAND` (1/4/8/16) and `RowDecodingScheduler` worker count/queue capacity — both self-documented placeholders, neither tuned with real measurements yet |
-> | Second-opinion review cross-checked against the code (2026-08-19) — 8 new findings confirmed real by reading the source, best current lead for the `ConcurrencyBenchmark` regression (see below) | Benchmark the `ByteBuf` copy fix, `ListDecodingRowBinaryReader` schema/hint caching, `Authentication.Basic` precomputed header, `FluxInputStreamBridge` queue swap — none built yet |
+> | Second-opinion review cross-checked against the code (2026-08-19) — 8 new findings confirmed real by reading the source, best current lead for the `ConcurrencyBenchmark` regression (see below) | Benchmark the `ByteBuf` copy fix, `Authentication.Basic` precomputed header, `FluxInputStreamBridge` queue swap — none built yet |
+> | `ListDecodingRowBinaryReader` schema/hint caching (finding 4) — fixed and **3-fork benchmarked** (2026-08-19): correct, low-risk, win at 10k/100k/1M scale small/mixed rather than decisive — see dedicated section near the end of this file | |
 > | Two correctness/security bugs fixed and merged (2026-08-19): `FluxInputStreamBridge#read(len=0)` contract, `Authentication`/`TransportOptions` `toString()` credential leak | |
 > | **NOOP observability fast path — built and 3-fork benchmarked (2026-08-19) via the new `PublicApiPointQueryBenchmark`.** Confirmed: ~4.3% less allocation, 24% fewer GC events, ~34% less GC time. **Not confirmed:** any point-query latency win — this workload is network-round-trip-bound, so GC savings don't show up at the latency level. First-ever "Level 2" number logged too: this driver is ~5.2% slower than client-v2 on mean latency but allocates ~3.97× less. See the dedicated section below. | Test whether the allocation win shows up as a latency win under concurrency/burst instead of a single point query — `BoundedPoolConcurrencyBenchmark`'s territory, not yet tried with observation on/off |
 > | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
@@ -1847,4 +1848,68 @@ open items above.
 > warmup constant by comparing two connections that differ in exactly `isEnabled()`). Left here
 > rather than silently edited away, per this file's own stated discipline of keeping the
 > investigation's record intact.
+
+---
+
+### `ListDecodingRowBinaryReader` schema/hint caching, run for real (2026-08-19)
+
+Finding 4 from the second-opinion review above (`ListDecodingRowBinaryReader#readRecord` re-fetching
+`getSchema().getColumns()` and recomputing `listHintFor()` for every column of every row — R × C
+repeated work for an answer that is fixed for the whole result) is now fixed and benchmarked, not just
+read-and-flagged. The fix (`columns()`/`listHints()`, each computed once on first call and cached on
+the reader instance for the rest of the result — see the class's own Javadoc) is a pure refactor: no
+behavior change, so it is covered by the existing `RowBinaryDecoder`/`RealWorldTableAgainstRealClickHouseTest`
+correctness tests rather than a new test, per CLAUDE.md's TDD workflow (the "refactor" step under
+already-green tests, not a new red-green cycle).
+
+`DecoderOnlyBenchmark` re-run, 3-fork confirmed (`forks: 3, warmupIterations: 1, measurementIterations: 3`
+read directly out of `results.json`). `ourDriver` mean latency, in ms:
+
+| rows | client-v2 mean | `ourDriver` (production) mean | verdict |
+| --- | --- | --- | --- |
+| 10,000 | 0.60 | 0.52 | **13.9% lower latency** |
+| 100,000 | 5.84 | 6.05 | **3.6% higher latency** |
+| 1,000,000 | 63.51 | 51.84 | **18.4% lower latency** |
+
+<p align="center">
+  <img src="images/decoder-only-mean-latency-2026-08-19.png" width="70%" alt="DecoderOnlyBenchmark production decode path mean latency by row count, this driver vs client-v2, 2026-08-19 rerun">
+</p>
+
+**Read this against the 2026-08-14 baseline above, not in isolation — the comparison is more
+informative than either run alone:**
+
+| rows | 2026-08-14 client-v2 | 2026-08-14 `ourDriver` | 2026-08-14 verdict | 2026-08-19 client-v2 | 2026-08-19 `ourDriver` | 2026-08-19 verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 0.78 ms | 0.51 ms | 35.2% lower | 0.60 ms | 0.52 ms | 13.9% lower |
+| 100,000 | 7.40 ms | 5.74 ms | 22.5% lower | 5.84 ms | 6.05 ms | 3.6% higher |
+| 1,000,000 | 83.33 ms | 51.89 ms | 37.7% lower | 63.51 ms | 51.84 ms | 18.4% lower |
+
+Two things stand out, and only one of them is actually about the caching fix this section is nominally
+about:
+
+- **`ourDriver`'s own numbers barely moved** (506.6→517.2µs, 5737.9→6053.7µs, 51885.7→51841.8µs across
+  the three tiers) — consistent with the caching fix being real but small at these row counts: it
+  removes R×C redundant lookups, but `getSchema().getColumns()`/`listHintFor()` were themselves cheap,
+  non-allocating, non-I/O calls, so the win doesn't show up as a clear step change against run-to-run
+  noise at this scale. Not a negative result — the fix is still correct, low-risk, and removes real
+  repeated work — just not the dominant cost at these tiers, unlike H1's `LinkedHashMap`-per-row cost
+  (2026-08-13/14), which was.
+- **client-v2's own numbers dropped substantially** (782.3→600.6µs, 7399.6→5842.5µs,
+  83325.8→63511.2µs) — a 20–24% drop at every tier, on the *other* driver's code, which this change did
+  not touch. The 100k-tier reversal (this driver was 22.5% lower latency on 2026-08-14, now 3.6%
+  higher) is explained entirely by this client-v2-side movement, not by any regression in `ourDriver`.
+
+**Hypothesis, not yet confirmed:** this session also merged PR0 (task #163 — bumping the pinned
+`com.clickhouse:client-v2` dependency from 0.9.0 to 0.9.8, plus Dependabot PRs) before this benchmark
+run; the main README's Performance section still documents its numbers as measured "against
+`com.clickhouse:client-v2:0.9.0`." A client-v2 version bump landing between the 2026-08-14 and
+2026-08-19 runs is a plausible explanation for client-v2's own numbers moving while this driver's
+didn't — but this run alone doesn't prove it; nothing here isolates the dependency bump from any other
+change on `main` between the two dates. Confirming it would mean re-running `DecoderOnlyBenchmark`
+against a checkout pinned back to client-v2 0.9.0, which hasn't been done. Left here as the best
+current lead, not a conclusion.
+
+**Verdict for task #196:** fix confirmed correct and low-risk; benchmark win at this scale small and
+mixed rather than decisive; the run surfaced a more interesting open question (client-v2's own latency
+shift between pinned versions) than the one it set out to answer.
 
