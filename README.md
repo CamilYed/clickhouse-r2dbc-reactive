@@ -245,24 +245,26 @@ Every number below is from a real ClickHouse server (Testcontainers), 3-JMH-fork
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 <p align="center">
-  <img src="docs/images/streaming-scan-mean-latency.png" width="32%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
+  <img src="docs/images/streaming-scan-mean-latency-2026-08-19.png" width="32%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2, 2026-08-19 re-run">
   <img src="docs/images/bounded-pool-concurrency-mean-latency.png" width="32%" alt="BoundedPoolConcurrencyBenchmark mean latency by concurrency level, this driver vs client-v2">
   <img src="docs/images/decoder-only-mean-latency-2026-08-19.png" width="32%" alt="DecoderOnlyBenchmark production decode path mean latency by row count, this driver vs client-v2, 2026-08-19 re-run">
 </p>
 
 | Scenario | Result |
 | --- | --- |
-| Full table scan (10k/100k/1M rows) | 🟢 8–21% faster mean, at every tier tested |
+| Full table scan (10k/100k/1M rows) | 🟡 mixed as of the latest (2026-08-19) re-run: 12.3% lower latency at 10k, 3.9% lower at 100k, **17.4% higher at 1M** — the earlier "8–21% lower" figure was measured against `client-v2:0.9.0`; this driver's own latency barely moved between runs, client-v2 got substantially faster at 100k/1M. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for both runs side by side |
 | Decode cost alone, no network (production decode path) | 🟡 mixed as of the latest (2026-08-19) re-run: 14–18% lower latency at 10k/1M rows, ~4% higher at 100k rows — the earlier "22–38% lower" figure was measured against `client-v2:0.9.0`; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for both runs side by side and why the divergence looks like a `client-v2` version effect, not a regression in this driver |
 | Matched 8-connection pool, 8/32/128 concurrent async queries | 🟢 ~5–6% faster mean, consistent at every concurrency level |
 | Single-row point lookup / `SELECT 1` floor | 🟢 6–7% faster mean |
 
-**The one open item worth knowing about before trusting the tail:** at 1M rows, one JMH fork (of
-three) produced a handful of outlier samples that spike this driver's p99.9/max — traced to 3–4
-samples out of ~657, isolated to that one fork, not reproduced in the other two. Mean/p50–p99 are
-unaffected and win cleanly. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#are-we-faster-than-client-v2--read-this-first)
-for the full breakdown, every percentile, and the raw per-fork evidence — this project's whole
-culture is "measure, don't assume," so the doc keeps the messy parts in, not just the wins.
+**The 1M-row tail is no longer a one-off.** Earlier runs traced a p99.9/max spike to a handful of
+outlier samples in a single JMH fork (of three) and left it as "not yet a reproduced pattern." Two
+more independent 3-fork runs on 2026-08-19 reproduced essentially the same spike (~350–420ms band)
+again, alongside a new finding: this driver triggers noticeably more GC events than client-v2 at the
+100k/1M tiers despite allocating fewer total bytes — a plausible but unconfirmed contributor to the
+tail. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#are-we-faster-than-client-v2--read-this-first)
+for the full breakdown, every percentile, and the raw evidence — this project's whole culture is
+"measure, don't assume," so the doc keeps the messy parts in, not just the wins.
 
 ## Known limitations
 
