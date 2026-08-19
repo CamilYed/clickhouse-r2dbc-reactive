@@ -122,7 +122,7 @@ built.
 >
 > | Done | Open |
 > | --- | --- |
-> | H0 (`byte[1]` alloc) — fixed, confirmed | `TransportOnlyStreamingBenchmark -prof gc` to isolate whether the new GC-event-count anomaly (below) lives in transport or decode |
+> | H0 (`byte[1]` alloc) — fixed, confirmed | Isolate the still-unexplained `StreamingScanBenchmark` 1M full-pipeline regression (transport alone still wins by ~46% at 1M, so it's not explained by transport — likely decode, scheduler handoff, or combined GC pressure) |
 > | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | A pool-matched `@Threads(8)` control experiment to isolate whether `ConcurrencyBenchmark`'s regression is caused by blocking callers or by unmatched pools (currently both variables differ at once — see 2026-08-19 section) |
 > | `DecodedRow` redesign — **3-fork confirmed** (2026-08-14): `StreamingScanBenchmark` and `DecoderOnlyBenchmark`'s production path both beat `clientV2` at all three tiers | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
 > | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Widen `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes/concurrency levels) |
@@ -132,7 +132,8 @@ built.
 > | Hot-path code review — **done** (2026-08-19): every class on the decode/transport hot path read; two tunable-but-unbenchmarked constants confirmed as the only open placeholders, everything else confirmed already optimal (see below) | Benchmark `RESPONSE_CHUNK_DEMAND` (1/4/8/16) and `RowDecodingScheduler` worker count/queue capacity — both self-documented placeholders, neither tuned with real measurements yet |
 > | Second-opinion review cross-checked against the code (2026-08-19) — 8 new findings confirmed real by reading the source, best current lead for the `ConcurrencyBenchmark` regression (see below) | Benchmark the `ByteBuf` copy fix, `Authentication.Basic` precomputed header, `FluxInputStreamBridge` queue swap — none built yet |
 > | `ListDecodingRowBinaryReader` schema/hint caching (finding 4) — fixed and **3-fork benchmarked** (2026-08-19): correct, low-risk, win at 10k/100k/1M scale small/mixed rather than decisive — see dedicated section near the end of this file | |
-> | `StreamingScanBenchmark -prof gc` — **3-fork confirmed** (2026-08-19), first `-prof gc` pass ever run on this benchmark: closes the "1M tail spike needs `-prof gc`" item from this box's own history. Found a new GC-event-count anomaly (`ourDriver` allocates fewer total bytes but triggers far more GC events than client-v2 at 100k/1M) and reproduced the 1M tail spike a second and third time — no longer plausibly one noisy fork. Task #195 (the `ByteBuf` copy) not yet implemented; this run didn't cleanly isolate its share of the anomaly. See dedicated section near the end of this file | |
+> | `StreamingScanBenchmark -prof gc` — **3-fork confirmed** (2026-08-19), first `-prof gc` pass ever run on this benchmark: closes the "1M tail spike needs `-prof gc`" item from this box's own history. Found a new GC-event-count anomaly and reproduced the 1M tail spike a second and third time — no longer plausibly one noisy fork | |
+> | `TransportOnlyStreamingBenchmark -prof gc` — **3-fork confirmed** (2026-08-19): isolates transport from decode. Transport alone wins decisively at every tier (43.6–46.1% lower latency) even at 1M — so the full-pipeline 1M regression is **not** a transport problem. But the GC-event-count anomaly reproduces here too, and `ourDriver`'s B/row stays flat with scale while client-v2's shrinks — task #195's copy is now judged **material**, not deferred. Per the "measure first" plan, the next step is proposing a zero-copy ownership design for review, not implementing `asByteBuffer()`/`retain()` directly | Propose the `OwnedBuffer`-style retain/release design for #195 (review required before any production code); isolate the still-open 1M full-pipeline regression (transport doesn't explain it) |
 > | Two correctness/security bugs fixed and merged (2026-08-19): `FluxInputStreamBridge#read(len=0)` contract, `Authentication`/`TransportOptions` `toString()` credential leak | |
 > | **NOOP observability fast path — built and 3-fork benchmarked (2026-08-19) via the new `PublicApiPointQueryBenchmark`.** Confirmed: ~4.3% less allocation, 24% fewer GC events, ~34% less GC time. **Not confirmed:** any point-query latency win — this workload is network-round-trip-bound, so GC savings don't show up at the latency level. First-ever "Level 2" number logged too: this driver is ~5.2% slower than client-v2 on mean latency but allocates ~3.97× less. See the dedicated section below. | Test whether the allocation win shows up as a latency win under concurrency/burst instead of a single point query — `BoundedPoolConcurrencyBenchmark`'s territory, not yet tried with observation on/off |
 > | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
@@ -2011,4 +2012,80 @@ implicated and #195's zero-copy design becomes better-justified. If it does not,
 in decode (`RowBinaryDecoder`/`ListDecodingRowBinaryReader`/`DecodedRow` construction), and #195 is
 very likely not the fix for it. **Not yet run** — the concrete next step, same as 2026-08-14 left one
 open for this exact tail spike.
+
+---
+
+### `TransportOnlyStreamingBenchmark` `-prof gc`, 3-fork (2026-08-19) — isolating transport from decode
+
+The proposed next step from the section above, now run:
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  --rerun-tasks \
+  -Pjmh.includes=".*TransportOnlyStreamingBenchmark.*" \
+  -Pjmh.profilers=gc \
+  -Pjmh.forks=3 \
+  -Pjmh.warmupIterations=3
+```
+
+`TransportOnlyStreamingBenchmark` exercises exactly the `ByteBuf`→`byte[]`→`ByteBuffer` conversion
+(`response.body().asByteArray().map(ByteBuffer::wrap)`) with no `RowBinaryDecoder`/`DecodedRow`
+construction after it — the cleanest available isolation of what #195 would actually change.
+
+| rows | client-v2 mean | ourDriver mean | verdict | client-v2 B/op | ourDriver B/op | client-v2 B/row | ourDriver B/row | client-v2 GC events | ourDriver GC events | client-v2 GC time | ourDriver GC time |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 2.24 ms | 1.26 ms | **43.6% lower latency** | 509,587 | 285,372 | 51.0 | 28.5 | 164 | 204 | 95 ms | 111 ms |
+| 100,000 | 8.50 ms | 4.65 ms | **45.4% lower latency** | 2,577,016 | 2,829,240 | 25.8 | 28.3 | 310 | 378 | 99 ms | 230 ms |
+| 1,000,000 | 27.00 ms | 14.54 ms | **46.1% lower latency** | 16,470,780 | 29,173,956 | 16.5 | 29.2 | 548 | 786 | 169 ms | 362 ms |
+
+<p align="center">
+  <img src="images/transport-only-mean-latency-2026-08-19.png" width="70%" alt="TransportOnlyStreamingBenchmark mean latency by row count, this driver vs client-v2, 2026-08-19">
+</p>
+
+**Two findings, and they point in different directions — worth keeping separate rather than
+collapsing into one headline.**
+
+**1. Transport-layer latency is a decisive, un-eroded win at every tier (43.6% / 45.4% / 46.1%
+lower), including at 1M rows.** This matters specifically because the full `StreamingScanBenchmark`
+*lost* by 17.4% at 1M in the section above — and this result shows that loss cannot be explained by
+the transport layer, since transport alone still wins by a wide margin at the same tier. Whatever
+causes the full-pipeline 1M regression lives in decode, in the coordination between transport and
+decode (the `RowDecodingScheduler` handoff, queueing, backpressure under real concurrent I/O — none
+of which either isolated benchmark exercises, since `DecoderOnlyBenchmark` replays captured bytes
+from memory with no threading handoff and this benchmark has no decode at all), or in combined GC
+pressure from both allocation sources landing on the same JVM at once. **Not yet isolated further —
+a distinct open question from #195, not the same one.**
+
+**2. The copy's allocation behavior does not scale the way client-v2's does, and #195 is now better
+justified.** Converting `B/op` (total per full-scan invocation) to `B/row` makes the shape clear:
+client-v2's own bytes/row *shrinks* as row count grows (51.0 → 25.8 → 16.5 B/row, 10k→100k→1M) —
+consistent with some fixed-size overhead being amortized over more rows as the scan gets longer.
+`ourDriver`'s bytes/row stays essentially flat (28.5 → 28.3 → 29.2 B/row) — consistent with a
+per-chunk `asByteArray()` copy that costs the same marginal amount regardless of scale, with no
+equivalent amortization. The practical result: `ourDriver` allocates *less* in total at 10k (44.0%
+less) but *more* in total at 100k and 1M (9.8% more, 77.1% more) — a real crossover, not noise, since
+the same `-prof gc` counters that produced it are internally consistent with the GC-event-count
+pattern below. **This is the material-cost signal the "measure first" plan for #195 asked for:** the
+copy's cost doesn't disappear at scale the way it does for the comparison baseline, and it shows up
+as more, smaller allocations rather than one that shrinks proportionally.
+
+**3. The GC-event-count anomaly from the `StreamingScanBenchmark` section above reproduces here too,
+in the transport layer alone, with no decode involved at all.** `ourDriver` triggers more GC events
+than client-v2 at every tier now (24.4% more at 10k, 21.9% more at 100k, 43.4% more at 1M), and GC
+time is dramatically higher at 100k/1M specifically (132.3% more, 114.2% more) — even at 10k, where
+`ourDriver` allocates *less* total, it still triggers *more* GC events (24.4% more), the clearest
+single number in this section for "many small allocations, not fewer large ones." This is consistent
+with (though doesn't yet directly prove) each incoming HTTP response chunk producing its own
+`asByteArray()` copy — more, smaller allocations per unit of data than whatever client-v2's own
+transport-side buffer handling does. The already-tracked, still-unbenchmarked `RESPONSE_CHUNK_DEMAND`
+open item (this file's own status box) is a plausible contributing variable here too — chunk *count*,
+not just chunk *bytes*, drives this benchmark's allocation-event pattern, and this benchmark alone
+doesn't separate "cost per chunk" from "number of chunks."
+
+**Verdict for #195, per the "measure first" decision rule this investigation was following:** the
+copy is now a **material** cost — real, reproducible, and structurally different from the comparison
+baseline (flat marginal cost vs. shrinking marginal cost, more GC events at every tier including where
+total allocation is lower). Per that plan's own next step: **propose the zero-copy ownership design
+before writing any production code** — do not implement `retain()`/`asByteBuffer()` directly. See the
+next section for that proposal, not yet implemented, pending review.
 
