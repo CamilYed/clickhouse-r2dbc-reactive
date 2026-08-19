@@ -94,7 +94,15 @@ cancellation/`KILL QUERY` caveat, which *is* handled but on a best-effort basis,
 to depend on today", kept up to date as things are found and fixed — treat this README as a summary
 of it, not the other way around.
 
-Expect breaking changes at every stage before a `0.1.0` release.
+Since `0.1.0`, [ROADMAP.md's Phase 7](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
+(`0.2.0`, in progress) has added configurable transport pool options, a real statement-timeout
+implementation, correct multi-`Result` `Statement.add()` batching, a driver observability SPI, and
+an R2DBC SPI Technology Compatibility Kit lane run against a real server (see
+[Connection pooling](#connection-pooling) and [docs/R2DBC_COMPATIBILITY.md](docs/R2DBC_COMPATIBILITY.md)
+below) — see [CHANGELOG.md](CHANGELOG.md) for the full, release-by-release list.
+
+Still expect breaking changes at this stage — the SPI surface and options above are exercised by
+an automated test suite, not yet by a production workload.
 
 ## Installation
 
@@ -615,21 +623,22 @@ committed API.
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the detailed, gated working plan (execution-path analysis,
-transport spike, contract tests, connector, "fully reactive" sign-off, performance testing), and
-its [Production readiness review](ROADMAP.md#production-readiness-review) for the current,
-up-to-date list of what's fixed, safe-and-documented, or still an open gap — that section is
-updated far more often than this one and is the one to check before depending on this driver.
+See [ROADMAP.md](ROADMAP.md) for the detailed, gated working plan, and its
+[Production readiness review](ROADMAP.md#production-readiness-review) for the current, up-to-date
+list of what's fixed, safe-and-documented, or still an open gap — that section is updated far more
+often than this one and is the one to check before depending on this driver. [CHANGELOG.md](CHANGELOG.md)
+lists what shipped in each release.
 
-The execution-path analysis, transport spike, transport SPI, and first R2DBC connector surface
-(the "Near-term"/"Later" items this section used to list) are all done; what's left before a
-`0.1.0` release is closing the open gaps below, not building new surface area:
+`0.1.0` (execution-path analysis, transport spike, the full first R2DBC connector surface, Maven
+Central publication) and [Phase 7/`0.2.0`](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
+(configurable transport pool, statement timeout, correct `Statement.add()` batching, an
+observability SPI, the R2DBC compatibility lane) are both done or in their final PR. What's next:
 
-- Benchmarks vs. client-v2 — Phase 5, in progress; see
-  [docs/PERFORMANCE.md's Phase 5 section](docs/PERFORMANCE.md#phase-5-later--load-and-performance-testing)
-- Maven Central publication (`io.github.camilyed`), following the same release process used in
-  [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)
-- Evaluate HTTP multiplexing / native TCP transport as a separate track
+- Native TCP transport / HTTP multiplexing, evaluated as a separate track, not assumed to be faster
+  without a profiler-identified bottleneck forcing it (see
+  [What this project is not](#what-this-project-is-not))
+- Whatever [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) still
+  lists as an open gap once `0.2.0` ships
 
 ## What this project is not
 

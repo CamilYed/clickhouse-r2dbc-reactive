@@ -66,6 +66,30 @@ step at all. It cannot trigger `ci.yml`'s own checks on the commit it pushes (a 
 loop-prevention rule for `GITHUB_TOKEN`-authored pushes), so re-run CI manually once its commit
 lands.
 
+## Cutting a release
+
+`.github/workflows/release.yml` (`workflow_dispatch`, needs a maintainer to trigger it manually)
+builds, signs, and publishes all four modules to Maven Central via the Central Portal, then — once
+the deployment is confirmed `PUBLISHED` — creates a Git tag and a GitHub Release, so the Central
+Portal version, the tag, and the Release always point at the same commit
+([ROADMAP.md Phase 7 item 13](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)).
+
+1. On `main`, rename [CHANGELOG.md](CHANGELOG.md)'s `## [Unreleased] — X.Y.Z (...)` heading to
+   `## [X.Y.Z] — YYYY-MM-DD` and commit it — the release workflow reads this file for GitHub
+   Release notes and fails fast if it can't find a heading matching the version you give it.
+2. Trigger `release.yml` (Actions tab → "Release" → "Run workflow") with the version (e.g.
+   `0.2.0`) and a `publishing_type`:
+   - `AUTOMATIC` — Central Portal publishes as soon as validation passes; the workflow waits for
+     `PUBLISHED`, then tags and creates the GitHub Release in the same run.
+   - `USER_MANAGED` (default, safer for a first look at what's about to go live) — the workflow
+     stops once the deployment is `VALIDATED` and prints a reminder to review it on
+     [Central Portal](https://central.sonatype.com) and click Publish yourself. The tag/Release are
+     **not** created in this run (the deployment isn't `PUBLISHED` yet) — re-run `release.yml` with
+     the same version after publishing so it observes `PUBLISHED` and finishes tagging/releasing.
+3. Confirm the new version's badge (top of README.md) picks it up — Central Portal's search-index
+   sync (which the shields.io badges read from) can lag a few minutes to a few hours behind
+   publication.
+
 ## Design discussion
 
 The direction for this driver started as a public discussion with the ClickHouse team:
