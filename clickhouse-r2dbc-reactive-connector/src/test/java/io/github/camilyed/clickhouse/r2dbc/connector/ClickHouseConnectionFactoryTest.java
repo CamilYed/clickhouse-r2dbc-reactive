@@ -313,6 +313,41 @@ class ClickHouseConnectionFactoryTest {
   }
 
   @Test
+  void shouldAcceptAUserOptionWithNoAccompanyingPasswordOption() {
+    // given - the real proof that this authenticates with an empty password, not the literal
+    // string "null", is ClickHouseConnectionFactoryAuthenticationTest's
+    // shouldSendAnEmptyPasswordWhenUserIsPresentAndPasswordIsAbsent; this test only covers that
+    // building the factory itself doesn't blow up.
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ConnectionFactoryOptions.USER, "someone")
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldAcceptAConfiguredDatabase() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ConnectionFactoryOptions.DATABASE, "analytics")
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
   void shouldRejectAnObservationListenerThatIsNotADriverObservationListenerInstance() {
     // given - unlike every other option on this provider, DriverObservationListener has no
     // URL-string form; a String value here can only be a configuration mistake.

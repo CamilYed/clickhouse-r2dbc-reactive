@@ -84,6 +84,16 @@ public abstract class BaseClickHouseIntegrationTest {
   }
 
   /**
+   * Creates a database with the given name if it doesn't already exist — for tests that need to
+   * prove behavior against a non-default database (e.g. the R2DBC {@code DATABASE} connection
+   * option), rather than every test implicitly running against whatever database the container's
+   * configured user defaults to.
+   */
+  protected static void createDatabase(final String name) {
+    executeAdminSql("CREATE DATABASE IF NOT EXISTS `" + name + "`");
+  }
+
+  /**
    * Whether ClickHouse's own {@code system.processes} table currently lists a query with the given
    * {@code query_id} as still running — checked entirely from outside this driver, over the same
    * plain, driver-independent {@link HttpClient} {@link #dropAllTables} uses. This is the one way

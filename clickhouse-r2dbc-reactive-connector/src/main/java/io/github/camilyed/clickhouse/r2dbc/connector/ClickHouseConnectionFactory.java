@@ -53,9 +53,15 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   /**
    * Builds a factory from R2DBC {@link ConnectionFactoryOptions} — {@code host} (required), {@code
    * port} (default {@value #DEFAULT_HTTP_PORT}), {@code ssl} (default {@code false}), {@code
-   * user}/{@code password} (default: no authentication, relying on the server allowing anonymous
-   * access), {@code connectTimeout} (default: none — see {@link ClickHouseHttpTransport}'s Javadoc
-   * for why this driver never imposes an implicit timeout), and {@link
+   * user}/{@code password}: absent {@code user} means no authentication at all, relying on the
+   * server allowing anonymous access; a present {@code user} with an absent {@code password} means
+   * HTTP Basic auth with an <em>empty</em> password, never the literal four-character string {@code
+   * "null"} a naive {@code String.valueOf(password)} on a {@code null} password would send, {@code
+   * database} (default: none, meaning the connecting user's own default database — sent as {@code
+   * X-ClickHouse-Database} on every request once set, see {@link
+   * io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions#database()}), {@code
+   * connectTimeout} (default: none — see {@link ClickHouseHttpTransport}'s Javadoc for why this
+   * driver never imposes an implicit timeout), and {@link
    * ClickHouseConnectionFactoryProvider#SSL_ROOT_CERT} (default: none, meaning the JVM's default
    * trust store).
    *
@@ -97,8 +103,15 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
     final String user = (String) options.getValue(ConnectionFactoryOptions.USER);
     final CharSequence password =
         (CharSequence) options.getValue(ConnectionFactoryOptions.PASSWORD);
+    // user absent -> no auth; user present, password absent -> empty password (never the literal
+    // string "null" that String.valueOf(password) would produce for a null CharSequence); user +
+    // password -> exact password.
     final Authentication authentication =
-        user == null ? Authentication.none() : Authentication.basic(user, String.valueOf(password));
+        user == null
+            ? Authentication.none()
+            : Authentication.basic(user, password == null ? "" : password.toString());
+
+    final String database = (String) options.getValue(ConnectionFactoryOptions.DATABASE);
 
     final Duration connectTimeout =
         (Duration) options.getValue(ConnectionFactoryOptions.CONNECT_TIMEOUT);
@@ -144,7 +157,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
             .withPendingAcquireMaxCount(transportPendingAcquireMaxCount)
             .withPendingAcquireTimeout(transportPendingAcquireTimeout)
             .withMaxIdleTime(transportMaxIdleTime)
-            .withMaxLifeTime(transportMaxLifeTime);
+            .withMaxLifeTime(transportMaxLifeTime)
+            .withDatabase(database);
 
     final DriverObservationListener observationListener =
         observationListenerOption(

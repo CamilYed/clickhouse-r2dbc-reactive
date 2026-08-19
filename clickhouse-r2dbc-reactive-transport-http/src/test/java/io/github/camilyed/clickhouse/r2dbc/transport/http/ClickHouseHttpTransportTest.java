@@ -743,6 +743,50 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldSendTheConfiguredDatabaseAsARequestHeader() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(), TransportOptions.defaults().withDatabase("analytics"));
+
+      transport
+          .query(ClickHouseQuery.of("SELECT 1"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedHeader("X-ClickHouse-Database")).isEqualTo("analytics");
+    }
+  }
+
+  @Test
+  void shouldSendNoDatabaseHeaderWhenNoneIsConfigured() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport
+          .query(ClickHouseQuery.of("SELECT 1"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedHeader("X-ClickHouse-Database")).isNull();
+    }
+  }
+
+  @Test
   void shouldNotRetryAFailureThatHappensAfterTheRequestWasSent() {
     // given - the connection is reset only after the request already reached the server, so
     // requestSent is true by the time the failure happens; RetryPolicy must not retry this,

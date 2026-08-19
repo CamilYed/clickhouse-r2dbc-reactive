@@ -26,6 +26,24 @@ class TransportOptionsTest {
   }
 
   @Test
+  void shouldHaveNoDatabaseConfiguredByDefault() {
+    // when
+    final TransportOptions options = TransportOptions.defaults();
+
+    // then
+    assertThat(options.database()).isNull();
+  }
+
+  @Test
+  void shouldCarryAConfiguredDatabaseUnchanged() {
+    // when
+    final TransportOptions options = TransportOptions.defaults().withDatabase("analytics");
+
+    // then
+    assertThat(options.database()).isEqualTo("analytics");
+  }
+
+  @Test
   void shouldCarryAConfiguredMaxConnectionsUnchanged() {
     // when
     final TransportOptions options = TransportOptions.defaults().withMaxConnections(5);
@@ -211,7 +229,8 @@ class TransportOptionsTest {
         options -> options.withPendingAcquireMaxCount(999),
         options -> options.withPendingAcquireTimeout(Duration.ofSeconds(999)),
         options -> options.withMaxIdleTime(Duration.ofSeconds(999)),
-        options -> options.withMaxLifeTime(Duration.ofSeconds(999)));
+        options -> options.withMaxLifeTime(Duration.ofSeconds(999)),
+        options -> options.withDatabase("other_database"));
   }
 
   private static TransportOptions aFullyPopulatedTransportOptions() {
@@ -225,6 +244,7 @@ class TransportOptionsTest {
         .withPendingAcquireMaxCount(16)
         .withPendingAcquireTimeout(Duration.ofSeconds(1))
         .withMaxIdleTime(Duration.ofSeconds(30))
-        .withMaxLifeTime(Duration.ofMinutes(5));
+        .withMaxLifeTime(Duration.ofMinutes(5))
+        .withDatabase("analytics");
   }
 }

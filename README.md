@@ -176,6 +176,7 @@ Set through the R2DBC URL's query string or `ConnectionFactoryOptions.builder()`
 | `port` | `8123` | ClickHouse HTTP interface port |
 | `ssl` | `false` | Use HTTPS |
 | `user` / `password` | none (anonymous) | HTTP basic auth against ClickHouse |
+| `database` | connecting user's default | Database selected via `X-ClickHouse-Database` on every request, e.g. `r2dbc:clickhouse://host:8123/analytics` |
 | `connectTimeout` | none | See [`ClickHouseHttpTransport`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransport.java)'s Javadoc for why there's no implicit response timeout |
 | `sslRootCert` | none (JVM default trust store) | Classpath resource or filesystem path to a PEM-encoded trusted certificate, for self-signed/internal-CA servers — only meaningful with `ssl=true` |
 | `retryMaxAttempts` | `3` | Retries for failures before any request bytes reached the server — see [`RetryPolicy`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java) for exactly what qualifies |
