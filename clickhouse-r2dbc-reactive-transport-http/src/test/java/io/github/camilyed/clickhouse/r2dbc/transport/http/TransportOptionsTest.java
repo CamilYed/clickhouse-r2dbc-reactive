@@ -176,6 +176,17 @@ class TransportOptionsTest {
     assertThat(options.toString()).contains("trustedCertificatePem=[1, 2, 3]");
   }
 
+  @Test
+  void shouldNotLeakTheBasicAuthenticationPasswordThroughToString() {
+    // given
+    final TransportOptions options =
+        TransportOptions.defaults()
+            .withAuthentication(Authentication.basic("alice", "super-secret"));
+
+    // when / then
+    assertThat(options.toString()).doesNotContain("super-secret");
+  }
+
   @ParameterizedTest
   @MethodSource("singleFieldMutations")
   void shouldNotBeEqualWhenExactlyOneFieldDiffers(final UnaryOperator<TransportOptions> mutation) {

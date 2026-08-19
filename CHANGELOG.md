@@ -65,6 +65,14 @@ for the full scoping and acceptance criteria this release was built against.
   `Parameters.in(...)`), sending a garbage literal instead of the bound value;
   `Connection.validate(depth)` read closed-connection state eagerly at call time instead of at
   subscription time, so a `Publisher` obtained before `close()` could wrongly report "still open."
+- **`Authentication.Basic`/`Authentication.UserKey` no longer leak credentials through `toString()`**
+  — the generated record `toString()` used to print the password/key in plain text, and
+  `TransportOptions.toString()` embeds `authentication` directly, so logging a `TransportOptions`
+  value (e.g. a driver startup summary) could expose them. Both now redact.
+- **`FluxInputStreamBridge#read(byte[], int, int)` now honors `InputStream`'s zero-length-read
+  contract** — a `length == 0` call used to return `-1` after the stream ended (instead of the
+  required `0`) and, worse, could block waiting for the next chunk even when zero bytes were ever
+  going to be copied. Checked first now, before any end-of-stream/fill logic runs.
 
 ## [0.1.0] — 2026-08-14
 

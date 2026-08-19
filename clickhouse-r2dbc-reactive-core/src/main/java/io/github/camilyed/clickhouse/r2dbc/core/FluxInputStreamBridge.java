@@ -91,6 +91,13 @@ public final class FluxInputStreamBridge extends InputStream {
 
   @Override
   public int read(final byte[] destination, final int offset, final int length) throws IOException {
+    // InputStream#read(byte[], int, int)'s own contract requires 0 for a zero-length request
+    // regardless of stream state - checked first, before finished/fillCurrent(), so a zero-length
+    // read neither reports false end-of-stream nor blocks in queue.take() waiting for a chunk it
+    // was never going to copy any bytes from.
+    if (length == 0) {
+      return 0;
+    }
     if (finished) {
       return -1;
     }

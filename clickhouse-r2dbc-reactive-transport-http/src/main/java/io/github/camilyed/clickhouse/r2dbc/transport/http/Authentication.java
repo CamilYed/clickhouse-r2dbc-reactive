@@ -56,6 +56,14 @@ public sealed interface Authentication {
           Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
       headers.set("Authorization", "Basic " + encoded);
     }
+
+    // The generated record toString() would print password in plain text - redacted since any
+    // consumer logging a TransportOptions (which embeds this Authentication) would otherwise leak
+    // it.
+    @Override
+    public String toString() {
+      return "Basic[user=" + user + ", password=<redacted>]";
+    }
   }
 
   /**
@@ -67,6 +75,12 @@ public sealed interface Authentication {
     public void addTo(final HttpHeaders headers) {
       headers.set("X-ClickHouse-User", user);
       headers.set("X-ClickHouse-Key", key);
+    }
+
+    // See Basic#toString() above for why this is redacted rather than generated.
+    @Override
+    public String toString() {
+      return "UserKey[user=" + user + ", key=<redacted>]";
     }
   }
 }

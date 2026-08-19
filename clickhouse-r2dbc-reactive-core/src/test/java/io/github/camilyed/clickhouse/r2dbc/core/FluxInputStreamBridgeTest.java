@@ -2,12 +2,14 @@ package io.github.camilyed.clickhouse.r2dbc.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
@@ -121,5 +123,39 @@ class FluxInputStreamBridgeTest {
 
     // then
     assertThat(cancelled.get()).isTrue();
+  }
+
+  @Test
+  void shouldReturnZeroWhenReadingZeroLengthEvenAfterTheStreamHasEnded() throws IOException {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap("hi".getBytes(StandardCharsets.UTF_8)));
+    final byte[] destination = new byte[0];
+
+    // when
+    final int bytesRead;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      bridge.readAllBytes();
+      bytesRead = bridge.read(destination, 0, 0);
+    }
+
+    // then
+    assertThat(bytesRead).isZero();
+  }
+
+  @Test
+  void shouldReturnZeroForAZeroLengthReadWithoutWaitingForMoreData() {
+    // given
+    final Flux<ByteBuffer> source = Flux.never();
+    final byte[] destination = new byte[0];
+
+    // when / then
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(2),
+        () -> {
+          try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+            assertThat(bridge.read(destination, 0, 0)).isZero();
+          }
+        });
   }
 }
