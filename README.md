@@ -245,8 +245,9 @@ Every number below is from a real ClickHouse server (Testcontainers), 3-JMH-fork
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 <p align="center">
-  <img src="docs/images/streaming-scan-mean-latency.png" width="49%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
-  <img src="docs/images/bounded-pool-concurrency-mean-latency.png" width="49%" alt="BoundedPoolConcurrencyBenchmark mean latency by concurrency level, this driver vs client-v2">
+  <img src="docs/images/streaming-scan-mean-latency.png" width="32%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
+  <img src="docs/images/bounded-pool-concurrency-mean-latency.png" width="32%" alt="BoundedPoolConcurrencyBenchmark mean latency by concurrency level, this driver vs client-v2">
+  <img src="docs/images/decoder-only-mean-latency-2026-08-19.png" width="32%" alt="DecoderOnlyBenchmark production decode path mean latency by row count, this driver vs client-v2, 2026-08-19 re-run">
 </p>
 
 | Scenario | Result |
