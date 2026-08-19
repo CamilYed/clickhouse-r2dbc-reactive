@@ -67,8 +67,8 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
    * re-fetched by {@link #readRecord} on every single one — the schema is fixed once the header is
    * parsed (client-v2 does not re-parse or change it mid-result), so calling {@link #getSchema()}
    * {@code R} times (once per row) for a fixed answer was pure repeated work, not something the
-   * decode contract requires. See docs/PERFORMANCE.md's "second-opinion review" section (finding
-   * 4) for how this was found.
+   * decode contract requires. See docs/PERFORMANCE.md's "second-opinion review" section (finding 4)
+   * for how this was found.
    */
   private List<ClickHouseColumn> columns() {
     List<ClickHouseColumn> columns = cachedColumns;
