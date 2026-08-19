@@ -1,6 +1,8 @@
 package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 import reactor.netty.resources.ConnectionProvider;
 
@@ -198,6 +200,71 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime);
+  }
+
+  // The generated record equals/hashCode/toString compare trustedCertificatePem by array
+  // reference identity (arrays don't override Object#equals/hashCode/toString), which is
+  // misleading for a byte[] holding certificate content - overridden here to compare/hash/print
+  // its actual bytes via java.util.Arrays instead.
+  @Override
+  public boolean equals(final Object obj) {
+    if (this == obj) {
+      return true;
+    }
+    if (!(obj instanceof final TransportOptions other)) {
+      return false;
+    }
+    return Objects.equals(authentication, other.authentication)
+        && Objects.equals(responseTimeout, other.responseTimeout)
+        && Objects.equals(connectTimeout, other.connectTimeout)
+        && Arrays.equals(trustedCertificatePem, other.trustedCertificatePem)
+        && Objects.equals(retryPolicy, other.retryPolicy)
+        && Objects.equals(maxConnections, other.maxConnections)
+        && Objects.equals(pendingAcquireMaxCount, other.pendingAcquireMaxCount)
+        && Objects.equals(pendingAcquireTimeout, other.pendingAcquireTimeout)
+        && Objects.equals(maxIdleTime, other.maxIdleTime)
+        && Objects.equals(maxLifeTime, other.maxLifeTime);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(
+        authentication,
+        responseTimeout,
+        connectTimeout,
+        Arrays.hashCode(trustedCertificatePem),
+        retryPolicy,
+        maxConnections,
+        pendingAcquireMaxCount,
+        pendingAcquireTimeout,
+        maxIdleTime,
+        maxLifeTime);
+  }
+
+  @Override
+  public String toString() {
+    return "TransportOptions["
+        + "authentication="
+        + authentication
+        + ", responseTimeout="
+        + responseTimeout
+        + ", connectTimeout="
+        + connectTimeout
+        + ", trustedCertificatePem="
+        + Arrays.toString(trustedCertificatePem)
+        + ", retryPolicy="
+        + retryPolicy
+        + ", maxConnections="
+        + maxConnections
+        + ", pendingAcquireMaxCount="
+        + pendingAcquireMaxCount
+        + ", pendingAcquireTimeout="
+        + pendingAcquireTimeout
+        + ", maxIdleTime="
+        + maxIdleTime
+        + ", maxLifeTime="
+        + maxLifeTime
+        + ']';
   }
 
   private static void requirePositive(final @Nullable Integer value, final String name) {

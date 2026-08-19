@@ -32,15 +32,21 @@ class TransportOptionsTest {
 
   @Test
   void shouldRejectAZeroMaxConnections() {
+    // given
+    final TransportOptions options = TransportOptions.defaults();
+
     // when / then
-    assertThatThrownBy(() -> TransportOptions.defaults().withMaxConnections(0))
+    assertThatThrownBy(() -> options.withMaxConnections(0))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
   void shouldRejectANegativeMaxConnections() {
+    // given
+    final TransportOptions options = TransportOptions.defaults();
+
     // when / then
-    assertThatThrownBy(() -> TransportOptions.defaults().withMaxConnections(-1))
+    assertThatThrownBy(() -> options.withMaxConnections(-1))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -64,30 +70,41 @@ class TransportOptionsTest {
 
   @Test
   void shouldRejectAZeroPendingAcquireMaxCount() {
+    // given
+    final TransportOptions options = TransportOptions.defaults();
+
     // when / then
-    assertThatThrownBy(() -> TransportOptions.defaults().withPendingAcquireMaxCount(0))
+    assertThatThrownBy(() -> options.withPendingAcquireMaxCount(0))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
   void shouldRejectAPendingAcquireTimeoutLessThanZero() {
+    // given
+    final TransportOptions options = TransportOptions.defaults();
+
     // when / then
-    assertThatThrownBy(
-            () -> TransportOptions.defaults().withPendingAcquireTimeout(Duration.ofSeconds(-1)))
+    assertThatThrownBy(() -> options.withPendingAcquireTimeout(Duration.ofSeconds(-1)))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
   void shouldRejectANegativeMaxIdleTime() {
+    // given
+    final TransportOptions options = TransportOptions.defaults();
+
     // when / then
-    assertThatThrownBy(() -> TransportOptions.defaults().withMaxIdleTime(Duration.ofSeconds(-1)))
+    assertThatThrownBy(() -> options.withMaxIdleTime(Duration.ofSeconds(-1)))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
   void shouldRejectANegativeMaxLifeTime() {
+    // given
+    final TransportOptions options = TransportOptions.defaults();
+
     // when / then
-    assertThatThrownBy(() -> TransportOptions.defaults().withMaxLifeTime(Duration.ofSeconds(-1)))
+    assertThatThrownBy(() -> options.withMaxLifeTime(Duration.ofSeconds(-1)))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }
