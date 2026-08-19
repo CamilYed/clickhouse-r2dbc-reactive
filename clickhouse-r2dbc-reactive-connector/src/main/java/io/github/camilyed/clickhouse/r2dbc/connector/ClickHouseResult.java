@@ -10,6 +10,7 @@ import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -76,12 +77,47 @@ final class ClickHouseResult implements Result {
    * <p>{@code decodingScheduler} is forwarded to {@link RowBinaryDecoder#decode} unchanged — see
    * that method's Javadoc for why every blocking decode call must run there rather than on
    * whichever thread ends up consuming the returned {@link Result}.
+   *
+   * <p>{@code observation}'s {@code queryCompleted}/{@code queryFailed}/{@code queryCancelled} fire
+   * based on the returned {@link ClickHouseResult}'s own row {@link Flux} — its terminal signal,
+   * not this method's — since that {@link Flux} is only actually subscribed to later, when a caller
+   * consumes the {@link Result} via {@link #map}/{@link #flatMap}; see {@link
+   * io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why a caller that
+   * never does so never triggers those events at all.
    */
   static Mono<ClickHouseResult> decode(
-      final ClickHouseQueryResponse response, final RowDecodingScheduler decodingScheduler) {
-    final Flux<ByteBuffer> body = response.body().asByteArray().map(ByteBuffer::wrap);
+      final ClickHouseQueryResponse response,
+      final RowDecodingScheduler decodingScheduler,
+      final QueryObservation observation) {
+    final AtomicLong byteCount = new AtomicLong();
+    final Flux<ByteBuffer> body =
+        response
+            .body()
+            .asByteArray()
+            .doOnNext(bytes -> byteCount.addAndGet(bytes.length))
+            .map(ByteBuffer::wrap);
     return RowBinaryDecoder.decode(body, decodingScheduler)
-        .map(decoded -> new ClickHouseResult(decoded, response.writtenRows().getAsLong()));
+        .map(
+            decoded ->
+                new ClickHouseResult(
+                    observed(decoded, observation, byteCount), response.writtenRows().getAsLong()));
+  }
+
+  private static DecodedResult observed(
+      final DecodedResult decoded, final QueryObservation observation, final AtomicLong byteCount) {
+    final AtomicLong rowCount = new AtomicLong();
+    final Flux<DecodedRow> observedRows =
+        decoded
+            .rows()
+            .doOnNext(
+                row -> {
+                  observation.firstRowReceived();
+                  rowCount.incrementAndGet();
+                })
+            .doOnComplete(() -> observation.completed(rowCount.get(), byteCount.get()))
+            .doOnError(observation::failed)
+            .doOnCancel(observation::cancelled);
+    return new DecodedResult(decoded.columns(), observedRows);
   }
 
   /**

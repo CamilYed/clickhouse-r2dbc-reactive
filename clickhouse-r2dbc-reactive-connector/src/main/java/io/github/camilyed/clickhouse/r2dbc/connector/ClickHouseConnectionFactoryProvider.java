@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
+import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.ConnectionFactoryProvider;
@@ -90,6 +91,18 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
    */
   public static final Option<Duration> TRANSPORT_MAX_LIFE_TIME =
       Option.valueOf("transportMaxLifeTime");
+
+  /**
+   * A {@link DriverObservationListener} to notify of query lifecycle events — see that interface's
+   * Javadoc for the full contract, including exactly which events fire and when. Only meaningful
+   * when {@link ClickHouseConnectionFactory} is built programmatically via {@link
+   * ConnectionFactoryOptions#builder()}{@code .option(OBSERVATION_LISTENER, myListener)}: unlike
+   * every other option on this provider, a {@link DriverObservationListener} instance has no
+   * URL-string form, so it cannot be set through an {@code r2dbc:clickhouse://...} connection URL.
+   * Defaults to {@link DriverObservationListener#NOOP} when not set.
+   */
+  public static final Option<DriverObservationListener> OBSERVATION_LISTENER =
+      Option.valueOf("observationListener");
 
   @Override
   public ConnectionFactory create(final ConnectionFactoryOptions connectionFactoryOptions) {

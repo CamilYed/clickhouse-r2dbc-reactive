@@ -1,6 +1,8 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
+import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
@@ -33,12 +35,26 @@ final class ClickHouseBatch implements Batch {
 
   private final ClickHouseHttpTransport transport;
   private final RowDecodingScheduler decodingScheduler;
+  private final DriverObservationListener observationListener;
   private final List<String> statements = new ArrayList<>();
 
   ClickHouseBatch(
       final ClickHouseHttpTransport transport, final RowDecodingScheduler decodingScheduler) {
+    this(transport, decodingScheduler, DriverObservationListener.NOOP);
+  }
+
+  /**
+   * {@code observationListener} is notified of one {@link OperationKind#QUERY} lifecycle per
+   * statement this batch's {@link #execute()} runs — see {@link DriverObservationListener}'s
+   * Javadoc for the full contract.
+   */
+  ClickHouseBatch(
+      final ClickHouseHttpTransport transport,
+      final RowDecodingScheduler decodingScheduler,
+      final DriverObservationListener observationListener) {
     this.transport = transport;
     this.decodingScheduler = decodingScheduler;
+    this.observationListener = observationListener;
   }
 
   // sql is declared non-null under this module's @NullMarked contract, but this overrides a
@@ -59,9 +75,14 @@ final class ClickHouseBatch implements Batch {
   }
 
   private Publisher<ClickHouseResult> executeOne(final String sql) {
+    final ClickHouseQuery query = ClickHouseQuery.of(sql);
+    final QueryObservation observation =
+        QueryObservation.start(observationListener, query.queryId(), OperationKind.QUERY, sql);
     return transport
-        .queryWithSummary(ClickHouseQuery.of(sql))
-        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler))
+        .queryWithSummary(query)
+        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler, observation))
+        .doOnError(observation::failed)
+        .doOnCancel(observation::cancelled)
         .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 }
