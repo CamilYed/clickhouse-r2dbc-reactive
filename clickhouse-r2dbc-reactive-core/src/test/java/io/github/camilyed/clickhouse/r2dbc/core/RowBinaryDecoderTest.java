@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.nio.ByteBuffer;
@@ -119,8 +120,13 @@ class RowBinaryDecoderTest {
         .thenCancel()
         .verify(Duration.ofSeconds(5));
 
-    // then
-    assertThat(sourceCancelled.get()).isTrue();
+    // then - decode() runs the whole sequence via .subscribeOn(reactorScheduler), so thenCancel()
+    // dispatches the cancel signal to that scheduler's worker thread and verify() returns as soon
+    // as
+    // the signal has been sent, not once the worker has actually finished processing it; asserting
+    // immediately races that worker, so this awaits the eventually-true condition instead of
+    // checking it once (see CLAUDE.md's "no Thread.sleep, use Awaitility" rule).
+    await().atMost(Duration.ofSeconds(5)).untilTrue(sourceCancelled);
   }
 
   @Test
