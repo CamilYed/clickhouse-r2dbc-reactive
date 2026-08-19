@@ -82,8 +82,8 @@ class ClickHouseConnectionFactoryAgainstRealClickHouseTest extends BaseClickHous
   /**
    * Proves a query against a database that does not exist fails clearly as an {@link
    * R2dbcException}, rather than silently falling back to the connecting user's own default
-   * database — the same mapping every other server-side ClickHouse failure goes through (see
-   * {@link ClickHouseR2dbcException}).
+   * database — the same mapping every other server-side ClickHouse failure goes through (see {@link
+   * ClickHouseR2dbcException}).
    */
   @Test
   void shouldFailClearlyForUnknownDatabase() {
@@ -141,10 +141,9 @@ class ClickHouseConnectionFactoryAgainstRealClickHouseTest extends BaseClickHous
   }
 
   /**
-   * The negative twin of the empty-password test above: a server-side user whose actual password
-   * is the literal string {@code "null"} must NOT authenticate when the R2DBC {@code password}
-   * option is absent — proving the driver sends an empty password in that case, not {@code
-   * "null"}.
+   * The negative twin of the empty-password test above: a server-side user whose actual password is
+   * the literal string {@code "null"} must NOT authenticate when the R2DBC {@code password} option
+   * is absent — proving the driver sends an empty password in that case, not {@code "null"}.
    */
   @Test
   void shouldNotAuthenticateAgainstALiteralNullPasswordWhenPasswordOptionIsAbsent() {

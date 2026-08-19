@@ -215,11 +215,10 @@ public record TransportOptions(
   }
 
   /**
-   * The database to select via {@code X-ClickHouse-Database} on every request this transport
-   * sends — {@code null} (the default) means "use the connecting user's own default database",
-   * matching ClickHouse's own server-side behavior when no database is specified. Wired from
-   * R2DBC's standard {@code ConnectionFactoryOptions.DATABASE} by {@code
-   * ClickHouseConnectionFactory.from}.
+   * The database to select via {@code X-ClickHouse-Database} on every request this transport sends
+   * — {@code null} (the default) means "use the connecting user's own default database", matching
+   * ClickHouse's own server-side behavior when no database is specified. Wired from R2DBC's
+   * standard {@code ConnectionFactoryOptions.DATABASE} by {@code ClickHouseConnectionFactory.from}.
    */
   public TransportOptions withDatabase(final @Nullable String database) {
     return new TransportOptions(

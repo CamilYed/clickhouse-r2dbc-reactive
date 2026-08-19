@@ -94,11 +94,11 @@ public abstract class BaseClickHouseIntegrationTest {
   }
 
   /**
-   * Creates a ClickHouse user with the given plaintext password (which may be the empty string)
-   * and grants it full access — for tests that need to prove real authentication behavior (e.g.
-   * that an R2DBC connection with a {@code user} but no {@code password} option actually
-   * authenticates with an empty password) against a user whose password is not the container's
-   * own default credentials.
+   * Creates a ClickHouse user with the given plaintext password (which may be the empty string) and
+   * grants it full access — for tests that need to prove real authentication behavior (e.g. that an
+   * R2DBC connection with a {@code user} but no {@code password} option actually authenticates with
+   * an empty password) against a user whose password is not the container's own default
+   * credentials.
    */
   protected static void createUserWithPassword(final String username, final String password) {
     final String escapedPassword = password.replace("'", "''");

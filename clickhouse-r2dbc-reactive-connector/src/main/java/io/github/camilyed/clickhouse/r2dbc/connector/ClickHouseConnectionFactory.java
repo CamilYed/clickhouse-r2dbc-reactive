@@ -57,8 +57,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * server allowing anonymous access; a present {@code user} with an absent {@code password} means
    * HTTP Basic auth with an <em>empty</em> password, never the literal four-character string {@code
    * "null"} a naive {@code String.valueOf(password)} on a {@code null} password would send, {@code
-   * database} (default: none, meaning the connecting user's own default database
-   * — sent as {@code X-ClickHouse-Database} on every request once set, see {@link
+   * database} (default: none, meaning the connecting user's own default database — sent as {@code
+   * X-ClickHouse-Database} on every request once set, see {@link
    * io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions#database()}), {@code
    * connectTimeout} (default: none — see {@link ClickHouseHttpTransport}'s Javadoc for why this
    * driver never imposes an implicit timeout), and {@link
