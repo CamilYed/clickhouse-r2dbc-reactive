@@ -8,6 +8,7 @@ import io.r2dbc.spi.NoSuchOptionException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.format.DateTimeParseException;
 import org.junit.jupiter.api.Test;
 
 class ClickHouseConnectionFactoryTest {
@@ -203,5 +204,92 @@ class ClickHouseConnectionFactoryTest {
     // when / then
     assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldAcceptCustomTransportPoolOptions() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, 5)
+            .option(ClickHouseConnectionFactoryProvider.TRANSPORT_PENDING_ACQUIRE_MAX_COUNT, 10)
+            .option(
+                ClickHouseConnectionFactoryProvider.TRANSPORT_PENDING_ACQUIRE_TIMEOUT,
+                Duration.ofSeconds(2))
+            .option(
+                ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_IDLE_TIME, Duration.ofMinutes(1))
+            .option(
+                ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_LIFE_TIME, Duration.ofMinutes(30))
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldRejectANonPositiveTransportMaxConnections() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, 0)
+            .build();
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldRejectANegativeTransportPendingAcquireTimeout() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(
+                ClickHouseConnectionFactoryProvider.TRANSPORT_PENDING_ACQUIRE_TIMEOUT,
+                Duration.ofSeconds(-1))
+            .build();
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldAcceptTransportPoolOptionsParsedFromAUrlQueryString() {
+    // given - ConnectionFactoryOptions.parse(url) stores query-string values as plain Strings, not
+    // as the Integer/Duration these options are declared as; this is the actual R2DBC-URL bootstrap
+    // path (as opposed to every other test in this class, which builds typed options directly).
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.parse(
+            "r2dbc:clickhouse://localhost:8123"
+                + "?transportMaxConnections=5"
+                + "&transportPendingAcquireMaxCount=10"
+                + "&transportPendingAcquireTimeout=PT2S"
+                + "&transportMaxIdleTime=PT1M"
+                + "&transportMaxLifeTime=PT30M");
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldRejectAnInvalidTransportPendingAcquireTimeoutParsedFromAUrlQueryString() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.parse(
+            "r2dbc:clickhouse://localhost:8123?transportPendingAcquireTimeout=not-a-duration");
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(DateTimeParseException.class);
   }
 }

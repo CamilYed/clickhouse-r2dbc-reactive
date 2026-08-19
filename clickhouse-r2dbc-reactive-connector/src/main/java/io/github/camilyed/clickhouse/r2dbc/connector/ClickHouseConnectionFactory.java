@@ -3,10 +3,12 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.RetryPolicy;
+import io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions;
 import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryMetadata;
 import io.r2dbc.spi.ConnectionFactoryOptions;
+import io.r2dbc.spi.Option;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -56,10 +58,18 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * {@code retryMaxAttempts=0} to disable retrying entirely. See {@link RetryPolicy}'s Javadoc for
    * exactly what gets retried.
    *
-   * <p>There is deliberately no {@code statementTimeout}/response-timeout option here yet: that
-   * needs to apply per statement, not per factory, and {@code
-   * ClickHouseConnection.setStatementTimeout} still throws {@link UnsupportedOperationException}
-   * rather than being wired to anything.
+   * <p>{@link ClickHouseConnectionFactoryProvider#TRANSPORT_MAX_CONNECTIONS}/{@link
+   * ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_MAX_COUNT}/{@link
+   * ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_TIMEOUT}/{@link
+   * ClickHouseConnectionFactoryProvider#TRANSPORT_MAX_IDLE_TIME}/{@link
+   * ClickHouseConnectionFactoryProvider#TRANSPORT_MAX_LIFE_TIME} configure the underlying Reactor
+   * Netty HTTP connection pool via {@link TransportOptions} — each independently defaults to
+   * Reactor Netty's own default when not set (see {@link TransportOptions}'s Javadoc); an invalid
+   * value (e.g. a negative duration, a non-positive connection count) fails fast right here, at
+   * factory creation, never silently falling back to a default.
+   *
+   * <p>There is deliberately no {@code statementTimeout} option here: that needs to apply per
+   * statement, not per factory — see {@code ClickHouseConnection.setStatementTimeout}.
    */
   public static ClickHouseConnectionFactory from(final ConnectionFactoryOptions options) {
     final String host = (String) options.getRequiredValue(ConnectionFactoryOptions.HOST);
@@ -88,17 +98,81 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
         sslRootCert == null ? null : resolveTrustedCertificatePem(sslRootCert);
 
     final Integer retryMaxAttempts =
-        (Integer) options.getValue(ClickHouseConnectionFactoryProvider.RETRY_MAX_ATTEMPTS);
+        intOption(options, ClickHouseConnectionFactoryProvider.RETRY_MAX_ATTEMPTS);
     final Duration retryDelay =
-        (Duration) options.getValue(ClickHouseConnectionFactoryProvider.RETRY_DELAY);
+        durationOption(options, ClickHouseConnectionFactoryProvider.RETRY_DELAY);
     final RetryPolicy retryPolicy =
         new RetryPolicy(
             retryMaxAttempts == null ? RetryPolicy.defaultPolicy().maxAttempts() : retryMaxAttempts,
             retryDelay == null ? RetryPolicy.defaultPolicy().delay() : retryDelay);
 
-    return new ClickHouseConnectionFactory(
-        new ClickHouseHttpTransport(
-            baseUrl, authentication, null, connectTimeout, trustedCertificatePem, retryPolicy));
+    final Integer transportMaxConnections =
+        intOption(options, ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS);
+    final Integer transportPendingAcquireMaxCount =
+        intOption(options, ClickHouseConnectionFactoryProvider.TRANSPORT_PENDING_ACQUIRE_MAX_COUNT);
+    final Duration transportPendingAcquireTimeout =
+        durationOption(
+            options, ClickHouseConnectionFactoryProvider.TRANSPORT_PENDING_ACQUIRE_TIMEOUT);
+    final Duration transportMaxIdleTime =
+        durationOption(options, ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_IDLE_TIME);
+    final Duration transportMaxLifeTime =
+        durationOption(options, ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_LIFE_TIME);
+
+    final TransportOptions transportOptions =
+        TransportOptions.defaults()
+            .withAuthentication(authentication)
+            .withConnectTimeout(connectTimeout)
+            .withTrustedCertificatePem(trustedCertificatePem)
+            .withRetryPolicy(retryPolicy)
+            .withMaxConnections(transportMaxConnections)
+            .withPendingAcquireMaxCount(transportPendingAcquireMaxCount)
+            .withPendingAcquireTimeout(transportPendingAcquireTimeout)
+            .withMaxIdleTime(transportMaxIdleTime)
+            .withMaxLifeTime(transportMaxLifeTime);
+
+    return new ClickHouseConnectionFactory(new ClickHouseHttpTransport(baseUrl, transportOptions));
+  }
+
+  // ConnectionFactoryOptions.parse(url) has no way to know a custom (non-R2DBC-well-known)
+  // Option's intended type due to Java's type erasure - every query-string value ends up stored as
+  // a plain String, regardless of the Option<T> it's read back through. Built via
+  // ConnectionFactoryOptions.builder().option(...) instead, values keep their real type. Both
+  // helpers below deliberately accept Option<?>, not Option<Integer>/Option<Duration>: calling
+  // options.getValue(...) through a wildcard-typed Option avoids the compiler inserting an
+  // implicit checkcast to the "real" type at the call site (the classic generics-erasure gotcha) -
+  // that checkcast would otherwise throw ClassCastException on a String value before this method's
+  // own instanceof checks below ever run, defeating the whole point of these helpers.
+  private static @Nullable Integer intOption(
+      final ConnectionFactoryOptions options, final Option<?> option) {
+    final Object raw = options.getValue(option);
+    if (raw == null) {
+      return null;
+    }
+    if (raw instanceof final Integer value) {
+      return value;
+    }
+    if (raw instanceof final String text) {
+      return Integer.valueOf(text);
+    }
+    throw new IllegalArgumentException(option.name() + " must be an integer, got: " + raw);
+  }
+
+  // See intOption's comment above - same reasoning, for Duration-typed options. A String value is
+  // parsed as ISO-8601 (java.time.Duration's own text format, e.g. "PT5S"), the same format
+  // Duration#toString() produces, so any Duration value round-trips through a URL unchanged.
+  private static @Nullable Duration durationOption(
+      final ConnectionFactoryOptions options, final Option<?> option) {
+    final Object raw = options.getValue(option);
+    if (raw == null) {
+      return null;
+    }
+    if (raw instanceof final Duration value) {
+      return value;
+    }
+    if (raw instanceof final String text) {
+      return Duration.parse(text);
+    }
+    throw new IllegalArgumentException(option.name() + " must be a duration, got: " + raw);
   }
 
   private static byte[] resolveTrustedCertificatePem(final String sslRootCert) {

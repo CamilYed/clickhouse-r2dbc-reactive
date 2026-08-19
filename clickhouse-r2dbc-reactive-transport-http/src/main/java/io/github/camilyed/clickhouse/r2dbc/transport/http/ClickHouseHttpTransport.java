@@ -61,25 +61,11 @@ public final class ClickHouseHttpTransport {
   private final RetryPolicy retryPolicy;
 
   public ClickHouseHttpTransport(final String baseUrl) {
-    this(
-        baseUrl,
-        Authentication.none(),
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
-        null,
-        null,
-        null,
-        RetryPolicy.defaultPolicy());
+    this(baseUrl, TransportOptions.defaults());
   }
 
   public ClickHouseHttpTransport(final String baseUrl, final int maxConnections) {
-    this(
-        baseUrl,
-        Authentication.none(),
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME, maxConnections),
-        null,
-        null,
-        null,
-        RetryPolicy.defaultPolicy());
+    this(baseUrl, TransportOptions.defaults().withMaxConnections(maxConnections));
   }
 
   /**
@@ -98,12 +84,9 @@ public final class ClickHouseHttpTransport {
       final String baseUrl, final Authentication authentication, final int maxConnections) {
     this(
         baseUrl,
-        authentication,
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME, maxConnections),
-        null,
-        null,
-        null,
-        RetryPolicy.defaultPolicy());
+        TransportOptions.defaults()
+            .withAuthentication(authentication)
+            .withMaxConnections(maxConnections));
   }
 
   /**
@@ -113,12 +96,7 @@ public final class ClickHouseHttpTransport {
   public ClickHouseHttpTransport(final String baseUrl, final String user, final String password) {
     this(
         baseUrl,
-        Authentication.basic(user, password),
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
-        null,
-        null,
-        null,
-        RetryPolicy.defaultPolicy());
+        TransportOptions.defaults().withAuthentication(Authentication.basic(user, password)));
   }
 
   /**
@@ -126,14 +104,7 @@ public final class ClickHouseHttpTransport {
    * point for auth modes beyond plain HTTP Basic (e.g. {@link Authentication#userKey}).
    */
   public ClickHouseHttpTransport(final String baseUrl, final Authentication authentication) {
-    this(
-        baseUrl,
-        authentication,
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
-        null,
-        null,
-        null,
-        RetryPolicy.defaultPolicy());
+    this(baseUrl, TransportOptions.defaults().withAuthentication(authentication));
   }
 
   /**
@@ -155,12 +126,9 @@ public final class ClickHouseHttpTransport {
       final @Nullable Duration responseTimeout) {
     this(
         baseUrl,
-        authentication,
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
-        responseTimeout,
-        null,
-        null,
-        RetryPolicy.defaultPolicy());
+        TransportOptions.defaults()
+            .withAuthentication(authentication)
+            .withResponseTimeout(responseTimeout));
   }
 
   /**
@@ -181,12 +149,10 @@ public final class ClickHouseHttpTransport {
       final @Nullable Duration connectTimeout) {
     this(
         baseUrl,
-        authentication,
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
-        responseTimeout,
-        connectTimeout,
-        null,
-        RetryPolicy.defaultPolicy());
+        TransportOptions.defaults()
+            .withAuthentication(authentication)
+            .withResponseTimeout(responseTimeout)
+            .withConnectTimeout(connectTimeout));
   }
 
   /**
@@ -215,12 +181,11 @@ public final class ClickHouseHttpTransport {
       final byte @Nullable [] trustedCertificatePem) {
     this(
         baseUrl,
-        authentication,
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
-        responseTimeout,
-        connectTimeout,
-        trustedCertificatePem,
-        RetryPolicy.defaultPolicy());
+        TransportOptions.defaults()
+            .withAuthentication(authentication)
+            .withResponseTimeout(responseTimeout)
+            .withConnectTimeout(connectTimeout)
+            .withTrustedCertificatePem(trustedCertificatePem));
   }
 
   /**
@@ -240,34 +205,39 @@ public final class ClickHouseHttpTransport {
       final RetryPolicy retryPolicy) {
     this(
         baseUrl,
-        authentication,
-        ConnectionProvider.create(CONNECTION_PROVIDER_NAME),
-        responseTimeout,
-        connectTimeout,
-        trustedCertificatePem,
-        retryPolicy);
+        TransportOptions.defaults()
+            .withAuthentication(authentication)
+            .withResponseTimeout(responseTimeout)
+            .withConnectTimeout(connectTimeout)
+            .withTrustedCertificatePem(trustedCertificatePem)
+            .withRetryPolicy(retryPolicy));
   }
 
-  private ClickHouseHttpTransport(
-      final String baseUrl,
-      final Authentication authentication,
-      final ConnectionProvider connectionProvider,
-      final @Nullable Duration responseTimeout,
-      final @Nullable Duration connectTimeout,
-      final byte @Nullable [] trustedCertificatePem,
-      final RetryPolicy retryPolicy) {
-    if (trustedCertificatePem != null && !baseUrl.startsWith("https://")) {
+  /**
+   * The general entry point every other constructor above delegates to: every construction path
+   * routes through this single {@link TransportOptions} object rather than growing yet another
+   * constructor overload each time a new option is added — see {@link TransportOptions}'s own
+   * Javadoc, in particular for {@code maxConnections}/{@code pendingAcquireMaxCount}/{@code
+   * pendingAcquireTimeout}/{@code maxIdleTime}/{@code maxLifeTime}, the transport-pool options only
+   * reachable through this constructor (no shorthand overload exists for them, deliberately, to
+   * avoid the overload growth this constructor exists to stop).
+   */
+  public ClickHouseHttpTransport(final String baseUrl, final TransportOptions options) {
+    if (options.trustedCertificatePem() != null && !baseUrl.startsWith("https://")) {
       throw new IllegalArgumentException(
           "trustedCertificatePem can only be used with an https:// baseUrl, got: " + baseUrl);
     }
-    HttpClient client = HttpClient.create(connectionProvider).baseUrl(baseUrl);
-    if (responseTimeout != null) {
-      client = client.responseTimeout(responseTimeout);
+    HttpClient client = HttpClient.create(buildConnectionProvider(options)).baseUrl(baseUrl);
+    if (options.responseTimeout() != null) {
+      client = client.responseTimeout(options.responseTimeout());
     }
-    if (connectTimeout != null) {
-      client = client.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis());
+    if (options.connectTimeout() != null) {
+      client =
+          client.option(
+              ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) options.connectTimeout().toMillis());
     }
-    if (trustedCertificatePem != null) {
+    if (options.trustedCertificatePem() != null) {
+      final byte[] trustedCertificatePem = options.trustedCertificatePem();
       client =
           client.secure(
               spec ->
@@ -279,8 +249,33 @@ public final class ClickHouseHttpTransport {
                                       new ByteArrayInputStream(trustedCertificatePem)))));
     }
     this.httpClient = client;
-    this.authentication = authentication;
-    this.retryPolicy = retryPolicy;
+    this.authentication = options.authentication();
+    this.retryPolicy = options.retryPolicy();
+  }
+
+  // Every setter below is called only when the corresponding TransportOptions field is non-null,
+  // leaving it unset otherwise - Reactor Netty's own ConnectionProvider.Builder then applies
+  // exactly the same defaults its own static factory methods (ConnectionProvider.create(name)/
+  // create(name, maxConnections)) already document, since those factories are themselves built on
+  // top of this same builder.
+  private static ConnectionProvider buildConnectionProvider(final TransportOptions options) {
+    final ConnectionProvider.Builder builder = ConnectionProvider.builder(CONNECTION_PROVIDER_NAME);
+    if (options.maxConnections() != null) {
+      builder.maxConnections(options.maxConnections());
+    }
+    if (options.pendingAcquireMaxCount() != null) {
+      builder.pendingAcquireMaxCount(options.pendingAcquireMaxCount());
+    }
+    if (options.pendingAcquireTimeout() != null) {
+      builder.pendingAcquireTimeout(options.pendingAcquireTimeout());
+    }
+    if (options.maxIdleTime() != null) {
+      builder.maxIdleTime(options.maxIdleTime());
+    }
+    if (options.maxLifeTime() != null) {
+      builder.maxLifeTime(options.maxLifeTime());
+    }
+    return builder.build();
   }
 
   /**

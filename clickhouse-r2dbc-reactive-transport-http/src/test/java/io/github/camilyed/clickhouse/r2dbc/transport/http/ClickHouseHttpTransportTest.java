@@ -429,6 +429,99 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   }
 
   @Test
+  void shouldNotExceedTheConfiguredMaxConnectionsViaTransportOptions() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(), TransportOptions.defaults().withMaxConnections(2));
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 2);
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+
+      // then
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.activeConnectionCount()).isEqualTo(2));
+    }
+  }
+
+  @Test
+  void shouldTimeOutAcquisitionAfterTheConfiguredPendingAcquireTimeout() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(),
+              TransportOptions.defaults()
+                  .withMaxConnections(1)
+                  .withPendingAcquireTimeout(Duration.ofMillis(200)));
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
+
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT 1"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(5)));
+
+      // then
+      assertThat(thrown).isNotNull();
+    }
+  }
+
+  @Test
+  void shouldRejectAcquisitionOnceThePendingQueueIsFull() {
+    // given
+    final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithFirstChunkThenHanging(firstChunk)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(),
+              TransportOptions.defaults().withMaxConnections(1).withPendingAcquireMaxCount(1));
+
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      await().atMost(Duration.ofSeconds(2)).until(() -> server.activeConnectionCount() == 1);
+      transport.query(ClickHouseQuery.of("SELECT 1")).subscribe();
+      // Give the second acquisition a moment to actually register as pending before the third
+      // one - queueing itself is synchronous inside Reactor Netty's pool, but this leaves no room
+      // for a scheduling hiccup to make the test flaky.
+      await().pollDelay(Duration.ofMillis(150)).until(() -> true);
+
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT 1"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(5)));
+
+      // then
+      assertThat(thrown).isNotNull();
+    }
+  }
+
+  @Test
   void shouldNotReachTheServerWhenAQueuedRequestIsCancelledBeforeAConnectionIsAcquired() {
     // given
     final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
