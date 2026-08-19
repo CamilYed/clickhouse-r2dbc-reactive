@@ -130,6 +130,7 @@ built.
 > | `AggregationBenchmark` — **built** (2026-08-19): the "analytical aggregation" query shape (`GROUP BY` + `count()`/`avg()`/`quantile()`), designed since the first Phase 5 write-up, finally has a benchmark class | Wide multi-type decode / INSERT benchmarks — still designed, not built |
 > | `ConcurrencyBenchmark` `@Threads(8)` — **3-fork confirmed** (2026-08-19): mean→p99.9 regression and tail crossover both reproduced, not single-run noise; root cause still not isolated (see above) | Netty leak-detection lane (Phase 7 item 6) — never actually built, see ROADMAP.md's Definition of done |
 > | Hot-path code review — **done** (2026-08-19): every class on the decode/transport hot path read; two tunable-but-unbenchmarked constants confirmed as the only open placeholders, everything else confirmed already optimal (see below) | Benchmark `RESPONSE_CHUNK_DEMAND` (1/4/8/16) and `RowDecodingScheduler` worker count/queue capacity — both self-documented placeholders, neither tuned with real measurements yet |
+> | Second-opinion review cross-checked against the code (2026-08-19) — 8 new findings confirmed real by reading the source, best current lead for the `ConcurrencyBenchmark` regression (see below) | Fix the two confirmed correctness/security bugs (`FluxInputStreamBridge#read(len=0)` contract, `Authentication`/`TransportOptions` `toString()` credential leak) and benchmark the NOOP-observability-overhead + `ByteBuf` copy fixes — none built yet |
 > | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
 > | Performance charts — added to this file and to the main `README.md` (2026-08-14) | |
 > | Machine spec (CPU/RAM/OS) — filled in (2026-08-14): Apple M3 Pro, 36 GB, macOS | |
@@ -1627,4 +1628,123 @@ left as placeholders for exactly this phase, per their own Javadoc — this revi
 confirm they're still the only two such placeholders left in the hot path, which, after reading
 `RowBinaryDecoder`, `DecodedRow`, `ClickHouseResult`, `ClickHouseRow`, `ClickHouseRowMetadata`,
 `RowDecodingScheduler`, `ListDecodingRowBinaryReader`, and `ClickHouseHttpTransport`, they are.
+
+---
+
+### Second-opinion review (ChatGPT, `main`@`6a5d000`) — cross-checked against the actual code (2026-08-19)
+
+A second, independently-produced static review (`docs/CLAUDE_CODE_REVIEW_JDK21.md`-style report,
+not committed verbatim — its findings are triaged here instead) was supplied for this file's own
+review above to be checked against. Per this project's own rule about not trusting a secondary
+source's claims at face value (the same discipline applied to the ChatGPT-generated charts earlier
+in this file), every concrete claim below was verified by reading the actual class before being
+written down as real — not accepted on the reviewing tool's authority.
+
+**Confirmed real, not caught by the review above — genuinely new findings:**
+
+1. **`QueryObservation.start(...)` computes a SHA-256 `SqlFingerprint` and calls `Instant.now()`
+   unconditionally, even when `DriverObservationListener.NOOP` is configured.** Read directly:
+   `start(...)` always calls `SqlFingerprint.of(sql)` (UTF-8 encode + `MessageDigest.getInstance("SHA-256")`
+   + digest + hex-encode) and `Instant.now()`, then still calls `listener.queryStarted(...)` —
+   `NOOP`'s methods are empty, but every allocation/computation that builds their *arguments* already
+   happened before that call. `firstRowReceived()`/`completed()`/`failed()`/`cancelled()` each call
+   `Instant.now()`/`Duration.between(...)` again, same story. **This is a real, unconditional
+   per-query cost paid by the default configuration** (no listener configured = `NOOP`), not
+   something the code review above already flagged — the hot-path review only looked at
+   decode/transport, not the observability plumbing layered on top of every query.
+2. **`ClickHouseResult.decode()` converts every response chunk via `response.body().asByteArray().map(ByteBuffer::wrap)`.**
+   Read directly: `asByteArray()` is Reactor Netty's own `ByteBufFlux` method — it copies each
+   `ByteBuf`'s bytes into a freshly allocated `byte[]` before this driver's decode path ever sees
+   them, and `ByteBuffer.wrap(...)` then adds a second small wrapper object on top. This is upstream
+   of everything the hot-path review above looked at (`RowBinaryDecoder` onward) — a real,
+   unavoidable-as-currently-written copy on every streamed byte, for every query, confirmed vs.
+   assumed.
+3. **The same `decode()` method also unconditionally wires `AtomicLong byteCount`/`rowCount` plus
+   `doOnNext`/`doOnComplete`/`doOnError`/`doOnCancel` callbacks that exist purely to feed
+   `QueryObservation`**, regardless of whether a real listener is attached — same "`NOOP` is
+   behaviorally silent but not computationally free" pattern as finding 1, but at the per-row level
+   (a `rowCount.incrementAndGet()` call per row) rather than just per-query.
+4. **`ListDecodingRowBinaryReader#readRecord` calls `getSchema().getColumns()` and re-evaluates
+   `listHintFor(column)` (an `Array`/`Nested` type check) for every column of every row**, not once
+   per result. The schema is fixed once the header is decoded — this is `R × C` repeated work
+   (`R` rows, `C` columns) that could be precomputed once. Missed in this file's own hot-path review
+   above because that review focused on `nextRowValues()`'s `clone()` cost (confirmed already
+   optimal) without separately scrutinizing `readRecord()`'s own per-row work above the clone.
+5. **`Authentication.Basic`/`Authentication.UserKey` are records with generated `toString()` that
+   prints the password/key in plain text, and `TransportOptions.toString()` embeds `authentication`
+   directly** — read directly, confirmed: `TransportOptions.toString()` literally does `"authentication="
+   + authentication`, and neither `Basic` nor `UserKey` overrides `toString()` to redact anything.
+   Logging a `TransportOptions` (e.g. the startup summary `ClickHouseConnectionFactory` logs, or any
+   consumer's own diagnostic logging) leaks credentials. **This is a real security/hygiene bug, not
+   a performance finding** — worth fixing regardless of any benchmark.
+6. **`Authentication.Basic#addTo` recomputes the Base64-encoded `Authorization` header on every
+   single request** (`user + ":" + password` string concat, UTF-8 encode, Base64 encode) instead of
+   once when the `Basic` value is constructed — confirmed by reading `addTo(HttpHeaders)`, which does
+   all three steps inline, called once per `queryWithSummary`/`insertWithSummary` call in
+   `ClickHouseHttpTransport`.
+7. **`FluxInputStreamBridge` uses `LinkedBlockingQueue` for a queue whose capacity is a small fixed
+   bound (`demand + 1`)** — confirmed via the constructor (`new LinkedBlockingQueue<>(demand + 1)`).
+   A linked queue pays a `Node` allocation per `add`/`take` that an array-backed bound queue
+   (`ArrayBlockingQueue`) wouldn't; low-risk, single-line-change benchmark candidate.
+8. **`FluxInputStreamBridge#read(byte[], int, int)` has a real, confirmed `InputStream` contract
+   bug**: it checks `finished` and returns `-1` *before* checking whether `length == 0`.
+   `InputStream`'s own contract requires `read(b, off, 0)` to always return `0`, even at end of
+   stream, since "no bytes were requested and none were read" is a different outcome from "end of
+   stream reached." Confirmed by reading the method — `if (finished) { return -1; }` is the first
+   line, with no `length == 0` check anywhere before it. This is a correctness bug, not a
+   performance one, and it's cheap to fix with one added branch plus a focused test; not yet fixed
+   here — left as a red test to write next.
+
+**Plausible, consistent with what's already known, but not independently re-verified beyond reading
+the code once (no benchmark run to confirm actual impact):**
+
+- `RowDecodingScheduler`'s `availableProcessors()`-sized worker pool may specifically be
+  *undersized*, not just unbenchmarked, because a decoder worker spends real time parked in
+  `BlockingQueue.take()` waiting for the next network chunk rather than being purely CPU-bound —
+  this refines (doesn't contradict) this file's own already-tracked open item on the same class; the
+  second review's specific angle (blocking-wait time, not CPU time, is what should size the pool) is
+  a real nuance worth testing alongside the existing worker-count/queue-capacity sweep.
+- A JDK 21 virtual-thread-per-task experiment for the same bridge's blocking point — plausible given
+  `BlockingQueue.take()` is exactly the kind of blocking call virtual threads are designed for, but
+  this is a genuinely new experiment, not a re-measurement of anything already benchmarked in this
+  file, and `Schedulers.newBoundedElastic(...)`'s relationship to Reactor's own virtual-thread mode
+  would need to be confirmed against the actual pinned Reactor Core version before trusting the
+  review's claim that it doesn't apply automatically.
+- `TransportOptions.trustedCertificatePem` isn't defensively copied in the canonical constructor or
+  accessor — confirmed the array is stored/returned by reference (the existing `equals`/`hashCode`/
+  `toString` overrides only fix *comparison*, not *mutability*) — real, but low-priority API hygiene,
+  not a hot-path concern.
+
+**Not independently checked** (accepted here only as the second review's own claim, not verified
+against this codebase): the exact `ClickHouseHttpTransport.buildConnectionProvider()`/lifecycle
+claims (P1/S3 in the source review), `connectTimeout.toMillis()` overflow behavior, and the
+`ClickHouseConnectionFactory`/`RowDecodingScheduler` disposal-API gap — this last one is already
+independently tracked as this project's own known gap (see the `ROADMAP.md` "Definition of done for
+0.2.0" checklist item this session already left honestly unchecked), so it isn't a new finding, just
+independent confirmation from a second source.
+
+**Net triage — ranked by confirmed-value, not the source review's own P0/P1 labels:**
+
+| # | Finding | Confirmed? | Kind | Notes |
+| --- | --- | --- | --- | --- |
+| 1 | `QueryObservation` computes SHA-256/timestamps even when `NOOP` | ✅ read the code | Performance | Affects every query by default |
+| 2 | `ClickHouseResult.decode()` copies every chunk via `asByteArray()` | ✅ read the code | Performance | Upstream of the whole decode path |
+| 3 | Per-row observation counters wired even when `NOOP` | ✅ read the code | Performance | Same root cause as #1 |
+| 4 | `ListDecodingRowBinaryReader` repeats schema/hint lookup per row | ✅ read the code | Performance | New, not caught by this file's own review above |
+| 5 | `Authentication`/`TransportOptions` `toString()` leaks credentials | ✅ read the code | **Security** | Fix independent of any benchmark |
+| 6 | `Authentication.Basic` recomputes its header every request | ✅ read the code | Performance | Small, but free to fix alongside #5 |
+| 7 | `FluxInputStreamBridge`'s `LinkedBlockingQueue` vs `ArrayBlockingQueue` | ✅ read the code | Performance | Low-risk, needs a benchmark to size the win |
+| 8 | `FluxInputStreamBridge#read` ignores `length == 0` before EOF check | ✅ read the code | **Correctness bug** | Cheap fix, write the red test first |
+| — | `RowDecodingScheduler` sizing should account for blocking-wait, not just CPU count | Plausible, not benchmarked | Performance | Refines an already-tracked open item |
+| — | Virtual-thread decoder scheduler experiment | Plausible, new idea | Performance | Genuinely new, needs its own benchmark class |
+| — | `trustedCertificatePem` not defensively copied | ✅ read the code | API hygiene | Low priority |
+
+Findings 5 and 8 are correctness/security bugs, not benchmark-gated performance work — CLAUDE.md's
+TDD workflow applies to both directly (a red test proving the leak/contract violation, then the
+smallest fix). Findings 1–4, 6, 7 are real, confirmed, unbenchmarked hot-path candidates, additive
+to (not a replacement for) this file's own `RESPONSE_CHUNK_DEMAND`/`RowDecodingScheduler`-sizing
+open items above — **findings 1–3 (observability's always-on cost) are now the single best-evidenced
+lead for the `ConcurrencyBenchmark`/10k-row ~5-6% regression this file has been trying to explain all
+along**, since they're the one hot-path cost that exists in this driver's request path with no
+equivalent in client-v2's, confirmed present on every query regardless of configuration.
 
