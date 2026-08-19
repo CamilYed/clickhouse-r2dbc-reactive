@@ -70,7 +70,8 @@ public final class RowBinaryDecoder {
    * RowDecodingScheduler}'s off-event-loop guarantee.
    */
   public static Flux<DecodedRow> decodeRows(final Flux<ByteBuffer> source) {
-    return Flux.generate(() -> newReader(source), RowBinaryDecoder::emitNextRow);
+    return Flux.generate(
+        () -> newReader(source), RowBinaryDecoder::emitNextRow, RowBinaryDecoder::closeReader);
   }
 
   /**
@@ -100,7 +101,10 @@ public final class RowBinaryDecoder {
             reader ->
                 new DecodedResult(
                     columnsOf(reader),
-                    Flux.generate(() -> reader, RowBinaryDecoder::emitNextRow)
+                    Flux.generate(
+                            () -> reader,
+                            RowBinaryDecoder::emitNextRow,
+                            RowBinaryDecoder::closeReader)
                         .subscribeOn(reactorScheduler)));
   }
 
@@ -141,5 +145,43 @@ public final class RowBinaryDecoder {
       sink.complete();
     }
     return reader;
+  }
+
+  /**
+   * {@code Flux.generate}'s disposal hook, called exactly once when the returned sequence
+   * terminates for any reason — natural completion, an error, <em>or downstream cancellation</em>
+   * (see {@code reactor.core.publisher.FluxGenerate.GenerateSubscription#cleanup}, which calls the
+   * supplied {@code Consumer<S>} on every one of those paths, not just normal completion). Without
+   * this, {@link #decode}/{@link #decodeRows}' 2-arg {@code Flux.generate} overload used before
+   * this method existed silently discarded the reader state on cancellation instead — {@link
+   * ListDecodingRowBinaryReader} (inherited from client-v2's {@code AbstractBinaryFormatReader})
+   * already implements {@code close()} as {@code input.close()}, i.e. {@link
+   * FluxInputStreamBridge#close()}, which cancels the underlying transport subscription; that path
+   * was simply never reached when a caller cancelled mid-stream (e.g. an R2DBC consumer that stops
+   * reading rows early) rather than letting the sequence complete or error naturally. Left the
+   * connection merely idle rather than explicitly torn down — see {@code RowBinaryDecoderTest}'s
+   * cancellation tests for the regression coverage.
+   */
+  private static void closeReader(final ListDecodingRowBinaryReader reader) {
+    try {
+      reader.close();
+    } catch (final Exception e) {
+      throw new RowBinaryDecoderCloseException(e);
+    }
+  }
+
+  /**
+   * Wraps a failure closing the row decoder's underlying stream during {@code Flux.generate}'s
+   * disposal hook. Deliberately unchecked: {@code Consumer<S>} (the {@code Flux.generate} disposal
+   * callback's own type) cannot declare a checked exception, and {@code FluxGenerate}'s own {@code
+   * cleanup()} already catches {@code Throwable} here and routes it to Reactor's standard {@code
+   * Operators.onErrorDropped} hook — the same place any other cleanup-time failure in this sequence
+   * would surface — rather than this class inventing its own logging dependency for a single rare
+   * path.
+   */
+  private static final class RowBinaryDecoderCloseException extends RuntimeException {
+    RowBinaryDecoderCloseException(final Exception cause) {
+      super("Failed to close the row decoder's underlying stream", cause);
+    }
   }
 }

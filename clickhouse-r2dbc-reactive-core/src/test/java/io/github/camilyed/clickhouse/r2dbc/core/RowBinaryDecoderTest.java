@@ -6,9 +6,11 @@ import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 class RowBinaryDecoderTest {
 
@@ -81,5 +83,56 @@ class RowBinaryDecoderTest {
 
     // then
     assertThat(rowThreadName).startsWith("clickhouse-r2dbc-decoder");
+  }
+
+  @Test
+  void shouldCancelTheUnderlyingSourceWhenTheDecodedRowsAreCancelledBeforeCompletion() {
+    // given - the source never completes on its own (a Flux.never() tail after both rows), so
+    // cancelling downstream after the first row tests cancellation propagation through
+    // RowBinaryDecoder's Flux.generate, not a race with the source's own natural completion. Two
+    // rows, not one, because client-v2's reader reads one row ahead internally (see
+    // RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes()'s Javadoc) - a single-row
+    // fixture
+    // would make even emitting row 1 block forever on that look-ahead. An explicit initial request
+    // of 1 (rather than StepVerifier's default unbounded demand) means Flux.generate's own request
+    // loop stops naturally after emitting exactly that one row and goes idle, rather than
+    // immediately trying to generate a third row it would otherwise block forever reading -
+    // thenCancel() then cancels a genuinely idle subscription, not a still-running generation loop.
+    final AtomicBoolean sourceCancelled = new AtomicBoolean();
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes()))
+            .concatWith(Flux.never())
+            .doOnCancel(() -> sourceCancelled.set(true));
+
+    // when
+    final DecodedResult result =
+        RowBinaryDecoder.decode(source, decodingScheduler).block(Duration.ofSeconds(5));
+    StepVerifier.create(result.rows(), 1)
+        .expectNextCount(1)
+        .thenCancel()
+        .verify(Duration.ofSeconds(5));
+
+    // then
+    assertThat(sourceCancelled.get()).isTrue();
+  }
+
+  @Test
+  void shouldCancelTheUnderlyingSourceWhenDecodeRowsIsCancelledBeforeCompletion() {
+    // given - same shape and same explicit-initial-request-of-1 reasoning as the decode() test
+    // above, but for the raw decodeRows() entry point benchmarks/tests use directly
+    final AtomicBoolean sourceCancelled = new AtomicBoolean();
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes()))
+            .concatWith(Flux.never())
+            .doOnCancel(() -> sourceCancelled.set(true));
+
+    // when
+    StepVerifier.create(RowBinaryDecoder.decodeRows(source), 1)
+        .expectNextCount(1)
+        .thenCancel()
+        .verify(Duration.ofSeconds(5));
+
+    // then
+    assertThat(sourceCancelled.get()).isTrue();
   }
 }
