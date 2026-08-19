@@ -35,12 +35,12 @@ import reactor.core.publisher.Mono;
  * Level 2 ("Public R2DBC SPI") comparison — docs/PERFORMANCE.md's "Comparison levels" section
  * designed this level ({@code ClickHouseConnection}/{@code ClickHouseStatement}/{@code
  * ClickHouseResult}, what an actual driver consumer calls, vs client-v2's {@link Client} API
- * directly) from the start, but no benchmark class ever actually exercised it — every other class in
- * this suite ({@link PointQueryBenchmark} included) calls {@link
+ * directly) from the start, but no benchmark class ever actually exercised it — every other class
+ * in this suite ({@link PointQueryBenchmark} included) calls {@link
  * io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport}/{@link
  * io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder} directly, bypassing the {@code
- * connector} module (and therefore {@code QueryObservation}/{@code ClickHouseResult}) entirely. This
- * class is deliberately built through the public R2DBC SPI only ({@link Connection}/{@link
+ * connector} module (and therefore {@code QueryObservation}/{@code ClickHouseResult}) entirely.
+ * This class is deliberately built through the public R2DBC SPI only ({@link Connection}/{@link
  * Statement}/{@link io.r2dbc.spi.Result}, obtained via {@link ClickHouseConnectionFactory#from},
  * never a package-private {@code connector} class) — exactly what an application using this driver
  * actually calls.
@@ -53,8 +53,8 @@ import reactor.core.publisher.Mono;
  * timestamping/counting cost from every other variable (network, decode, JIT warmup) instead of
  * comparing against a run from a different day. The enabled-side listener is an anonymous {@link
  * DriverObservationListener} that overrides nothing (every callback stays the inherited no-op
- * default) — deliberately, so the measured cost is {@code ActiveQueryObservation}'s own construction
- * work, not any real listener's logging/metrics overhead layered on top of it.
+ * default) — deliberately, so the measured cost is {@code ActiveQueryObservation}'s own
+ * construction work, not any real listener's logging/metrics overhead layered on top of it.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -81,9 +81,9 @@ public class PublicApiPointQueryBenchmark {
 
   /**
    * Starts the shared container, seeds {@link PointQueryTable}, and opens one long-lived {@link
-   * Connection} per observation configuration — connections are reused across every {@code
-   * @Benchmark} invocation, the same amortize-setup-once shape {@link PointQueryBenchmark} uses for
-   * its own transport/client, so what's measured is query cost, not connection setup.
+   * Connection} per observation configuration — connections are reused across every
+   * {@code @Benchmark} invocation, the same amortize-setup-once shape {@link PointQueryBenchmark}
+   * uses for its own transport/client, so what's measured is query cost, not connection setup.
    */
   @Setup(Level.Trial)
   public void setUpTrial() {

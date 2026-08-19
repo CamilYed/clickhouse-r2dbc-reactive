@@ -30,8 +30,8 @@ sealed interface QueryObservation permits ActiveQueryObservation, NoopQueryObser
    * Fires {@link DriverObservationListener#queryStarted} and returns a tracker for this attempt —
    * or, when {@code listener.isEnabled()} is {@code false}, skips fingerprinting/timestamping/event
    * construction entirely and returns the shared {@link NoopQueryObservation} instance instead. See
-   * {@link DriverObservationListener#isEnabled()}'s Javadoc for why that's a hard "don't bother", not
-   * just a filter applied after the fact.
+   * {@link DriverObservationListener#isEnabled()}'s Javadoc for why that's a hard "don't bother",
+   * not just a filter applied after the fact.
    */
   static QueryObservation start(
       final DriverObservationListener listener,
@@ -56,9 +56,9 @@ sealed interface QueryObservation permits ActiveQueryObservation, NoopQueryObser
   /**
    * Fires {@link DriverObservationListener#queryCompleted}. {@code timeToFirstRow} is {@link
    * java.time.Duration#ZERO} if {@link #firstRowReceived()} was never called for this attempt — see
-   * {@link io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why that's the
-   * documented, correct value for an {@link OperationKind#INSERT}, and simply means "no rows were
-   * ever consumed" for a {@link OperationKind#QUERY}.
+   * {@link io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why that's
+   * the documented, correct value for an {@link OperationKind#INSERT}, and simply means "no rows
+   * were ever consumed" for a {@link OperationKind#QUERY}.
    */
   void completed(long rowCount, long byteCount);
 

@@ -12,15 +12,15 @@ package io.github.camilyed.clickhouse.r2dbc.core;
  * Javadoc for why a hash stands in for the SQL text.
  *
  * <p><b>{@link #isEnabled()} is a hard "don't bother" switch, not just a filter applied after the
- * fact.</b> {@code NOOP}'s own lifecycle methods are already empty, so overriding them was never the
- * expensive part — computing what would have been passed to them was: a {@link SqlFingerprint}
+ * fact.</b> {@code NOOP}'s own lifecycle methods are already empty, so overriding them was never
+ * the expensive part — computing what would have been passed to them was: a {@link SqlFingerprint}
  * (SHA-256 over the SQL text) plus {@link java.time.Instant#now()} timestamps get built for every
  * query attempt whether or not anything ever reads them, and the connector additionally wires
- * per-row/per-chunk counters purely to feed the eventual {@code queryCompleted} call. A caller whose
- * {@link #isEnabled()} returns {@code false} is promising it wants none of that work done, not just
- * that it won't be called with the result — so an implementation must not return {@code false} while
- * still expecting its overridden lifecycle methods to fire; that combination is a contradiction this
- * interface doesn't try to detect, only to document.
+ * per-row/per-chunk counters purely to feed the eventual {@code queryCompleted} call. A caller
+ * whose {@link #isEnabled()} returns {@code false} is promising it wants none of that work done,
+ * not just that it won't be called with the result — so an implementation must not return {@code
+ * false} while still expecting its overridden lifecycle methods to fire; that combination is a
+ * contradiction this interface doesn't try to detect, only to document.
  */
 public interface DriverObservationListener {
 
