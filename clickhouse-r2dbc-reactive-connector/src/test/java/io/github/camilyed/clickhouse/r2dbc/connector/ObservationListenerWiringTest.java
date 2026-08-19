@@ -84,4 +84,32 @@ class ObservationListenerWiringTest {
       assertThat(listener.completedEvents()).isEmpty();
     }
   }
+
+  @Test
+  void shouldStillDecodeRowsCorrectlyWithNoListenerConfigured() {
+    // given - OBSERVATION_LISTENER left unset, so every query goes through the
+    // isEnabled()==false fast path (DriverObservationListener.NOOP by default) instead of the
+    // instrumented one the other tests in this class exercise.
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final ConnectionFactoryOptions options =
+          ConnectionFactoryOptions.builder()
+              .option(ConnectionFactoryOptions.HOST, "localhost")
+              .option(ConnectionFactoryOptions.PORT, server.port())
+              .build();
+      final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+      // when
+      final long rowCount =
+          Mono.from(factory.create())
+              .flatMapMany(connection -> connection.createStatement("SELECT 1").execute())
+              .flatMap(result -> Flux.from(result.map((row, metadata) -> row)))
+              .count()
+              .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(rowCount).isEqualTo(1L);
+    }
+  }
 }

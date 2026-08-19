@@ -84,8 +84,31 @@ final class ClickHouseResult implements Result {
    * consumes the {@link Result} via {@link #map}/{@link #flatMap}; see {@link
    * io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why a caller that
    * never does so never triggers those events at all.
+   *
+   * <p>When {@code observation.isEnabled()} is {@code false} (the default, unconfigured case), the
+   * per-chunk byte-counting and per-row {@code doOnNext}/{@code doOnComplete}/{@code doOnError}/
+   * {@code doOnCancel} wiring below is skipped entirely rather than wired and left to feed a call
+   * that was never going to happen — see {@link
+   * io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener#isEnabled()}'s Javadoc for
+   * why that's the point of the flag.
    */
   static Mono<ClickHouseResult> decode(
+      final ClickHouseQueryResponse response,
+      final RowDecodingScheduler decodingScheduler,
+      final QueryObservation observation) {
+    return observation.isEnabled()
+        ? decodeObserved(response, decodingScheduler, observation)
+        : decodePlain(response, decodingScheduler);
+  }
+
+  private static Mono<ClickHouseResult> decodePlain(
+      final ClickHouseQueryResponse response, final RowDecodingScheduler decodingScheduler) {
+    final Flux<ByteBuffer> body = response.body().asByteArray().map(ByteBuffer::wrap);
+    return RowBinaryDecoder.decode(body, decodingScheduler)
+        .map(decoded -> new ClickHouseResult(decoded, response.writtenRows().getAsLong()));
+  }
+
+  private static Mono<ClickHouseResult> decodeObserved(
       final ClickHouseQueryResponse response,
       final RowDecodingScheduler decodingScheduler,
       final QueryObservation observation) {

@@ -57,6 +57,14 @@ for the full scoping and acceptance criteria this release was built against.
   reclassifies HTTP `503` as a connection-style retry case.
 - Outstanding Dependabot PRs merged (`org.sonarqube`, `actions/upload-artifact`,
   `actions/checkout`, `actions/setup-java`, `reactor-netty-http`, `reactor`).
+- **`DriverObservationListener.NOOP` (the default when no listener is configured) is now a genuine
+  fast path, not just a set of empty method bodies** — added `DriverObservationListener#isEnabled()`
+  (defaults to `true`, `NOOP` overrides it to `false`); `QueryObservation.start` returns a stateless
+  no-op instance when the configured listener reports itself disabled, skipping `SqlFingerprint`
+  (SHA-256) computation and `Instant.now()` timestamping entirely instead of computing them and
+  discarding the result. `ClickHouseResult.decode` and `Connection.insertStreaming` skip their own
+  per-chunk/per-row byte- and row-counting wiring the same way. Behavior is unchanged for any
+  listener that doesn't override `isEnabled()` (the default stays `true`).
 
 ### Fixed
 
