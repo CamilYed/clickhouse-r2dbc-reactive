@@ -114,6 +114,23 @@ class ClickHouseConnectionTest {
   }
 
   @Test
+  void shouldFailLocalValidationAfterCloseEvenWhenTheValidatePublisherWasObtainedBeforeClose() {
+    // given
+    // The R2DBC TCK's own validate() test builds every validate()/close() Publisher up front - via
+    // Flux.concat(connection.validate(LOCAL), ..., connection.close(), connection.validate(LOCAL),
+    // ...) - before subscribing to any of them, then relies on Flux.concat's sequential
+    // subscription order to close the connection before the second validate(LOCAL) actually runs.
+    // validate(...) must therefore check closed state lazily, at subscription time, not eagerly
+    // when the method is called to build the Publisher - otherwise this second Publisher, obtained
+    // before close() was ever subscribed to, would wrongly capture "still open".
+    final var validateAfterClose = connection.validate(ValidationDepth.LOCAL);
+    Mono.from(connection.close()).block(Duration.ofSeconds(1));
+
+    // when / then
+    StepVerifier.create(validateAfterClose).expectNext(false).verifyComplete();
+  }
+
+  @Test
   void shouldRejectCreatingAStatementAfterClose() {
     // given
     Mono.from(connection.close()).block(Duration.ofSeconds(1));

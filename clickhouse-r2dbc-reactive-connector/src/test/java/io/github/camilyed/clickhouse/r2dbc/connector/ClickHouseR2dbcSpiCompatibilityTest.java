@@ -179,6 +179,28 @@ class ClickHouseR2dbcSpiCompatibilityTest extends BaseClickHouseIntegrationTest
   public void returnGeneratedValuesFails() {}
 
   // -----------------------------------------------------------------------------------------
+  // Duplicate column names: the TCK's own fixture query for both tests below is
+  // "SELECT col1 AS test_value, col2 AS test_value FROM test_two_column" (TestStatement's
+  // SELECT_VALUE_TWO_COLUMNS, not something this class controls via doGetSql - only CREATE TABLE
+  // statements are customized above). Confirmed against a real ClickHouse 26.7.3.19 server: it
+  // rejects that query outright, before any row is ever decoded - "Code: 179. DB::Exception:
+  // Multiple expressions col2 AS test_value and col1 AS test_value for alias test_value ...
+  // (MULTIPLE_EXPRESSIONS_FOR_ALIAS)". Unlike Postgres/MySQL, ClickHouse does not allow a SELECT to
+  // alias two different columns to the same name, so this SPI behavior (accessing duplicate-named
+  // columns by position after they collide by name) cannot be exercised against ClickHouse at all.
+  // -----------------------------------------------------------------------------------------
+
+  @Disabled(
+      "ClickHouse rejects SELECT col1 AS test_value, col2 AS test_value FROM ... outright (MULTIPLE_EXPRESSIONS_FOR_ALIAS) - a SELECT cannot alias two columns to the same name, unlike Postgres/MySQL")
+  @Override
+  public void columnMetadata() {}
+
+  @Disabled(
+      "Same root cause as columnMetadata(): the TCK's duplicate-column fixture query is rejected server-side by ClickHouse (MULTIPLE_EXPRESSIONS_FOR_ALIAS) before any row is decoded")
+  @Override
+  public void duplicateColumnNames() {}
+
+  // -----------------------------------------------------------------------------------------
   // Misc SPI edges this driver deliberately doesn't match today.
   // -----------------------------------------------------------------------------------------
 

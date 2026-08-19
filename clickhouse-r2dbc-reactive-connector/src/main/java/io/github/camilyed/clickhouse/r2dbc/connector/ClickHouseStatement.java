@@ -6,6 +6,7 @@ import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
+import io.r2dbc.spi.Parameter;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Statement;
 import java.time.Duration;
@@ -154,8 +155,19 @@ final class ClickHouseStatement implements Statement {
       throw new IllegalArgumentException("name and value must not be null");
     }
     requireDeclaredParameter(name);
-    boundValues.put(name, value);
+    boundValues.put(name, unwrapParameter(value));
     return this;
+  }
+
+  // io.r2dbc.spi.Parameters.in(...) - the R2DBC SPI's own explicit-type parameter binding - wraps
+  // the actual value in a Parameter rather than passing it directly to bind(). Unwrapping it here
+  // (instead of, say, in ClickHouseQuery's wire encoding) keeps every io.r2dbc.spi type confined to
+  // this connector module, per this project's Architecture rule that core stays independent of any
+  // R2DBC type. This driver has no separate notion of an explicitly declared parameter type beyond
+  // what ClickHouse's own {name:Type} placeholder already declares in the SQL text, so only the
+  // wrapped value is kept - the Parameter's type is discarded, same as a directly-passed raw value.
+  private static @Nullable Object unwrapParameter(final Object value) {
+    return value instanceof Parameter parameter ? parameter.getValue() : value;
   }
 
   // See bind(int, Object) above for why this defensive check is kept despite @NullMarked.

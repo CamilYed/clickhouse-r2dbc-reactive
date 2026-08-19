@@ -14,13 +14,14 @@ a table, so it can be read without opening the test file.
 ## Supported (TCK passes as-is)
 
 Everything not listed in the tables below passes the TCK unmodified: connection creation and
-`isAutoCommit()`/`validate()`, statement creation and its null-argument failure mode, positional
-and named parameter binding (including `bindNull`), the full `Statement.add()`/batching contract
-(including its failure modes — incomplete binding, incomplete batch, a trailing `add()` with no
-following bind), `Result.filter`/`flatMap` segment handling for both `SELECT` and `INSERT`,
-case-insensitive column name lookup (`Row.get(String)`, `RowMetadata.contains`/`getColumnMetadata`
-by name), duplicate-column-name handling, and out-of-range `Row`/`RowMetadata` accessor failure
-modes (`IndexOutOfBoundsException`/`NoSuchElementException`).
+`isAutoCommit()`/`validate()` (including lazily, at subscription time — see `ClickHouseConnection`),
+statement creation and its null-argument failure mode, positional and named parameter binding
+(including `bindNull` and values wrapped via `io.r2dbc.spi.Parameters.in(...)`), the full
+`Statement.add()`/batching contract (including its failure modes — incomplete binding, incomplete
+batch, a trailing `add()` with no following bind), `Result.filter`/`flatMap` segment handling for
+both `SELECT` and `INSERT`, case-insensitive column name lookup (`Row.get(String)`,
+`RowMetadata.contains`/`getColumnMetadata` by name), and out-of-range `Row`/`RowMetadata` accessor
+failure modes (`IndexOutOfBoundsException`/`NoSuchElementException`).
 
 ## Deliberately unsupported
 
@@ -33,6 +34,7 @@ ClickHouse itself has no equivalent concept — this driver fails loudly (`Unsup
 | BLOB binding/extraction (`io.r2dbc.spi.Blob`) | `blobInsert`, `blobSelect` | ClickHouse has no distinct large-object type — binary data is just a `String`/`FixedString` column, and a plain string bind/read already covers it; this driver doesn't implement the `Blob` streaming API. |
 | CLOB binding/extraction (`io.r2dbc.spi.Clob`) | `clobInsert`, `clobSelect` | Same reasoning as BLOB — ClickHouse text is just `String`. |
 | Generated keys (`Statement.returnGeneratedValues()`) | `returnGeneratedValues`, `returnGeneratedValuesFails` | ClickHouse has no autoincrement/`RETURNING`-style mechanism; this driver doesn't override the method, so it inherits the R2DBC SPI's own default (`UnsupportedOperationException`) — itself the honest answer, not a gap to work around. |
+| Duplicate column names in one `SELECT` (`RowMetadata`/`Row` access to two columns aliased identically) | `columnMetadata`, `duplicateColumnNames` | Confirmed against a real ClickHouse 26.7.3.19 server: `SELECT col1 AS test_value, col2 AS test_value FROM ...` is rejected outright — `Code: 179. DB::Exception: Multiple expressions col2 AS test_value and col1 AS test_value for alias test_value ... (MULTIPLE_EXPRESSIONS_FOR_ALIAS)`. Unlike Postgres/MySQL, ClickHouse never produces a result set with two identically-named columns in the first place, so there's nothing for `Row`/`RowMetadata` to disambiguate by position. |
 
 ## Untested / not verified against this driver
 
