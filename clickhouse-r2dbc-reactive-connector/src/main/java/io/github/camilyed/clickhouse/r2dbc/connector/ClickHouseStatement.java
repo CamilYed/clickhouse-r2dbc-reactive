@@ -1,6 +1,8 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
+import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -78,13 +80,14 @@ final class ClickHouseStatement implements Statement {
   private final List<Map<String, Object>> savedBindingSets = new ArrayList<>();
   private final @Nullable Duration statementTimeout;
   private final RowDecodingScheduler decodingScheduler;
+  private final DriverObservationListener observationListener;
   private Map<String, Object> boundValues = new LinkedHashMap<>();
 
   ClickHouseStatement(
       final ClickHouseHttpTransport transport,
       final String sql,
       final RowDecodingScheduler decodingScheduler) {
-    this(transport, sql, null, decodingScheduler);
+    this(transport, sql, null, decodingScheduler, DriverObservationListener.NOOP);
   }
 
   /**
@@ -98,17 +101,23 @@ final class ClickHouseStatement implements Statement {
    * call this statement's {@link #execute()} makes — owned by, and shared across every
    * statement/batch/connection produced by, the same {@code ClickHouseConnectionFactory}; see
    * {@link io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler}'s Javadoc.
+   *
+   * <p>{@code observationListener} is notified of one {@link OperationKind#QUERY} lifecycle per
+   * binding set this statement's {@link #execute()} runs — see {@link DriverObservationListener}'s
+   * Javadoc for the full contract.
    */
   ClickHouseStatement(
       final ClickHouseHttpTransport transport,
       final String sql,
       final @Nullable Duration statementTimeout,
-      final RowDecodingScheduler decodingScheduler) {
+      final RowDecodingScheduler decodingScheduler,
+      final DriverObservationListener observationListener) {
     this.transport = transport;
     this.sql = sql;
     this.parameterNames = ClickHouseQuery.parameterNamesIn(sql);
     this.statementTimeout = statementTimeout;
     this.decodingScheduler = decodingScheduler;
+    this.observationListener = observationListener;
   }
 
   @Override
@@ -185,9 +194,13 @@ final class ClickHouseStatement implements Statement {
       query =
           query.withSettings(Map.of(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout)));
     }
+    final QueryObservation observation =
+        QueryObservation.start(observationListener, query.queryId(), OperationKind.QUERY, sql);
     return transport
         .queryWithSummary(query)
-        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler));
+        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler, observation))
+        .doOnError(observation::failed)
+        .doOnCancel(observation::cancelled);
   }
 
   private static String formatSeconds(final Duration duration) {

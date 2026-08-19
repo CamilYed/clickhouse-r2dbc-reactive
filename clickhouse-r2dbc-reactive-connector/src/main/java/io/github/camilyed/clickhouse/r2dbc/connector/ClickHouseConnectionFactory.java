@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
+import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -26,7 +27,9 @@ import reactor.core.publisher.Mono;
  * ClickHouseHttpTransport} — and therefore its connection pool — rather than each opening its own.
  * Every produced {@link Connection} likewise shares this factory's single {@link
  * RowDecodingScheduler}, disposed together with this factory rather than recreated per connection —
- * see that class's Javadoc for the full ownership contract.
+ * see that class's Javadoc for the full ownership contract. Every produced {@link Connection} also
+ * shares this factory's single {@link DriverObservationListener} — see {@link
+ * ClickHouseConnectionFactoryProvider#OBSERVATION_LISTENER}'s Javadoc.
  */
 public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
@@ -34,9 +37,16 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
   private final ClickHouseHttpTransport transport;
   private final RowDecodingScheduler decodingScheduler = RowDecodingScheduler.defaults();
+  private final DriverObservationListener observationListener;
 
   ClickHouseConnectionFactory(final ClickHouseHttpTransport transport) {
+    this(transport, DriverObservationListener.NOOP);
+  }
+
+  ClickHouseConnectionFactory(
+      final ClickHouseHttpTransport transport, final DriverObservationListener observationListener) {
     this.transport = transport;
+    this.observationListener = observationListener;
   }
 
   /**
@@ -135,7 +145,28 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
             .withMaxIdleTime(transportMaxIdleTime)
             .withMaxLifeTime(transportMaxLifeTime);
 
-    return new ClickHouseConnectionFactory(new ClickHouseHttpTransport(baseUrl, transportOptions));
+    final DriverObservationListener observationListener =
+        observationListenerOption(options, ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER);
+
+    return new ClickHouseConnectionFactory(
+        new ClickHouseHttpTransport(baseUrl, transportOptions), observationListener);
+  }
+
+  // See intOption's comment above - same reasoning, for DriverObservationListener-typed options.
+  // Unlike every other option this factory reads, DriverObservationListener has no URL-string
+  // form at all (see ClickHouseConnectionFactoryProvider#OBSERVATION_LISTENER's Javadoc) - a
+  // String value here is always a configuration mistake, not an alternate encoding to parse.
+  private static DriverObservationListener observationListenerOption(
+      final ConnectionFactoryOptions options, final Option<?> option) {
+    final Object raw = options.getValue(option);
+    if (raw == null) {
+      return DriverObservationListener.NOOP;
+    }
+    if (raw instanceof final DriverObservationListener value) {
+      return value;
+    }
+    throw new IllegalArgumentException(
+        option.name() + " must be a DriverObservationListener instance, got: " + raw);
   }
 
   // ConnectionFactoryOptions.parse(url) has no way to know a custom (non-R2DBC-well-known)
@@ -205,7 +236,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
   @Override
   public Mono<ClickHouseConnection> create() {
-    return Mono.fromSupplier(() -> new ClickHouseConnection(transport, decodingScheduler));
+    return Mono.fromSupplier(
+        () -> new ClickHouseConnection(transport, decodingScheduler, observationListener));
   }
 
   @Override

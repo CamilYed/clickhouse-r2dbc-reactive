@@ -1,6 +1,8 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
+import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
@@ -14,8 +16,10 @@ import io.r2dbc.spi.ValidationDepth;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
@@ -53,6 +57,7 @@ public final class ClickHouseConnection implements Connection {
 
   private final ClickHouseHttpTransport transport;
   private final RowDecodingScheduler decodingScheduler;
+  private final DriverObservationListener observationListener;
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private @Nullable Duration statementTimeout;
 
@@ -65,8 +70,21 @@ public final class ClickHouseConnection implements Connection {
    */
   ClickHouseConnection(
       final ClickHouseHttpTransport transport, final RowDecodingScheduler decodingScheduler) {
+    this(transport, decodingScheduler, DriverObservationListener.NOOP);
+  }
+
+  /**
+   * {@code observationListener} is shared, unchanged, with every {@link Statement}/{@link Batch}
+   * this connection creates, and used directly by {@link #insertStreaming} — see {@link
+   * DriverObservationListener}'s Javadoc for the full contract.
+   */
+  ClickHouseConnection(
+      final ClickHouseHttpTransport transport,
+      final RowDecodingScheduler decodingScheduler,
+      final DriverObservationListener observationListener) {
     this.transport = transport;
     this.decodingScheduler = decodingScheduler;
+    this.observationListener = observationListener;
   }
 
   @Override
@@ -92,7 +110,7 @@ public final class ClickHouseConnection implements Connection {
   @Override
   public Batch createBatch() {
     requireOpen();
-    return new ClickHouseBatch(transport, decodingScheduler);
+    return new ClickHouseBatch(transport, decodingScheduler, observationListener);
   }
 
   @Override
@@ -109,7 +127,8 @@ public final class ClickHouseConnection implements Connection {
       throw new IllegalArgumentException("sql must not be null");
     }
     requireOpen();
-    return new ClickHouseStatement(transport, sql, statementTimeout, decodingScheduler);
+    return new ClickHouseStatement(
+        transport, sql, statementTimeout, decodingScheduler, observationListener);
   }
 
   @Override
@@ -226,6 +245,13 @@ public final class ClickHouseConnection implements Connection {
    * never emit anything (see {@link ClickHouseResult#forInsert}). Any failure, including one that
    * happens mid-stream, is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
    * ClickHouseR2dbcException#wrap}, same as {@link ClickHouseStatement#execute()}.
+   *
+   * <p>Reports one {@link OperationKind#INSERT} attempt to this connection's {@link
+   * DriverObservationListener} — {@code byteCount} is the number of bytes actually read off {@code
+   * data} before the request completed (not necessarily every byte {@code data} would ever have
+   * emitted, if the request fails partway through); {@code rowCount} is {@code
+   * response.writtenRows()}; {@code timeToFirstRow} is always {@link Duration#ZERO} (see {@link
+   * io.github.camilyed.clickhouse.r2dbc.core.QueryCompletedEvent}'s Javadoc for why).
    */
   // sql/data are declared non-null under this module's @NullMarked contract, but this is a
   // public entry point external callers reach without JSpecify tooling of their own - failing
@@ -238,10 +264,20 @@ public final class ClickHouseConnection implements Connection {
       throw new IllegalArgumentException("data must not be null");
     }
     requireOpen();
+    final ClickHouseQuery query = ClickHouseQuery.of(sql);
+    final QueryObservation observation =
+        QueryObservation.start(observationListener, query.queryId(), OperationKind.INSERT, sql);
+    final AtomicLong sentByteCount = new AtomicLong();
+    final Flux<ByteBuffer> observedData =
+        Flux.from(data).doOnNext(buffer -> sentByteCount.addAndGet(buffer.remaining()));
     return transport
-        .insertWithSummary(ClickHouseQuery.of(sql), data)
+        .insertWithSummary(query, observedData)
         .flatMap(response -> response.body().aggregate().asByteArray().thenReturn(response))
+        .doOnNext(
+            response -> observation.completed(response.writtenRows().getAsLong(), sentByteCount.get()))
         .map(response -> (Result) ClickHouseResult.forInsert(response.writtenRows().getAsLong()))
+        .doOnError(observation::failed)
+        .doOnCancel(observation::cancelled)
         .onErrorMap(ClickHouseR2dbcException::wrap);
   }
 

@@ -8,10 +8,17 @@ dependencies {
     implementation(project(":clickhouse-r2dbc-reactive-transport-http"))
     compileOnly(libs.jspecify)
 
+    // For Slf4jDriverObservationListener, the reference DriverObservationListener implementation
+    // logging query lifecycle events keyed on query_id - the same optional-logging-facade pattern
+    // as clickhouse-r2dbc-reactive-transport-http's own use of slf4j.api for its best-effort
+    // KILL QUERY warning.
+    implementation(libs.slf4j.api)
+
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj.core)
     testImplementation(libs.reactor.test)
+    testRuntimeOnly(libs.slf4j.simple)
 
     // Only for ClickHouseConnectionFactoryR2dbcPoolAgainstRealClickHouseTest — proves this
     // driver's ConnectionFactory works correctly when wrapped by io.r2dbc.pool's ConnectionPool,

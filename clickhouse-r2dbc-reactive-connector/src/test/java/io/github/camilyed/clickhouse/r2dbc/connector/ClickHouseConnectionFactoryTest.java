@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.camilyed.clickhouse.r2dbc.connector.fakes.RecordingDriverObservationListener;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.NoSuchOptionException;
 import java.nio.file.Files;
@@ -291,5 +292,36 @@ class ClickHouseConnectionFactoryTest {
     // when / then
     assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
         .isInstanceOf(DateTimeParseException.class);
+  }
+
+  @Test
+  void shouldAcceptAConfiguredObservationListener() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(
+                ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER,
+                new RecordingDriverObservationListener())
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldRejectAnObservationListenerThatIsNotADriverObservationListenerInstance() {
+    // given - unlike every other option on this provider, DriverObservationListener has no
+    // URL-string form; a String value here can only be a configuration mistake.
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.parse(
+            "r2dbc:clickhouse://localhost:8123?observationListener=not-a-listener");
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 }
