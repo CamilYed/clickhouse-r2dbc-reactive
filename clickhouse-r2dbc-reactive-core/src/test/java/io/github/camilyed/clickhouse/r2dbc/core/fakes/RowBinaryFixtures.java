@@ -23,6 +23,24 @@ public final class RowBinaryFixtures {
   }
 
   /**
+   * One column named {@code "1"} of type {@code UInt8}, two rows with values {@code 1} and {@code
+   * 2} — both fully present in this single chunk, unlike {@link
+   * #selectOneRowBinaryWithNamesAndTypes()}. Exists specifically so a test can hand a cancellation
+   * scenario a source that never completes on its own (e.g. a {@code Flux.never()} tail) without
+   * the very first row also hanging forever: client-v2's own reader eagerly reads one row ahead
+   * internally (see {@code AbstractBinaryFormatReader#next()} swapping {@code nextRecord} into
+   * {@code currentRecord} and immediately calling {@code readNextRecord()} again), so handing out
+   * row 1 always requires row 2's bytes (or an end-of-stream signal) to already be available —
+   * providing only one row's bytes followed by a source that never completes makes that look-ahead
+   * block forever before row 1 is ever emitted, which looks like a hung test rather than the
+   * cancellation behavior it was meant to exercise.
+   */
+  public static byte[] twoRowsOfUInt8RowBinaryWithNamesAndTypes() {
+    return rowBinaryWithNamesAndTypes(
+        new String[] {"1"}, new String[] {"UInt8"}, new byte[] {0x01, 0x02});
+  }
+
+  /**
    * One column named {@code "arr"} of type {@code Array(Int32)}, one row with values {@code [10,
    * 20, 30]}.
    */
