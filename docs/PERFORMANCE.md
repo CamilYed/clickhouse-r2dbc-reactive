@@ -67,9 +67,9 @@ reruns below), so treat single-fork rows as a first signal, not a final answer.
 | `StreamingScanBenchmark` @ 1M rows | Full scan, large | 🟢 this driver ~8.3% faster (mean/p50–p99) — 🟡 p99.9/max spiked to 387ms vs client-v2's 164ms, traced to 3–4 outlier samples in one of three forks, not a reproducible pattern | **3-fork confirmed (2026-08-14)** — see the dedicated section below before trusting the tail number either way |
 | `DecoderOnlyBenchmark`, production path (`ourDriver`) | Raw decode cost, no network, **current shipped code** (`RowBinaryDecoder`/`DecodedRow`) | 🟢 this driver ~35% faster @ 10k, ~22% faster @ 100k, ~38% faster @ 1M | **3-fork confirmed (2026-08-14)** — answers the open question the row below left hanging |
 | `DecoderOnlyBenchmark`, H1/H2 diagnostic variants (`ourDriverCompactRow`, `compactRowDirectLoop`, `compactRowFluxNoBridge`) | An earlier, since-superseded decode strategy considered during the redesign, kept only for the H1/H2 investigation's own record | 🔴 4–28% slower than client-v2 — **describes a path that was never shipped**, not the driver you get today | 3-fork confirmed (2026-08-13/14) — historical, see the H2 section |
-| `ConcurrencyBenchmark` `@Threads(8)`, mean → p99 | 8 concurrent threads, blocking, both sides' *default* (unmatched) pools | 🔴 ~4% slower (mean), degrading to ~15% slower at p99 | Single fork, one run (2026-08-14) — **see below: likely an unmatched-pool artifact, not architectural** |
-| `ConcurrencyBenchmark` `@Threads(8)`, p99.9 → max | Same run, extreme tail | 🟢 ~7% faster at p99.9, up to ~46% faster at max | Single fork, one run (2026-08-14) |
-| `BoundedPoolConcurrencyBenchmark`, pool=8, concurrency=8/32/128 | Non-blocking `flatMap`/async `CompletableFuture`, **matched** 8-connection pool both sides — the actual motivating scenario | 🟢 this driver wins on mean→p99 at **every** concurrency level (~2.5–10% faster) — 🟡 tail (p999+) is mixed: big win at concurrency=32 (+18–27%), small loss at 8 and 128 (−3% to −15%), likely sample-count noise at those extreme buckets | **3-fork confirmed (2026-08-14)** |
+| `ConcurrencyBenchmark` `@Threads(8)`, mean → p99.9 | 8 concurrent threads, blocking, both sides' *default* (unmatched) pools | 🔴 ~6% slower (mean), degrading to ~16% slower at p99, still ~5% slower at p99.9 | **3-fork confirmed (2026-08-19)** — direction and shape reproduced, see below; root cause (blocking callers vs. unmatched pools — two variables, not isolated) still open |
+| `ConcurrencyBenchmark` `@Threads(8)`, p99.99 → max | Same run, extreme tail | 🟢 ~3% faster at p99.99, ~56% faster at max | **3-fork confirmed (2026-08-19)** — crossover point moved from p99.9 (single-fork run) to between p99.9 and p99.99 |
+| `BoundedPoolConcurrencyBenchmark`, pool=8, concurrency=8/32/128 | Non-blocking `flatMap`/async `CompletableFuture`, **matched** 8-connection pool both sides — the actual motivating scenario | 🟢 this driver wins on mean→p99 at **every** concurrency level, but the margin varies noticeably run to run (~1–10% faster across three independent 3-fork runs) — 🟡 tail (p999+) is mixed, likely sample-count noise at those extreme buckets | **3-fork confirmed, three independent runs (2026-08-14, 2026-08-14, 2026-08-19)** — direction stable, magnitude not pinned down tightly |
 
 <p align="center">
   <img src="images/streaming-scan-mean-latency.png" width="32%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
@@ -77,11 +77,17 @@ reruns below), so treat single-fork rows as a first signal, not a final answer.
   <img src="images/bounded-pool-concurrency-mean-latency.png" width="32%" alt="BoundedPoolConcurrencyBenchmark mean latency by concurrency level, this driver vs client-v2">
 </p>
 
-**Bottom line today: this driver wins on mean/typical-case latency in every benchmark that measures
-the shipped code, and every one of those wins is now 3-fork confirmed, not a single noisy run.**
-`StreamingScanBenchmark` (all three tiers), `DecoderOnlyBenchmark`'s production path, and
-`BoundedPoolConcurrencyBenchmark` (all three concurrency levels) all reproduced their win under
-`-Pjmh.forks=3`. Two things are still open, and both are stated plainly rather than smoothed over:
+**Bottom line today: this driver wins on mean/typical-case latency in every benchmark that isolates
+this project's own architecture (raw decode, full scan, and — the actual motivating scenario —
+matched-pool non-blocking concurrency), and every one of those wins is now 3-fork confirmed, not a
+single noisy run.** `StreamingScanBenchmark` (all three tiers), `DecoderOnlyBenchmark`'s production
+path, and `BoundedPoolConcurrencyBenchmark` (all three concurrency levels) all reproduced their win
+under `-Pjmh.forks=3`. **The one shipped-code benchmark that does *not* show a win is
+`ConcurrencyBenchmark`'s `@Threads(8)` shape** (blocking callers, unmatched default pools) — also
+now 3-fork confirmed, but confirmed as a *loss* on mean through p99.9, flipping to a large win only
+at the extreme tail; see item 2 below for why that specific shape isn't yet attributed to either
+architecture or benchmark setup. Two things are still open, and both are stated plainly rather than
+smoothed over:
 
 1. **The `StreamingScanBenchmark` @ 1M tail spike.** A single run produced a 387ms max where the
    rest of the distribution (and client-v2's own max) sat at 150–164ms. Traced to the raw
@@ -91,30 +97,36 @@ the shipped code, and every one of those wins is now 3-fork confirmed, not a sin
    not (yet) a reproduced architectural regression. Documented, not dismissed: **this needs a
    `-prof gc` pass and another multi-fork run before being called either "fixed" or "a real
    finding."**
-2. **`ConcurrencyBenchmark`'s `@Threads(8)` mean/p99 regression** is still single-fork and still
-   most likely an artifact of leaving both drivers at *unmatched default* connection pools —
-   `BoundedPoolConcurrencyBenchmark` (matched pools, non-blocking both sides) shows no such
-   regression at any of the three concurrency levels tested, at 3-fork confidence. `@Threads(8)`
-   itself has not been re-run multi-fork.
+2. **`ConcurrencyBenchmark`'s `@Threads(8)` mean/p99 regression is now 3-fork confirmed as real
+   (not sampling noise) — but its cause is still not isolated.** See the dedicated section below
+   (2026-08-19): the same shape (worse from mean through ~p99.9, a crossover to a large win at the
+   extreme tail) reproduced with 3 forks × 3 warmup iterations. That rules out "it was one noisy
+   run," but it does **not** confirm the "unmatched pool" explanation either — `@Threads(8)` and
+   `BoundedPoolConcurrencyBenchmark` differ in two variables at once (blocking vs. non-blocking
+   calling style, and unmatched vs. matched pool size), so neither benchmark alone isolates which
+   one actually causes the regression. A true negative/control test — `@Threads(8)` blocking
+   callers with a **matched** pool on both sides — has not been built yet; see the proposal at the
+   end of that section.
 
-What's left before this file is "done": a `-prof gc` pass on the 1M tail spike; a multi-fork rerun
-of `ConcurrencyBenchmark`; widening `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes,
-higher concurrency); and the wide multi-type decode/aggregation/INSERT benchmarks, which are
-designed (see below) but not yet built.
+What's left before this file is "done": a `-prof gc` pass on the 1M tail spike; the pool-matched
+`@Threads(8)` control experiment described below; widening `BoundedPoolConcurrencyBenchmark`'s
+matrix (more pool sizes, higher concurrency); and the wide multi-type decode/aggregation/INSERT
+benchmarks, which are designed (see below) but not yet built.
 
 ---
 
 > [!TIP]
-> **Status at a glance (2026-08-14).** This file is a full investigation log, long by design — read
+> **Status at a glance (last updated 2026-08-19).** This file is a full investigation log, long by design — read
 > top to bottom for the story, or use this box to jump straight to where things actually stand.
 >
 > | Done | Open |
 > | --- | --- |
 > | H0 (`byte[1]` alloc) — fixed, confirmed | `-prof gc` pass + another multi-fork run on `StreamingScanBenchmark`'s 1M-row tail spike (one fork of three produced 3–4 outlier samples) |
-> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | Multi-fork rerun of `ConcurrencyBenchmark`'s `@Threads(8)` shape |
+> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | A pool-matched `@Threads(8)` control experiment to isolate whether `ConcurrencyBenchmark`'s regression is caused by blocking callers or by unmatched pools (currently both variables differ at once — see 2026-08-19 section) |
 > | `DecodedRow` redesign — **3-fork confirmed** (2026-08-14): `StreamingScanBenchmark` and `DecoderOnlyBenchmark`'s production path both beat `clientV2` at all three tiers | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
 > | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Widen `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes/concurrency levels) |
-> | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed** (2026-08-14): mean/p50–p99 win reproduced (~2.5–10% faster) at every concurrency level; tail (p999+) mixed, likely sample-count noise | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
+> | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed, three independent runs** (2026-08-14 ×2, 2026-08-19): direction (this driver faster) holds every time, magnitude varies run to run (~1–10%) | Wide multi-type decode / aggregation / INSERT benchmarks — designed, not built |
+> | `ConcurrencyBenchmark` `@Threads(8)` — **3-fork confirmed** (2026-08-19): mean→p99.9 regression and tail crossover both reproduced, not single-run noise; root cause still not isolated (see above) | Netty leak-detection lane (Phase 7 item 6) — never actually built, see ROADMAP.md's Definition of done |
 > | `StreamingScanBenchmark`/`DecoderOnlyBenchmark` H2 matrix — **3-fork confirmed** (2026-08-14), production path wins decisively, historical diagnostic variants documented separately | |
 > | Performance charts — added to this file and to the main `README.md` (2026-08-14) | |
 > | Machine spec (CPU/RAM/OS) — filled in (2026-08-14): Apple M3 Pro, 36 GB, macOS | |
@@ -1317,6 +1329,87 @@ prove — non-blocking driver code beats blocking driver code at equal pool size
 matters for most traffic (mean/p50–p99) — is now the strongest-evidenced claim in this file. The
 tail-percentile framing from the single-fork run was too strong; it's now stated as "mixed, likely
 noise" rather than "wins everywhere."
+
+**Update (2026-08-19) — a third independent 3-fork run, and the magnitude estimate needs
+widening, not the direction.** Re-run (`-Pjmh.includes=ConcurrencyBenchmark`, which matches this
+class too via substring, alongside the dedicated rerun below) with the same `-Pjmh.forks=3
+-Pjmh.warmupIterations=3` settings as the run above:
+
+| concurrency | client-v2 mean | this driver mean | verdict |
+| --- | --- | --- | --- |
+| 8 | 9,026.3 | 8,914.9 | this driver ≈1.2% faster |
+| 32 | 36,137.0 | 35,173.7 | this driver ≈2.7% faster |
+| 128 | 142,281.7 | 139,511.2 | this driver ≈1.9% faster |
+
+Same direction as both prior runs (this driver faster at every concurrency level, every time), but
+roughly a third to a half the margin of the 2026-08-14 3-fork run (5.4–6.0% → 1.2–2.7%). Three
+independent 3-fork datasets now exist for this benchmark and none of them agree on the exact
+percentage. **The honest takeaway, following the "don't assume the numbers tell you what you want"
+instruction this section is written under: the win is real and repeatable in direction, but "this
+driver is ~5% faster" is not a number to quote — "this driver has been faster in every independent
+run so far, typically by low single digits to mid single digits, on a single shared laptop with no
+isolation from other processes" is the honest version.** A tighter estimate would need either many
+more forks in one run, or a dedicated, isolated benchmarking machine — neither attempted yet.
+
+---
+
+### `ConcurrencyBenchmark` `@Threads(8)`, 3-fork confirmation (2026-08-19)
+
+Re-run with `-Pjmh.forks=3 -Pjmh.warmupIterations=3` instead of the single-fork run from
+2026-08-14. Latency in µs/op (lower is faster); `rows=10000`, same parameterized point lookup as
+`PointQueryBenchmark`, 8 JMH worker threads hammering shared `ClickHouseHttpTransport`/`Client`
+instances. Sample counts shown because the tail percentiles below are estimated from them.
+
+| percentile | client-v2 | this driver | verdict |
+| --- | --- | --- | --- |
+| mean | 2,114.6 ± 5.0 | 2,240.1 ± 4.8 | this driver ≈5.9% SLOWER |
+| p50 | 1,972.2 | 2,062.3 | this driver ≈4.6% SLOWER |
+| p90 | 2,863.1 | 3,100.7 | this driver ≈8.3% SLOWER |
+| p95 | 3,244.0 | 3,608.6 | this driver ≈11.2% SLOWER |
+| p99 | 4,309.0 | 4,990.3 | this driver ≈15.8% SLOWER |
+| p99.9 | 7,567.4 | 7,977.5 | this driver ≈5.4% SLOWER |
+| p99.99 | 24,767.9 | 23,905.1 | this driver ≈3.5% FASTER |
+| p100 (max) | 112,328.7 | 49,020.9 | this driver ≈56.4% FASTER |
+
+Sample counts: 340,241 (client-v2) vs. 321,182 (this driver) — both comfortably large through
+p99.9; p99.99/max are still estimated from roughly the top 30–3 samples of each run respectively,
+so treat those two rows as directionally right, not precise.
+
+**What's now confirmed, vs. what's still open:**
+
+- **Confirmed:** this is a real, repeatable effect, not the single-fork run's noise. The shape from
+  the 2026-08-14 single-fork run reproduces almost exactly under 3 forks — this driver
+  consistently a bit worse from mean through p99.9 (gap widening from ~5% to ~16% then narrowing
+  back to ~5%), then flipping to a large, consistent win at the extreme tail. Tight error bars on
+  the mean (±5 µs on a ~2,100–2,240 µs mean, i.e. well under 1% relative error) rule out "this is
+  just fork-to-fork variance."
+- **Refined, not just confirmed:** the earlier single-fork run showed the crossover happening
+  exactly at p99.9 (this driver already faster there). This 3-fork run shows this driver still
+  ~5.4% *slower* at p99.9, with the crossover actually landing between p99.9 and p99.99. A detail
+  that would have been reported wrong from the single-fork data alone — exactly the kind of thing
+  multiple forks exist to catch.
+- **Still not isolated: what actually causes the mean→p99.9 regression.** `ConcurrencyBenchmark`
+  and `BoundedPoolConcurrencyBenchmark` differ in two variables simultaneously — blocking
+  (`@Threads(8)`, one JMH worker thread blocked per in-flight call) vs. non-blocking
+  (`Flux.flatMap`/`CompletableFuture`, no thread blocked), **and** unmatched default pool sizes vs.
+  a matched 8-connection pool on both sides. `BoundedPoolConcurrencyBenchmark` showing no such
+  regression is consistent with "it's the pool mismatch," but equally consistent with "it's the
+  blocking-vs-non-blocking calling style" — the two benchmarks were never designed to change only
+  one variable at a time, so neither confirms nor rules out either explanation on its own.
+
+**Proposed control experiment, not yet built** (naming it explicitly rather than leaving the
+open question implicit, per this project's own benchmarking discipline): a
+`ConcurrencyBenchmark`-shaped variant — `@Threads(8)`, blocking calls on both sides, same
+parameterized point lookup — but with client-v2's `Client.Builder` configured to the same
+connection budget this driver's `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)`
+constructor gives it (e.g. 8, matching `BoundedPoolConcurrencyBenchmark`'s `POOL_SIZE`). If the
+regression disappears with pools matched but callers still blocking, that isolates pool-mismatch as
+the cause. If it persists, that points at the blocking-caller shape itself — a materially different,
+more interesting finding (would mean this driver's non-blocking pipeline has some per-call overhead
+under blocking-style contention specifically) and would be worth a `-prof gc`/async-profiler pass
+before drawing conclusions, per the JMH tooling's own standing reminder about not reading numbers
+without asking why they are what they are. Not built in this session — a real decision for whoever
+picks this up next, not a small "while I'm in here" addition.
 
 ---
 
