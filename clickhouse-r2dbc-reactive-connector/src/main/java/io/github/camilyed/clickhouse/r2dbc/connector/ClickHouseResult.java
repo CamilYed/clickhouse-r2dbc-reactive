@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseQueryResponse;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Row;
@@ -71,10 +72,15 @@ final class ClickHouseResult implements Result {
    * RowBinaryDecoder#decode} has already resolved — deliberately, not just incidentally: per {@link
    * ClickHouseQueryResponse}'s Javadoc, the count is only known once the response headers have
    * actually arrived, which {@code decode}'s schema read already waits on.
+   *
+   * <p>{@code decodingScheduler} is forwarded to {@link RowBinaryDecoder#decode} unchanged — see
+   * that method's Javadoc for why every blocking decode call must run there rather than on
+   * whichever thread ends up consuming the returned {@link Result}.
    */
-  static Mono<ClickHouseResult> decode(final ClickHouseQueryResponse response) {
+  static Mono<ClickHouseResult> decode(
+      final ClickHouseQueryResponse response, final RowDecodingScheduler decodingScheduler) {
     final Flux<ByteBuffer> body = response.body().asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body)
+    return RowBinaryDecoder.decode(body, decodingScheduler)
         .map(decoded -> new ClickHouseResult(decoded, response.writtenRows().getAsLong()));
   }
 

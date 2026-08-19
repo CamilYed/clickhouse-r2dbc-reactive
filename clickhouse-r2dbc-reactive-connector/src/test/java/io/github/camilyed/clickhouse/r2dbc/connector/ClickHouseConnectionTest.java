@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.IsolationLevel;
 import io.r2dbc.spi.ValidationDepth;
@@ -19,7 +20,8 @@ class ClickHouseConnectionTest {
   // configures a lazy HttpClient and none of these tests execute a query, so an unreachable
   // address is safe and keeps this test hermetic (see CLAUDE.md: unit tests, no containers).
   private final ClickHouseConnection connection =
-      new ClickHouseConnection(new ClickHouseHttpTransport("http://localhost:1"));
+      new ClickHouseConnection(
+          new ClickHouseHttpTransport("http://localhost:1"), RowDecodingScheduler.defaults());
 
   @Test
   void shouldAlwaysBeInAutoCommitMode() {

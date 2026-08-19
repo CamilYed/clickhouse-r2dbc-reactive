@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.R2dbcException;
@@ -34,7 +35,8 @@ class ClickHouseConnectionInsertStreamingTest {
         ControlledClickHouseServer.startAcceptingInsertsAndRespondingWithSummary(
             "{\"written_rows\":\"2\"}")) {
       final var connection =
-          new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
+          new ClickHouseConnection(
+              new ClickHouseHttpTransport(server.baseUrl()), RowDecodingScheduler.defaults());
 
       final Result result =
           Mono.from(
@@ -57,7 +59,8 @@ class ClickHouseConnectionInsertStreamingTest {
         ControlledClickHouseServer.startRespondingWithClickHouseError(
             241, "Memory limit exceeded", 500)) {
       final var connection =
-          new ClickHouseConnection(new ClickHouseHttpTransport(server.baseUrl()));
+          new ClickHouseConnection(
+              new ClickHouseHttpTransport(server.baseUrl()), RowDecodingScheduler.defaults());
 
       // when
       final Throwable thrown =

@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
 import org.junit.jupiter.api.Test;
@@ -14,7 +15,8 @@ class ClickHouseBatchTest {
   private final ClickHouseHttpTransport transport =
       new ClickHouseHttpTransport("http://localhost:1");
 
-  private final ClickHouseBatch batch = new ClickHouseBatch(transport);
+  private final ClickHouseBatch batch =
+      new ClickHouseBatch(transport, RowDecodingScheduler.defaults());
 
   @Test
   void shouldReturnItselfWhenAddingAStatement() {

@@ -5,6 +5,7 @@ import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -18,6 +19,11 @@ import reactor.core.publisher.Flux;
  * (transport → bridge → {@link RowBinaryDecoder}) instead of each test wiring that plumbing itself.
  */
 public interface RealClickHouseQueryAbility {
+
+  // A single scheduler shared across every call this ability makes for the lifetime of the JVM -
+  // fine for test code (bounded, daemon-backed, never needs to be disposed for tests to pass),
+  // unlike the shipped connector's own one-per-ClickHouseConnectionFactory ownership.
+  RowDecodingScheduler DECODING_SCHEDULER = RowDecodingScheduler.defaults();
 
   ClickHouseHttpTransport transport();
 
@@ -39,7 +45,8 @@ public interface RealClickHouseQueryAbility {
   default List<Map<String, Object>> queryRows(final String sql) {
     final Flux<ByteBuffer> body =
         transport().query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
-    final DecodedResult decoded = RowBinaryDecoder.decode(body).block(Duration.ofSeconds(10));
+    final DecodedResult decoded =
+        RowBinaryDecoder.decode(body, DECODING_SCHEDULER).block(Duration.ofSeconds(10));
     final List<String> columnNames =
         decoded.columns().stream().map(ColumnDescriptor::name).toList();
     return decoded

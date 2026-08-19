@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Statement;
@@ -76,10 +77,14 @@ final class ClickHouseStatement implements Statement {
   private final List<String> parameterNames;
   private final List<Map<String, Object>> savedBindingSets = new ArrayList<>();
   private final @Nullable Duration statementTimeout;
+  private final RowDecodingScheduler decodingScheduler;
   private Map<String, Object> boundValues = new LinkedHashMap<>();
 
-  ClickHouseStatement(final ClickHouseHttpTransport transport, final String sql) {
-    this(transport, sql, null);
+  ClickHouseStatement(
+      final ClickHouseHttpTransport transport,
+      final String sql,
+      final RowDecodingScheduler decodingScheduler) {
+    this(transport, sql, null, decodingScheduler);
   }
 
   /**
@@ -88,15 +93,22 @@ final class ClickHouseStatement implements Statement {
    * ClickHouseConnection#setStatementTimeout} for the full contract (including {@link
    * Duration#ZERO}'s explicit "no timeout" meaning). {@code null} means no connection-level timeout
    * was in effect when this statement was created, so no such setting is sent at all.
+   *
+   * <p>{@code decodingScheduler} is forwarded, unchanged, to every {@link RowBinaryDecoder#decode}
+   * call this statement's {@link #execute()} makes — owned by, and shared across every
+   * statement/batch/connection produced by, the same {@code ClickHouseConnectionFactory}; see
+   * {@link io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler}'s Javadoc.
    */
   ClickHouseStatement(
       final ClickHouseHttpTransport transport,
       final String sql,
-      final @Nullable Duration statementTimeout) {
+      final @Nullable Duration statementTimeout,
+      final RowDecodingScheduler decodingScheduler) {
     this.transport = transport;
     this.sql = sql;
     this.parameterNames = ClickHouseQuery.parameterNamesIn(sql);
     this.statementTimeout = statementTimeout;
+    this.decodingScheduler = decodingScheduler;
   }
 
   @Override
@@ -173,7 +185,9 @@ final class ClickHouseStatement implements Statement {
       query =
           query.withSettings(Map.of(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout)));
     }
-    return transport.queryWithSummary(query).flatMap(ClickHouseResult::decode);
+    return transport
+        .queryWithSummary(query)
+        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler));
   }
 
   private static String formatSeconds(final Duration duration) {
