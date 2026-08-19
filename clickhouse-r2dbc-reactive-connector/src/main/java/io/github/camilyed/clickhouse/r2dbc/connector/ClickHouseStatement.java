@@ -5,12 +5,15 @@ import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -46,6 +49,11 @@ import reactor.core.publisher.Mono;
  * #add()}-batched statements into one wire-level {@code INSERT} is explicitly deferred, separately
  * scoped future work.
  *
+ * <p>If {@link ClickHouseConnection#setStatementTimeout} was called on the owning connection before
+ * this statement was created, every query this statement runs (each set in a batched {@link #add()}
+ * sequence included) carries that limit as ClickHouse's own {@code max_execution_time} server
+ * setting — see that method's Javadoc for the full contract.
+ *
  * <p>Any failure obtaining a {@link Result} — a ClickHouse server error, a transport failure, a
  * local decode bug — is mapped onto {@link io.r2dbc.spi.R2dbcException} via {@link
  * ClickHouseR2dbcException} ({@code ClickHouseR2dbcException.wrap}), so standard R2DBC error
@@ -61,16 +69,34 @@ import reactor.core.publisher.Mono;
  */
 final class ClickHouseStatement implements Statement {
 
+  private static final String MAX_EXECUTION_TIME_SETTING = "max_execution_time";
+
   private final ClickHouseHttpTransport transport;
   private final String sql;
   private final List<String> parameterNames;
   private final List<Map<String, Object>> savedBindingSets = new ArrayList<>();
+  private final @Nullable Duration statementTimeout;
   private Map<String, Object> boundValues = new LinkedHashMap<>();
 
   ClickHouseStatement(final ClickHouseHttpTransport transport, final String sql) {
+    this(transport, sql, null);
+  }
+
+  /**
+   * {@code statementTimeout}, if given, is attached to every query this statement runs as
+   * ClickHouse's own {@code max_execution_time} server setting — see {@link
+   * ClickHouseConnection#setStatementTimeout} for the full contract (including {@link
+   * Duration#ZERO}'s explicit "no timeout" meaning). {@code null} means no connection-level timeout
+   * was in effect when this statement was created, so no such setting is sent at all.
+   */
+  ClickHouseStatement(
+      final ClickHouseHttpTransport transport,
+      final String sql,
+      final @Nullable Duration statementTimeout) {
     this.transport = transport;
     this.sql = sql;
     this.parameterNames = ClickHouseQuery.parameterNamesIn(sql);
+    this.statementTimeout = statementTimeout;
   }
 
   @Override
@@ -142,8 +168,16 @@ final class ClickHouseStatement implements Statement {
   }
 
   private Mono<ClickHouseResult> executeOneBindingSet(final Map<String, Object> parameters) {
-    final ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(parameters);
+    ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(parameters);
+    if (statementTimeout != null) {
+      query =
+          query.withSettings(Map.of(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout)));
+    }
     return transport.queryWithSummary(query).flatMap(ClickHouseResult::decode);
+  }
+
+  private static String formatSeconds(final Duration duration) {
+    return String.format(Locale.ROOT, "%.3f", duration.toMillis() / 1000.0);
   }
 
   private void requireAllParametersBound() {

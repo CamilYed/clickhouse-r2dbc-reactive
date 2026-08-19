@@ -101,4 +101,51 @@ class ClickHouseQueryTest {
     // then
     assertThat(parameterized.parameters()).containsEntry("s", "a\\\\b\\tc\\nd\\re");
   }
+
+  @Test
+  void shouldHaveNoSettingsByDefault() {
+    // when
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT 1");
+
+    // then
+    assertThat(query.settings()).isEmpty();
+  }
+
+  @Test
+  void shouldCarryServerSettingsUnchangedWhenAttached() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT 1");
+
+    // when
+    final ClickHouseQuery withSettings = query.withSettings(Map.of("max_execution_time", "5.000"));
+
+    // then
+    assertThat(withSettings.settings()).containsExactly(Map.entry("max_execution_time", "5.000"));
+  }
+
+  @Test
+  void shouldKeepAlreadyBoundParametersWhenSettingsAreAttached() {
+    // given
+    final ClickHouseQuery query =
+        ClickHouseQuery.of("SELECT {a:UInt32}").withParameters(Map.of("a", 42));
+
+    // when
+    final ClickHouseQuery withSettings = query.withSettings(Map.of("max_execution_time", "5.000"));
+
+    // then
+    assertThat(withSettings.parameters()).containsExactly(Map.entry("a", "42"));
+  }
+
+  @Test
+  void shouldKeepAlreadyAttachedSettingsWhenParametersAreBound() {
+    // given
+    final ClickHouseQuery query =
+        ClickHouseQuery.of("SELECT {a:UInt32}").withSettings(Map.of("max_execution_time", "5.000"));
+
+    // when
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("a", 42));
+
+    // then
+    assertThat(parameterized.settings()).containsExactly(Map.entry("max_execution_time", "5.000"));
+  }
 }
