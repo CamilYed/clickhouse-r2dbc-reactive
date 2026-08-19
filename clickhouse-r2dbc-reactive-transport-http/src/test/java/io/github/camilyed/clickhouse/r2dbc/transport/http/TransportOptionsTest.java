@@ -4,7 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class TransportOptionsTest {
 
@@ -82,9 +86,10 @@ class TransportOptionsTest {
   void shouldRejectAPendingAcquireTimeoutLessThanZero() {
     // given
     final TransportOptions options = TransportOptions.defaults();
+    final Duration negativeDuration = Duration.ofSeconds(-1);
 
     // when / then
-    assertThatThrownBy(() -> options.withPendingAcquireTimeout(Duration.ofSeconds(-1)))
+    assertThatThrownBy(() -> options.withPendingAcquireTimeout(negativeDuration))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -92,9 +97,10 @@ class TransportOptionsTest {
   void shouldRejectANegativeMaxIdleTime() {
     // given
     final TransportOptions options = TransportOptions.defaults();
+    final Duration negativeDuration = Duration.ofSeconds(-1);
 
     // when / then
-    assertThatThrownBy(() -> options.withMaxIdleTime(Duration.ofSeconds(-1)))
+    assertThatThrownBy(() -> options.withMaxIdleTime(negativeDuration))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -102,9 +108,112 @@ class TransportOptionsTest {
   void shouldRejectANegativeMaxLifeTime() {
     // given
     final TransportOptions options = TransportOptions.defaults();
+    final Duration negativeDuration = Duration.ofSeconds(-1);
 
     // when / then
-    assertThatThrownBy(() -> options.withMaxLifeTime(Duration.ofSeconds(-1)))
+    assertThatThrownBy(() -> options.withMaxLifeTime(negativeDuration))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldBeEqualToItself() {
+    // given
+    final TransportOptions options = aFullyPopulatedTransportOptions();
+
+    // when / then
+    assertThat(options).isEqualTo(options);
+  }
+
+  @Test
+  void shouldNotBeEqualToNull() {
+    // given
+    final TransportOptions options = aFullyPopulatedTransportOptions();
+
+    // when / then
+    assertThat(options).isNotEqualTo(null);
+  }
+
+  @Test
+  void shouldNotBeEqualToAValueOfADifferentType() {
+    // given
+    final TransportOptions options = aFullyPopulatedTransportOptions();
+
+    // when / then
+    assertThat(options).isNotEqualTo("not a TransportOptions");
+  }
+
+  @Test
+  void shouldBeEqualWhenEveryFieldMatchesEvenWithASeparateCertificateArrayInstance() {
+    // given
+    final TransportOptions first =
+        aFullyPopulatedTransportOptions().withTrustedCertificatePem(new byte[] {1, 2, 3});
+    final TransportOptions second =
+        aFullyPopulatedTransportOptions().withTrustedCertificatePem(new byte[] {1, 2, 3});
+
+    // when / then
+    assertThat(first).isEqualTo(second);
+  }
+
+  @Test
+  void shouldHaveTheSameHashCodeForEqualInstancesWithSeparateCertificateArrayInstances() {
+    // given
+    final TransportOptions first =
+        aFullyPopulatedTransportOptions().withTrustedCertificatePem(new byte[] {1, 2, 3});
+    final TransportOptions second =
+        aFullyPopulatedTransportOptions().withTrustedCertificatePem(new byte[] {1, 2, 3});
+
+    // when / then
+    assertThat(first).hasSameHashCodeAs(second);
+  }
+
+  @Test
+  void shouldIncludeTheCertificateContentInToString() {
+    // given
+    final TransportOptions options =
+        aFullyPopulatedTransportOptions().withTrustedCertificatePem(new byte[] {1, 2, 3});
+
+    // when / then
+    assertThat(options.toString()).contains("trustedCertificatePem=[1, 2, 3]");
+  }
+
+  @ParameterizedTest
+  @MethodSource("singleFieldMutations")
+  void shouldNotBeEqualWhenExactlyOneFieldDiffers(final UnaryOperator<TransportOptions> mutation) {
+    // given
+    final TransportOptions base = aFullyPopulatedTransportOptions();
+
+    // when
+    final TransportOptions mutated = mutation.apply(base);
+
+    // then
+    assertThat(base).isNotEqualTo(mutated);
+  }
+
+  private static Stream<UnaryOperator<TransportOptions>> singleFieldMutations() {
+    return Stream.of(
+        options -> options.withAuthentication(Authentication.userKey("other-user", "other-key")),
+        options -> options.withResponseTimeout(Duration.ofSeconds(99)),
+        options -> options.withConnectTimeout(Duration.ofSeconds(99)),
+        options -> options.withTrustedCertificatePem(new byte[] {9, 9, 9}),
+        options -> options.withRetryPolicy(new RetryPolicy(9, Duration.ofMillis(9))),
+        options -> options.withMaxConnections(999),
+        options -> options.withPendingAcquireMaxCount(999),
+        options -> options.withPendingAcquireTimeout(Duration.ofSeconds(999)),
+        options -> options.withMaxIdleTime(Duration.ofSeconds(999)),
+        options -> options.withMaxLifeTime(Duration.ofSeconds(999)));
+  }
+
+  private static TransportOptions aFullyPopulatedTransportOptions() {
+    return TransportOptions.defaults()
+        .withAuthentication(Authentication.basic("user", "password"))
+        .withResponseTimeout(Duration.ofSeconds(5))
+        .withConnectTimeout(Duration.ofSeconds(3))
+        .withTrustedCertificatePem(new byte[] {1, 2, 3})
+        .withRetryPolicy(new RetryPolicy(2, Duration.ofMillis(10)))
+        .withMaxConnections(8)
+        .withPendingAcquireMaxCount(16)
+        .withPendingAcquireTimeout(Duration.ofSeconds(1))
+        .withMaxIdleTime(Duration.ofSeconds(30))
+        .withMaxLifeTime(Duration.ofMinutes(5));
   }
 }

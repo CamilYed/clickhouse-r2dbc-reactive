@@ -211,19 +211,30 @@ public record TransportOptions(
     if (this == obj) {
       return true;
     }
-    if (!(obj instanceof final TransportOptions other)) {
+    if (!(obj
+        instanceof TransportOptions(
+            Authentication otherAuthentication,
+            Duration otherResponseTimeout,
+            Duration otherConnectTimeout,
+            byte[] otherTrustedCertificatePem,
+            RetryPolicy otherRetryPolicy,
+            Integer otherMaxConnections,
+            Integer otherPendingAcquireMaxCount,
+            Duration otherPendingAcquireTimeout,
+            Duration otherMaxIdleTime,
+            Duration otherMaxLifeTime))) {
       return false;
     }
-    return Objects.equals(authentication, other.authentication)
-        && Objects.equals(responseTimeout, other.responseTimeout)
-        && Objects.equals(connectTimeout, other.connectTimeout)
-        && Arrays.equals(trustedCertificatePem, other.trustedCertificatePem)
-        && Objects.equals(retryPolicy, other.retryPolicy)
-        && Objects.equals(maxConnections, other.maxConnections)
-        && Objects.equals(pendingAcquireMaxCount, other.pendingAcquireMaxCount)
-        && Objects.equals(pendingAcquireTimeout, other.pendingAcquireTimeout)
-        && Objects.equals(maxIdleTime, other.maxIdleTime)
-        && Objects.equals(maxLifeTime, other.maxLifeTime);
+    return Objects.equals(authentication, otherAuthentication)
+        && Objects.equals(responseTimeout, otherResponseTimeout)
+        && Objects.equals(connectTimeout, otherConnectTimeout)
+        && Arrays.equals(trustedCertificatePem, otherTrustedCertificatePem)
+        && Objects.equals(retryPolicy, otherRetryPolicy)
+        && Objects.equals(maxConnections, otherMaxConnections)
+        && Objects.equals(pendingAcquireMaxCount, otherPendingAcquireMaxCount)
+        && Objects.equals(pendingAcquireTimeout, otherPendingAcquireTimeout)
+        && Objects.equals(maxIdleTime, otherMaxIdleTime)
+        && Objects.equals(maxLifeTime, otherMaxLifeTime);
   }
 
   @Override
