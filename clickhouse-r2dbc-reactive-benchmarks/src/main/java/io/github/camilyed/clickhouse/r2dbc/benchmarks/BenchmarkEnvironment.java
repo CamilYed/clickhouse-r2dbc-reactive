@@ -9,6 +9,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.clickhouse.ClickHouseContainer;
@@ -34,10 +36,30 @@ import org.testcontainers.clickhouse.ClickHouseContainer;
  * one fork would trade away JMH's normal fork-level isolation between benchmark methods, which
  * matters more than saving a few seconds of container startup. Worth revisiting only if the {@code
  * large} dataset tier's per-fork reseed cost turns out to dominate a real run's wall time.
+ *
+ * <h2>External server mode</h2>
+ *
+ * Set {@code BENCH_CLICKHOUSE_URL} (plus optionally {@code BENCH_CLICKHOUSE_USER}/{@code
+ * BENCH_CLICKHOUSE_PASSWORD}) to point every JMH fork at one already-running, pinned ClickHouse
+ * server instead of each fork starting its own Testcontainers container - see {@code
+ * CLAUDE_REPRESENTATIVE_BENCHMARK_PLAN.md} section 2.5: comparing {@code ourDriver} against one
+ * server process and {@code clientV2} against a different one (even same image, same dataset) lets
+ * server startup state, page cache, and Docker/CPU scheduling differ between the two methods being
+ * compared - noise a "trusted" headline benchmark shouldn't carry. {@code
+ * scripts/start-benchmark-clickhouse.sh} starts that one pinned server. Testcontainers remains the
+ * default (no environment variables set) for ordinary local development, where per-fork isolation
+ * matters more than this.
  */
 public final class BenchmarkEnvironment {
 
   private static final Logger LOG = LoggerFactory.getLogger(BenchmarkEnvironment.class);
+
+  private static final @Nullable String EXTERNAL_URL = System.getenv("BENCH_CLICKHOUSE_URL");
+  private static final @Nullable String EXTERNAL_USER = System.getenv("BENCH_CLICKHOUSE_USER");
+  private static final @Nullable String EXTERNAL_PASSWORD =
+      System.getenv("BENCH_CLICKHOUSE_PASSWORD");
+
+  private static boolean externalMetadataLogged;
 
   /**
    * Pinned, not {@code latest} — a performance baseline that silently tracks whatever ClickHouse
@@ -55,12 +77,25 @@ public final class BenchmarkEnvironment {
   private BenchmarkEnvironment() {}
 
   /**
-   * Starts the shared container if it isn't already running, then logs the environment a benchmark
-   * result should be read against — ClickHouse server version (queried from the running container,
-   * not assumed from the image tag), JDK, and OS/architecture. A benchmark number without this
-   * context isn't reproducible; see the Phase 5 fairness requirements in ROADMAP.md. Idempotent.
+   * In external-server mode ({@link #EXTERNAL_URL} set), verifies the external server is reachable
+   * and logs environment metadata once - no container is started. Otherwise starts the shared
+   * Testcontainers container if it isn't already running, then logs the same metadata. Either way,
+   * a benchmark result should always be read against this logged environment — ClickHouse server
+   * version (queried from the running server, not assumed from an image tag), JDK, and
+   * OS/architecture. A benchmark number without this context isn't reproducible; see the Phase 5
+   * fairness requirements in ROADMAP.md. Idempotent.
    */
   public static synchronized void start() {
+    if (EXTERNAL_URL != null) {
+      if (!externalMetadataLogged) {
+        LOG.info(
+            "Using external benchmark ClickHouse server at {} (BENCH_CLICKHOUSE_URL set)",
+            EXTERNAL_URL);
+        logEnvironmentMetadata();
+        externalMetadataLogged = true;
+      }
+      return;
+    }
     if (!CLICK_HOUSE.isRunning()) {
       LOG.info("Starting shared ClickHouse container ({}) for benchmarks...", CLICK_HOUSE_IMAGE);
       CLICK_HOUSE.start();
@@ -83,9 +118,12 @@ public final class BenchmarkEnvironment {
         osArch);
   }
 
-  /** The running container's HTTP endpoint, e.g. {@code http://localhost:32821}. */
+  /**
+   * The running server's HTTP endpoint, e.g. {@code http://localhost:32821} — either the external
+   * server from {@code BENCH_CLICKHOUSE_URL} if set, or the shared Testcontainers container.
+   */
   public static String httpUrl() {
-    return CLICK_HOUSE.getHttpUrl();
+    return EXTERNAL_URL != null ? EXTERNAL_URL : CLICK_HOUSE.getHttpUrl();
   }
 
   /**
@@ -102,14 +140,26 @@ public final class BenchmarkEnvironment {
     return URI.create(httpUrl()).getPort();
   }
 
-  /** The username Testcontainers configured this container with. */
+  /**
+   * The username to authenticate with — {@code BENCH_CLICKHOUSE_USER} (defaulting to ClickHouse's
+   * own out-of-the-box {@code default} user if that variable is unset but {@code
+   * BENCH_CLICKHOUSE_URL} is) in external-server mode, otherwise whatever Testcontainers configured
+   * the shared container with.
+   */
   public static String username() {
-    return CLICK_HOUSE.getUsername();
+    return EXTERNAL_URL != null
+        ? Objects.requireNonNullElse(EXTERNAL_USER, "default")
+        : CLICK_HOUSE.getUsername();
   }
 
-  /** The password Testcontainers configured this container with. */
+  /**
+   * The password to authenticate with — see {@link #username()} for the same external-vs-container
+   * split. Defaults to empty, matching a ClickHouse server's out-of-the-box {@code default} user.
+   */
   public static String password() {
-    return CLICK_HOUSE.getPassword();
+    return EXTERNAL_URL != null
+        ? Objects.requireNonNullElse(EXTERNAL_PASSWORD, "")
+        : CLICK_HOUSE.getPassword();
   }
 
   /**
