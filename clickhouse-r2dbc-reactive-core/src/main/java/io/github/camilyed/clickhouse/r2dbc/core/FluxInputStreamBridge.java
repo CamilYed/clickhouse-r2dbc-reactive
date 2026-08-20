@@ -3,8 +3,8 @@ package io.github.camilyed.clickhouse.r2dbc.core;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
 import org.reactivestreams.Subscription;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
@@ -73,7 +73,12 @@ public final class FluxInputStreamBridge extends InputStream {
   private final byte[] singleByteReadBuffer = new byte[1];
 
   private FluxInputStreamBridge(final Flux<ByteBuffer> source, final int demand) {
-    this.queue = new LinkedBlockingQueue<>(demand + 1);
+    // ArrayBlockingQueue over LinkedBlockingQueue: the queue's capacity is fixed for this
+    // instance's whole lifetime (demand + 1, see this class's Javadoc), so there is no growth
+    // scenario an array-backed queue would handle worse - and it avoids a per-node allocation on
+    // every add()/take() that a linked queue pays for, at the cost of a single upfront array
+    // allocation instead. Not yet benchmarked in isolation - see docs/PERFORMANCE.md's task #197.
+    this.queue = new ArrayBlockingQueue<>(demand + 1);
     this.subscriber = new QueueingSubscriber(queue, demand);
     source.subscribe(subscriber);
   }
