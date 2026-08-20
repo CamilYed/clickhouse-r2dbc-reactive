@@ -531,10 +531,23 @@ this driver won on mean through p99 at every concurrency level tested, **3-fork 
 (~2.5–10% faster; the extreme tail past p999 is mixed and likely sample-count noise, not a
 reproduced win either direction) — the strongest measured evidence so far for the architectural
 property this project set out to provide. Still one pool size / three concurrency levels, not yet a
-full scalability sweep — see that doc for the full caveats and what's still open
-(`ConcurrencyBenchmark`'s separate `@Threads(N)`-blocking-callers shape, by contrast, showed a mixed
-result precisely because it leaves both drivers' pools at mismatched defaults rather than matching
-them — read as "same-blocking-resources baseline", not the architectural verdict).
+full scalability sweep — see that doc for the full caveats and what's still open.
+
+> [!IMPORTANT]
+> **Call this driver reactively (`Flux`/`Mono`/R2DBC), not wrapped in `.block()` per query.**
+> `ConcurrencyBenchmark` and `MatchedPoolThreadsConcurrencyBenchmark` (see
+> [docs/PERFORMANCE.md](docs/PERFORMANCE.md)) both drive this driver through
+> `@Threads(N)`-blocking-callers — one platform thread blocked on `.block()` per in-flight query,
+> the shape you get if you call this driver like a classic blocking JDBC driver. Both show this
+> driver ~7–9% slower on mean/percentiles than client-v2 under that calling style, **3-fork
+> confirmed**, reproducible whether the connection pool is matched to client-v2's or not — so it is
+> not a pool-sizing problem and setting `transportMaxConnections` will not fix it. It is specifically
+> the blocking calling style that forfeits this driver's advantage: `BoundedPoolConcurrencyBenchmark`
+> above uses the identical pool size but drives concurrency through `Flux.flatMap` instead, and wins
+> clearly. If your application calls this driver through `.block()`/`.toFuture().get()` under real
+> concurrent load, don't expect this driver's non-blocking design to pay off — and per the
+> [Testing strategy](#testing-strategy)/["fully reactive" definition](#what-fully-reactive-means-here)
+> below, that calling style is also the one thing this whole project is built to avoid you doing.
 
 ## Architecture direction
 

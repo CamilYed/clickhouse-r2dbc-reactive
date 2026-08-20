@@ -69,6 +69,14 @@ boundary demonstrates, one layer up.
   not a per-row lookup. This is the point of not making this "just CRUD": ClickHouse is built for
   exactly this kind of query, and it round-trips through `DatabaseClient` the same way a simple
   `SELECT *` does.
+- **Never blocks on the request path** — `OrderEventController`/`DatabaseClientOrderEventRepository`
+  never call `.block()`/`.toFuture().get()`; the only `.block()` calls anywhere in this module are in
+  `OrderEventsSchemaInitializer` (one-time DDL at startup, off the request path) and tests. This is
+  deliberate, not incidental: the root project's benchmarks (`MatchedPoolThreadsConcurrencyBenchmark`,
+  see [README.md](../../README.md#connection-pooling)) show this driver **3-fork confirmed** ~7-9%
+  slower on mean/percentiles than client-v2 when called through blocking `@Threads(N)`-style calls
+  regardless of connection pool size — sizing the pool does not fix this, only calling the driver
+  reactively does. Keep any new endpoint on this module fully non-blocking end to end.
 - **`TransactionManagerDivergenceTest`** — proves, rather than just documents in prose, that wiring
   Spring's standard declarative-transaction machinery (`R2dbcTransactionManager`/
   `TransactionalOperator`) over this driver fails clearly with `UnsupportedOperationException`,
