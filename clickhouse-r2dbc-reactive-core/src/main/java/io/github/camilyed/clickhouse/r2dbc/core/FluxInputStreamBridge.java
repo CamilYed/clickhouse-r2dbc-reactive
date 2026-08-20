@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import org.reactivestreams.Subscription;
@@ -100,9 +101,10 @@ public final class FluxInputStreamBridge extends InputStream {
    * A {@code Complete}/{@code Error} signal found while {@link #fillCurrent()} was
    * opportunistically draining additional already-queued {@code Data} chunks — stashed here instead
    * of discarded, so the next {@link #fillCurrent()} call consumes it directly without another
-   * {@code queue.take()}.
+   * {@code queue.take()}. {@link Optional} rather than a nullable field, per this project's "no
+   * null as a silent default" rule — {@code empty()} is the explicit "nothing stashed" state.
    */
-  private StreamSignal stashedSignal;
+  private Optional<StreamSignal> stashedSignal = Optional.empty();
 
   /**
    * Reused across every {@link #read()} call rather than allocated fresh each time — this class is
@@ -165,9 +167,9 @@ public final class FluxInputStreamBridge extends InputStream {
    * coalescing" Javadoc section for why that moved here from {@link #read(byte[], int, int)}.
    */
   private StreamSignal takeNextSignal() throws IOException {
-    if (stashedSignal != null) {
-      final StreamSignal signal = stashedSignal;
-      stashedSignal = null;
+    if (stashedSignal.isPresent()) {
+      final StreamSignal signal = stashedSignal.get();
+      stashedSignal = Optional.empty();
       return signal;
     }
     try {
@@ -211,21 +213,15 @@ public final class FluxInputStreamBridge extends InputStream {
   private ByteBuffer coalesce(final ByteBuffer first) {
     List<ByteBuffer> extra = null;
     int totalBytes = first.remaining();
-    while (totalBytes < MAX_COALESCE_BYTES) {
-      final StreamSignal next = queue.poll();
-      if (next == null) {
-        break;
-      }
-      if (!(next instanceof StreamSignal.Data(ByteBuffer buffer))) {
-        stashedSignal = next;
-        break;
-      }
-      subscriber.requestOne();
+    Optional<ByteBuffer> next = pollNextChunkIfUnderCap(totalBytes);
+    while (next.isPresent()) {
+      final ByteBuffer buffer = next.get();
       if (extra == null) {
         extra = new ArrayList<>();
       }
       extra.add(buffer);
       totalBytes += buffer.remaining();
+      next = pollNextChunkIfUnderCap(totalBytes);
     }
     if (extra == null) {
       return first;
@@ -237,6 +233,32 @@ public final class FluxInputStreamBridge extends InputStream {
     }
     merged.flip();
     return merged;
+  }
+
+  /**
+   * Non-blocking single step of {@link #coalesce(ByteBuffer)}'s drain loop: returns the next
+   * already-queued {@code Data} chunk's buffer, or {@link Optional#empty()} when there is nothing
+   * more to merge — either because {@code totalBytesSoFar} already reached {@link
+   * #MAX_COALESCE_BYTES}, the queue had nothing waiting ({@link BlockingQueue#poll()} returned
+   * {@code null}), or the next queued signal was a {@code Complete}/{@code Error} (parked in {@link
+   * #stashedSignal} instead of being consumed here). A dequeued {@code Data} chunk still triggers
+   * {@link QueueingSubscriber#requestOne()}, same as every other physical chunk consumed from the
+   * queue.
+   */
+  private Optional<ByteBuffer> pollNextChunkIfUnderCap(final int totalBytesSoFar) {
+    if (totalBytesSoFar >= MAX_COALESCE_BYTES) {
+      return Optional.empty();
+    }
+    final StreamSignal signal = queue.poll();
+    if (signal == null) {
+      return Optional.empty();
+    }
+    if (!(signal instanceof StreamSignal.Data(ByteBuffer buffer))) {
+      stashedSignal = Optional.of(signal);
+      return Optional.empty();
+    }
+    subscriber.requestOne();
+    return Optional.of(buffer);
   }
 
   @Override
