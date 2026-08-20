@@ -47,14 +47,32 @@ public sealed interface Authentication {
     }
   }
 
-  /** HTTP Basic authentication: {@code Authorization: Basic base64(user:password)}. */
-  record Basic(String user, String password) implements Authentication {
-    @Override
-    public void addTo(final HttpHeaders headers) {
+  /**
+   * HTTP Basic authentication: {@code Authorization: Basic base64(user:password)}.
+   *
+   * <p>{@code headerValue} is computed once, here, rather than in {@link #addTo(HttpHeaders)} —
+   * {@code user}/{@code password} never change once an {@code Authentication} exists (it's an
+   * immutable value shared across every request on a {@link ClickHouseHttpTransport}), so
+   * recomputing the same {@code String} concatenation, UTF-8 encode, and Base64 encode on every
+   * single HTTP request was pure repeated work for an identical result. Not yet benchmarked — see
+   * {@code docs/PERFORMANCE.md}'s task #197 for the planned before/after measurement.
+   */
+  record Basic(String user, String password, String headerValue) implements Authentication {
+
+    Basic(final String user, final String password) {
+      this(user, password, headerValueFor(user, password));
+    }
+
+    private static String headerValueFor(final String user, final String password) {
       final String credentials = user + ":" + password;
       final String encoded =
           Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
-      headers.set("Authorization", "Basic " + encoded);
+      return "Basic " + encoded;
+    }
+
+    @Override
+    public void addTo(final HttpHeaders headers) {
+      headers.set("Authorization", headerValue);
     }
 
     // The generated record toString() would print password in plain text - redacted since any
