@@ -17,3 +17,14 @@ dependencies {
     testRuntimeOnly(libs.slf4j.simple)
     testRuntimeOnly(libs.bouncycastle.pkix)
 }
+
+// Netty leak-detection test lane (ROADMAP.md Phase 7 item 6) - see testkit's build.gradle.kts for
+// why these three specific flags. transport-http is where every ByteBuf this driver ever touches
+// actually flows, so it's where a real leak would show up.
+tasks.test {
+    jvmArgs(
+        "-Dio.netty.leakDetection.level=paranoid",
+        "-Dio.netty.leakDetection.targetRecords=25",
+        "-Dio.netty.customResourceLeakDetector=io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector"
+    )
+}
