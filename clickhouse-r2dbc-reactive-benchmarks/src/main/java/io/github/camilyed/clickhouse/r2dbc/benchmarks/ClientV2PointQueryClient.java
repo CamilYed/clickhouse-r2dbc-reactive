@@ -46,18 +46,18 @@ final class ClientV2PointQueryClient implements PointQueryClient {
   }
 
   private PointResult mapSingleRow(final long id, final QueryResponse response) {
-    try (QueryResponse closeable = response) {
-      final ClickHouseBinaryFormatReader reader = client.newBinaryFormatReader(closeable);
+    try (QueryResponse closeable = response;
+        ClickHouseBinaryFormatReader reader = client.newBinaryFormatReader(closeable)) {
       if (reader.next() == null) {
         throw new IllegalStateException("Expected exactly one row for id=" + id + " but got none");
       }
       return new PointResult(reader.getString(1), reader.getBigDecimal(2));
     } catch (final Exception e) {
       // Function<QueryResponse, PointResult> (thenApply's functional interface) declares no checked
-      // exceptions, but QueryResponse#close() declares `throws Exception` (try-with-resources'
-      // implicit close call) - rethrown unchecked so the CompletableFuture surfaces the real
-      // failure
-      // instead of the caller only ever seeing a generic checked-exception wrapper.
+      // exceptions, but both QueryResponse#close() and ClickHouseBinaryFormatReader#close() declare
+      // `throws Exception` (try-with-resources' implicit close calls) - rethrown unchecked so the
+      // CompletableFuture surfaces the real failure instead of the caller only ever seeing a
+      // generic checked-exception wrapper.
       throw new CompletionException(e);
     }
   }
