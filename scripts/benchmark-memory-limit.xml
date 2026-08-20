@@ -1,0 +1,7 @@
+<clickhouse>
+    <!-- Explicit server memory ceiling for the standalone "trusted" benchmark container -
+         see BenchmarkEnvironment.SERVER_MEMORY_USAGE_BYTES for why this is set directly rather
+         than left to ClickHouse's own cgroup-based auto-detection. Keep in sync by hand with
+         that constant. -->
+    <max_server_memory_usage>6000000000</max_server_memory_usage>
+</clickhouse>

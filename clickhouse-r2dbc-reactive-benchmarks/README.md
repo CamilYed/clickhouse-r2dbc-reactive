@@ -1,20 +1,26 @@
 # clickhouse-r2dbc-reactive-benchmarks
 
-JMH benchmarks comparing this driver against `client-v2`, at multiple levels. Full design and
-rationale: [docs/PERFORMANCE.md's Phase 5 section](../docs/PERFORMANCE.md#phase-5-later--load-and-performance-testing).
+JMH benchmarks comparing this driver against `client-v2`, at multiple levels — what each class
+measures and the latest results: [docs/PERFORMANCE.md](../docs/PERFORMANCE.md).
 
-Not published, not part of `./gradlew build`/`check`. Requires Docker (Testcontainers starts a real,
-version-pinned `clickhouse/clickhouse-server`, one container per JMH fork — see
-`BenchmarkEnvironment`'s Javadoc) and JDK 21.
-
-All numbers currently recorded in this README/ROADMAP.md were measured on a single MacBook Pro
-14-inch (Nov 2023, Apple M3 Pro, 36 GB RAM, macOS Tahoe 26.5.2) — a shared consumer laptop, not an
-isolated benchmarking rig. Treat absolute numbers as specific to that machine; the driver-vs-driver
-comparisons (same hardware/JVM/data on both sides) are the portable part.
+Not published, not part of `./gradlew build`/`check`. Requires Docker and JDK 21.
 
 ## Running
 
+Against a Testcontainers-managed server (default — one container per JMH fork):
+
 ```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh
+```
+
+Against a long-lived external server instead (faster iteration — no container startup per fork):
+
+```
+./scripts/start-benchmark-clickhouse.sh
+export BENCH_CLICKHOUSE_URL=http://localhost:28123
+export BENCH_CLICKHOUSE_USER=default
+export BENCH_CLICKHOUSE_PASSWORD=
+
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh
 ```
 
@@ -33,102 +39,26 @@ To run with a JMH profiler (e.g. the GC profiler for allocation numbers):
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
 ```
 
-**Both flags only work as of the `build.gradle.kts` fix below — before that, they were silently
-ignored and every `jmh` invocation ran the entire suite with no profiler, regardless of what was
-passed on the command line.** The me.champeau.jmh plugin doesn't read `-P` project properties on
-its own; `includes`/`profilers` had to be explicitly wired from `project.property(...)` in the
-build script for these flags to do anything.
-
-## Status
-
-Two Level 1 classes run for real against Docker/ClickHouse (see docs/PERFORMANCE.md's Phase 5 section for
-numbers):
-
-- `PointQueryBenchmark` — a real single-row lookup against a seeded table.
-- `TrivialQueryBenchmark` — `SELECT 1`, no table at all; isolates protocol/connection overhead from
-  the storage-engine lookup `PointQueryBenchmark` also pays for.
-
-A third, `StreamingScanBenchmark` — full-table scan over the same seeded table (no `WHERE`), at
-`10k`/`100k`/`1M` row tiers, measuring both JMH's own SampleTime (effectively time-to-last-row) and
-a separate `HdrHistogram`-backed time-to-first-row per driver (logged at trial teardown, not in
-JMH's own JSON — see the class's own Javadoc). Its first run had a real methodology bug (TTFR
-instrumentation ran an `AtomicLong` compare-and-swap on every row, not just the first) — fixed, then
-re-run for real. **Confirmed, trustworthy result: this driver is genuinely slower for streaming
-scans, and the gap grows sharply with row count (≈13% → ≈55% → ≈80% slower, 10k → 100k → 1M rows)**
-— unlike `PointQueryBenchmark`/`TrivialQueryBenchmark`, which still favor this driver. See
-docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for the full numbers, the ranked hypothesis list
-(verified against this repo's actual source, not just inspection), and the investigation plan.
-
-Two new diagnostic classes localize that gap, **run for real, question answered**:
-
-- `TransportOnlyStreamingBenchmark` — raw response bytes only, no row decoding at all. **This
-  driver wins by 51–78%, growing to a 4.6x margin at 1M rows.** The non-blocking transport is a
-  genuine, previously-invisible strength.
-- `DecoderOnlyBenchmark` — decodes one captured response payload from memory repeatedly, no network
-  at all. **This driver loses by 150–190% (a consistent ~2.5–2.9x), flat across all three row
-  tiers.** This is where the entire `StreamingScanBenchmark` regression actually lives.
-
-**Conclusion: transport is this driver's strength, not its weakness — decode/materialization is the
-confirmed, localized bottleneck**, with a smaller secondary cost in the transport-to-decode bridge
-hand-off (sum of the two isolated numbers runs 22–28% under the combined `StreamingScanBenchmark`
-figure for this driver, near-zero for client-v2). Full tables and reasoning: docs/PERFORMANCE.md's Phase 5
-"Optimization phase" section.
-
-`-prof gc` on `DecoderOnlyBenchmark`, **run for real, H0 and H1 both confirmed**: client-v2 allocates
-a remarkably stable ~296 bytes/row at every tier; this driver allocated ~872 bytes/row before any
-fixes. **H0** (the `byte[1]` per single-byte `read()` call) is fixed and confirmed by a real
-re-benchmark: a clean, reproducible ~24 bytes/row reduction at both 100k/1M (872 → 848), matching the
-predicted cost exactly — real, but only ~4% of the gap. **H1** (the per-row
-`new LinkedHashMap<>(reader.next())` copy) is now confirmed too, via a genuine single-variable
-diagnostic (`ourDriverWithoutMapCopy`, below): **576.0 bytes/row and ~77% of decode latency at 1M
-rows, agreeing to four significant figures across a 10x row-count change.** H0 + H1 account for
-essentially the entire original allocation gap. Mechanically explained by reading client-v2's actual
-source: `new LinkedHashMap<>(...)` triggers `RecordWrapper.entrySet()`, which allocates a fresh
-`HashSet` plus one `SimpleImmutableEntry` per column on every call — real, measured, and now
-source-confirmed, not inferred. Full reasoning, numbers, and the exact quoted source: ROADMAP.md's
-Phase 5 "Optimization phase" section.
-
-**H0 fixed and confirmed**: `FluxInputStreamBridge` now reuses a single-element buffer instead of
-allocating `new byte[1]` per call — plus a new black-box test for the single-byte `read()` overload,
-which had zero test coverage before this (every existing test only exercised the bulk
-`read(byte[], int, int)` path via `readAllBytes()`).
-
-**H1 confirmed via `DecoderOnlyBenchmark.ourDriverWithoutMapCopy`**: identical to `ourDriver` — same
-bridge, same reader settings, same `Flux.generate` shape — except the final `LinkedHashMap` copy is
-skipped. A single-variable change against `ourDriver`, isolating H1's cost directly: 576.0 bytes/row,
-~173.7ms of the 1M-row decode time. One caveat: this diagnostic comes in *below* client-v2's own
-baseline (272 vs 296 B/row), but the two aren't doing equivalent work — the diagnostic discards each
-row without calling any getter, while client-v2's benchmark calls three. Not yet a "faster than
-client-v2" result; that needs a production-shaped prototype with real value access.
-
-**`DecoderOnlyBenchmark.ourDriverCompactRow` — the fair comparison — run and confirmed with 3 forks**:
-calls the same three typed getters (`getLong`/`getString`/`getBigDecimal`) client-v2's own benchmark
-calls and packs them into a plain `Object[]` — a real retained per-row object, no
-`LinkedHashMap`/`RecordWrapper.entrySet()` involved. Result: recovers essentially all of H1's cost,
-but a genuine, moderate residual remains — **~13–16% slower than client-v2, ~48–56 bytes/row more**,
-most likely the `FluxInputStreamBridge`/`Flux.generate` pipeline itself (the never-isolated H2
-hypothesis) — a reasonable cost for real backpressure and a non-blocking event loop, not a multi-x
-regression. Full numbers and the multi-fork methodology note: docs/PERFORMANCE.md's Phase 5 section.
-
-**Multi-fork methodology note**: the first `ourDriverCompactRow` run used the default single fork and
-gave numbers that didn't reproduce run-to-run on identical code/data. `-Pjmh.forks`/
-`-Pjmh.warmupIterations` are now wired (same pattern as `includes`/`profilers`) — use them before
-trusting any result enough to act on it:
+To run multiple forks (needed before trusting a result — see docs/PERFORMANCE.md's confidence
+warning; the plain `jmh` task defaults to 1 fork/1 warmup iteration, a sanity check, not a
+trustworthy number):
 
 ```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc -Pjmh.forks=3 -Pjmh.warmupIterations=3
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.forks=3 -Pjmh.warmupIterations=3
 ```
 
-Wide multi-type decode, aggregation, INSERT, and the reactive-vs-blocking concurrency burst scenario
-stay queued behind this — all designed in ROADMAP.md, not yet built. Charts of the final confirmed
-numbers for the main README are explicitly deferred to the end of this phase.
+Flags compose freely, e.g.:
 
-**Fairness fixes applied after the first run** (a real run surfaced real gaps — not designed away
-in the abstract): the ClickHouse image is now version-pinned rather than `latest`; client-v2 now
-uses the same `{id:UInt64}`/`query_params` parameterization mechanism as this driver rather than an
-inlined SQL literal; benchmark ids are pre-generated once per trial with a fixed seed
-(`PointQueryTable#deterministicIds`) instead of called via `Math.random()` inside the hot path.
-One known, deliberately-not-forced-to-match asymmetry remains: this driver materializes each row
-into a `Map<String, Object>`, client-v2 reads typed values directly — see `PointQueryBenchmark`'s
-own Javadoc for why, and what would isolate it (a future transport-only benchmark with no decode at
-all).
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=BoundedPoolConcurrencyBenchmark -Pjmh.forks=3 -Pjmh.warmupIterations=3
+```
+
+For a long unattended run (the full suite, or any 3-fork run), wrap with `caffeinate -d -i` on
+macOS to prevent the machine sleeping mid-run.
+
+## Machine
+
+All numbers currently recorded in docs/PERFORMANCE.md were measured on a single MacBook Pro
+14-inch (Nov 2023, Apple M3 Pro, 36 GB RAM) — a shared consumer laptop, not an isolated
+benchmarking rig. Treat absolute numbers as specific to that machine; the driver-vs-driver
+comparisons (same hardware/JVM/data on both sides) are the portable part.

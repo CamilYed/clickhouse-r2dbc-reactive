@@ -13,16 +13,25 @@ set -euo pipefail
 IMAGE="clickhouse/clickhouse-server:26.7.3.19"
 CONTAINER_NAME="clickhouse-r2dbc-reactive-benchmark"
 HTTP_PORT="${BENCH_CLICKHOUSE_HTTP_PORT:-28123}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# --memory + the mounted config.d override keep this in sync with BenchmarkEnvironment's
+# CONTAINER_MEMORY_BYTES / SERVER_MEMORY_USAGE_BYTES - see that class's Javadoc for why both
+# a Docker-level limit and an explicit max_server_memory_usage are needed (auto-detection alone
+# under Docker Desktop's Linux VM proved unreliable). Bump by hand in both places if changed.
 if docker ps --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
   echo "Container ${CONTAINER_NAME} is already running."
 else
   docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   docker run -d \
     --name "${CONTAINER_NAME}" \
+    --memory=7000m \
+    --memory-swap=7000m \
+    -v "${SCRIPT_DIR}/benchmark-memory-limit.xml:/etc/clickhouse-server/config.d/benchmark-memory-limit.xml:ro" \
     -p "${HTTP_PORT}:8123" \
+    -e CLICKHOUSE_SKIP_USER_SETUP=1 \
     "${IMAGE}"
-  echo "Started ${CONTAINER_NAME} (${IMAGE}) - HTTP on port ${HTTP_PORT}."
+  echo "Started ${CONTAINER_NAME} (${IMAGE}) - HTTP on port ${HTTP_PORT}, memory=7000m."
 fi
 
 echo

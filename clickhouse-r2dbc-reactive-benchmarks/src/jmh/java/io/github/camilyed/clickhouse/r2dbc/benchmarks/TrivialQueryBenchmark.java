@@ -4,8 +4,10 @@ import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -39,6 +41,7 @@ public class TrivialQueryBenchmark {
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private RowDecodingScheduler decodingScheduler;
 
   /** Starts the shared container once per JMH trial. No dataset — {@code SELECT 1} needs none. */
   @Setup(Level.Trial)
@@ -49,6 +52,7 @@ public class TrivialQueryBenchmark {
             BenchmarkEnvironment.httpUrl(),
             BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
+    decodingScheduler = RowDecodingScheduler.defaults();
     clientV2 =
         new Client.Builder()
             .addEndpoint(BenchmarkEnvironment.httpUrl())
@@ -58,18 +62,27 @@ public class TrivialQueryBenchmark {
             .build();
   }
 
-  /** Releases both clients' connection pools at the end of the trial. */
+  /** Releases both clients' connection pools and this driver's decode scheduler. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    decodingScheduler.dispose();
   }
 
-  /** This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decodeRows}. */
+  /**
+   * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decode} — the real
+   * production decode path (off {@link #ourTransport}'s Netty event loop, via {@link
+   * #decodingScheduler}), not the scheduler-free {@link RowBinaryDecoder#decodeRows} test/benchmark
+   * shortcut, since this benchmark's source is a live network response, not an in-memory one.
+   */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(SELECT_1_SQL)).asByteArray().map(ByteBuffer::wrap);
-    final DecodedRow row = RowBinaryDecoder.decodeRows(body).blockFirst(Duration.ofSeconds(10));
+    final DecodedRow row =
+        RowBinaryDecoder.decode(body, decodingScheduler)
+            .flatMapMany(DecodedResult::rows)
+            .blockFirst(Duration.ofSeconds(10));
     blackhole.consume(row);
   }
 

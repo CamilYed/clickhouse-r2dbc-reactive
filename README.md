@@ -240,31 +240,40 @@ abstraction, so the demo's repository issues fully pre-formed SQL instead).
 
 ## Performance
 
-Every number below is from a real ClickHouse server (Testcontainers), 3-JMH-fork confirmed, against
-`com.clickhouse:client-v2:0.9.0`. Full methodology, every run, and every open caveat:
-[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+Every number below is from a real ClickHouse server, against `com.clickhouse:client-v2:0.9.8`, this
+driver's real production decode path (`RowDecodingScheduler`, not a benchmark-only shortcut). Latest
+run is single-fork (a first signal, not yet a 3-fork-confirmed number — see the confidence warning
+at the top of [docs/PERFORMANCE.md](docs/PERFORMANCE.md), which has full methodology, every
+benchmark's description, and every open caveat.
 
 <p align="center">
-  <img src="docs/images/streaming-scan-mean-latency-2026-08-19.png" width="32%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2, 2026-08-19 re-run">
-  <img src="docs/images/bounded-pool-concurrency-mean-latency.png" width="32%" alt="BoundedPoolConcurrencyBenchmark mean latency by concurrency level, this driver vs client-v2">
-  <img src="docs/images/decoder-only-mean-latency-2026-08-19.png" width="32%" alt="DecoderOnlyBenchmark production decode path mean latency by row count, this driver vs client-v2, 2026-08-19 re-run">
+  <img src="docs/images/2026-08-20-throughput.png" width="32%" alt="Real point-query throughput through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2">
+  <img src="docs/images/2026-08-20-isolation-trio.png" width="32%" alt="Isolation: transport only vs decode only vs the full production pipeline, this driver vs client-v2, at 1,000,000 rows">
+  <img src="docs/images/2026-08-20-streaming-scan.png" width="32%" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
 </p>
 
 | Scenario | Result |
 | --- | --- |
-| Full table scan (10k/100k/1M rows) | 🟡 mixed as of the latest (2026-08-19) re-run: 12.3% lower latency at 10k, 3.9% lower at 100k, **17.4% higher at 1M** — the earlier "8–21% lower" figure was measured against `client-v2:0.9.0`; this driver's own latency barely moved between runs, client-v2 got substantially faster at 100k/1M. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for both runs side by side |
-| Decode cost alone, no network (production decode path) | 🟡 mixed as of the latest (2026-08-19) re-run: 14–18% lower latency at 10k/1M rows, ~4% higher at 100k rows — the earlier "22–38% lower" figure was measured against `client-v2:0.9.0`; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for both runs side by side and why the divergence looks like a `client-v2` version effect, not a regression in this driver |
-| Matched 8-connection pool, 8/32/128 concurrent async queries | 🟢 ~5–6% faster mean, consistent at every concurrency level |
-| Single-row point lookup / `SELECT 1` floor | 🟢 6–7% faster mean |
+| Non-blocking, matched 8-connection pool, real throughput via the public R2DBC SPI | 🟢 **~4x more queries/sec** at every concurrency level tested (8/32/128) — the scenario this project is built for |
+| Full table scan (10k/100k/1M rows) | 🔴 tied at 10k, **19.5% higher latency at 100k, 56.9% higher at 1M** — see below, this is new and it is real |
+| Transport alone (bytes, no decode) | 🟢 43–45% lower latency at every tier, including 1M rows |
+| Decode alone, no network | 🟢 7–14% lower latency at every tier |
+| Single-row point lookup / `SELECT 1` floor | 🟡 essentially tied (within ±2%) |
+| Blocking `.block()`-per-query calling style, matched pool | 🔴 ~5–8% higher latency — don't call it this way, see below |
 
-**The 1M-row tail is no longer a one-off.** Earlier runs traced a p99.9/max spike to a handful of
-outlier samples in a single JMH fork (of three) and left it as "not yet a reproduced pattern." Two
-more independent 3-fork runs on 2026-08-19 reproduced essentially the same spike (~350–420ms band)
-again, alongside a new finding: this driver triggers noticeably more GC events than client-v2 at the
-100k/1M tiers despite allocating fewer total bytes — a plausible but unconfirmed contributor to the
-tail. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#are-we-faster-than-client-v2--read-this-first)
-for the full breakdown, every percentile, and the raw evidence — this project's whole culture is
-"measure, don't assume," so the doc keeps the messy parts in, not just the wins.
+**The full-scan regression is a genuine, newly-surfaced finding, not old news re-labeled.** Earlier
+numbers on this page used a decode shortcut (`RowBinaryDecoder.decodeRows`) that is documented as
+unsafe against a live network response — every benchmark in the suite now goes through the real
+production path (`RowBinaryDecoder.decode` + `RowDecodingScheduler`), and paying that real cost
+changes the picture: **transport wins big, decode wins on its own, but the combination — the actual
+shipped code path — loses, and loses more as results get larger.** That's not a contradiction to
+explain away; it's the most useful thing this rewrite found, and it's not yet root-caused (leading
+suspect: the transport→decode-scheduler hand-off itself). See
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-transport-wins-decode-wins-the-combination-doesnt)
+for the isolation breakdown and [How to use this driver
+well](docs/PERFORMANCE.md#how-to-use-this-driver-well) for what this means for choosing this driver
+today: a clear win for many-small-concurrent-queries workloads, not yet a win for large single
+scans.
 
 ## Known limitations
 
@@ -523,15 +532,14 @@ waiting on a connection, one way or another. This driver's non-blocking pipeline
 logical queries than physical connections be *in flight* at once — `Flux.flatMap(..., concurrency)`
 subscribes to all of them immediately; whichever don't fit in the physical pool queue inside Reactor
 Netty itself, with no blocked thread paying for each one. Measured directly:
-`BoundedPoolConcurrencyBenchmark` (see [docs/PERFORMANCE.md](docs/PERFORMANCE.md), search
-"BoundedPoolConcurrencyBenchmark") configures both this driver and client-v2 with the *same*
-8-connection pool and drives 8/32/128
-logical concurrent point queries at once (async on both sides, not one blocking thread per query) —
-this driver won on mean through p99 at every concurrency level tested, **3-fork confirmed**
-(~2.5–10% faster; the extreme tail past p999 is mixed and likely sample-count noise, not a
-reproduced win either direction) — the strongest measured evidence so far for the architectural
-property this project set out to provide. Still one pool size / three concurrency levels, not yet a
-full scalability sweep — see that doc for the full caveats and what's still open.
+`BoundedPoolConcurrencyBenchmark` and `PublicApiMatchedPoolThroughputBenchmark` (see
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md)) configure both this driver and client-v2 with the *same*
+8-connection pool and drive 8/32/128 logical concurrent point queries at once (async on both sides,
+not one blocking thread per query) — this driver wins decisively, **~4x the real throughput** through
+the public R2DBC SPI at every concurrency level tested. Latest run is single-fork, not yet
+multi-fork confirmed — still the strongest measured evidence so far for the architectural property
+this project set out to provide. Still one pool size / three concurrency levels, not yet a full
+scalability sweep — see that doc for the full caveats and what's still open.
 
 > [!IMPORTANT]
 > **Call this driver reactively (`Flux`/`Mono`/R2DBC), not wrapped in `.block()` per query.**
@@ -539,13 +547,13 @@ full scalability sweep — see that doc for the full caveats and what's still op
 > [docs/PERFORMANCE.md](docs/PERFORMANCE.md)) both drive this driver through
 > `@Threads(N)`-blocking-callers — one platform thread blocked on `.block()` per in-flight query,
 > the shape you get if you call this driver like a classic blocking JDBC driver. Both show this
-> driver ~7–9% slower on mean/percentiles than client-v2 under that calling style, **3-fork
-> confirmed**, reproducible whether the connection pool is matched to client-v2's or not — so it is
-> not a pool-sizing problem and setting `transportMaxConnections` will not fix it. It is specifically
-> the blocking calling style that forfeits this driver's advantage: `BoundedPoolConcurrencyBenchmark`
-> above uses the identical pool size but drives concurrency through `Flux.flatMap` instead, and wins
-> clearly. If your application calls this driver through `.block()`/`.toFuture().get()` under real
-> concurrent load, don't expect this driver's non-blocking design to pay off — and per the
+> driver ~5–8% slower on mean than client-v2 under that calling style, reproducible whether the
+> connection pool is matched to client-v2's or not — so it is not a pool-sizing problem and setting
+> `transportMaxConnections` will not fix it. It is specifically the blocking calling style that
+> forfeits this driver's advantage: `BoundedPoolConcurrencyBenchmark` above uses the identical pool
+> size but drives concurrency through `Flux.flatMap` instead, and wins by 3.5–4x. If your application
+> calls this driver through `.block()`/`.toFuture().get()` under real concurrent load, don't expect
+> this driver's non-blocking design to pay off — and per the
 > [Testing strategy](#testing-strategy)/["fully reactive" definition](#what-fully-reactive-means-here)
 > below, that calling style is also the one thing this whole project is built to avoid you doing.
 
