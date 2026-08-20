@@ -3,11 +3,13 @@ package io.github.camilyed.clickhouse.r2dbc.core;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 import org.reactivestreams.Subscription;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
@@ -74,9 +76,23 @@ import reactor.core.publisher.Flux;
  *
  * <h2>Cancellation</h2>
  *
- * {@link #close()} disposes the subscriber, which cancels the upstream subscription — whether
- * nothing has been read yet or a consumer stops early, the source {@code Flux} is torn down instead
- * of left running to completion unread.
+ * {@link #close()} first tries a short, bounded drain ({@link #drainQuickly()}) toward the upstream
+ * {@code Flux}'s own natural terminal signal — discarding any remaining {@code Data} chunks along
+ * the way — before ever disposing the subscriber. This matters specifically for {@code Flux.next()}
+ * (and any other single/first-element consumption): it cancels its upstream the instant it has one
+ * element, before this class or the row decoder above it ever observes end-of-stream itself. Disposing
+ * immediately in that case sends a real cancellation to the transport even when the response is
+ * small and effectively already fully in flight — needlessly forfeiting connection-pool reuse (e.g.
+ * Reactor Netty's own pool, which only returns a connection once it has seen the response's natural
+ * end) and triggering a best-effort {@code KILL QUERY} for a query that has, in practice, already
+ * finished. If the drain reaches {@code Complete}/{@code Error} within {@link #DRAIN_TIME_BUDGET}/
+ * {@link #DRAIN_BYTE_BUDGET}, the subscriber has already reached its own terminal state naturally —
+ * {@link #close()} never calls {@code dispose()} at all in that case, since doing so afterward would
+ * be a no-op anyway. Only when the drain gives up (a genuinely large or slow remaining response, the
+ * common case for a caller that deliberately abandons a big streaming scan early) does {@link
+ * #close()} fall back to disposing the subscriber, cancelling the upstream subscription and tearing
+ * the source {@code Flux} down — the same unconditional behavior this class had before this budget
+ * existed.
  */
 public final class FluxInputStreamBridge extends InputStream {
 
@@ -90,6 +106,24 @@ public final class FluxInputStreamBridge extends InputStream {
    * against a range of values, just chosen large enough not to bind in practice today.
    */
   private static final int MAX_COALESCE_BYTES = 64 * 1024;
+
+  /**
+   * Wall-clock budget {@link #close()} gives {@link #drainQuickly()} to reach the upstream {@code
+   * Flux}'s natural terminal signal before giving up and falling back to a hard cancel — see {@link
+   * #close()}'s Javadoc and this class's "Cancellation" section for the full reasoning. Deliberately
+   * short: this only exists to cover the common case where the remaining response is already (or is
+   * about to be) fully available, not to make a caller who abandons a large response wait around.
+   */
+  private static final Duration DRAIN_TIME_BUDGET = Duration.ofMillis(50);
+
+  /**
+   * Byte budget for the same bounded drain, capped independently of {@link #DRAIN_TIME_BUDGET} so a
+   * fast producer streaming a large response doesn't get fully drained just because its next few
+   * chunks happen to arrive within the time budget. Reuses {@link #MAX_COALESCE_BYTES}'s value: both
+   * constants exist to bound how much of an already-in-flight response this class will absorb
+   * opportunistically, for related reasons.
+   */
+  private static final int DRAIN_BYTE_BUDGET = MAX_COALESCE_BYTES;
 
   private final BlockingQueue<StreamSignal> queue;
   private final QueueingSubscriber subscriber;
@@ -261,9 +295,102 @@ public final class FluxInputStreamBridge extends InputStream {
     return Optional.of(buffer);
   }
 
+  /**
+   * Ends this stream. If {@link #finished} is already {@code true} the upstream subscription has
+   * already reached its own terminal state naturally, so there is nothing to cancel and this is a
+   * no-op. Otherwise, tries {@link #drainQuickly()} first — a short, bounded attempt to reach that
+   * same natural terminal state — before falling back to {@link BaseSubscriber#dispose() disposing}
+   * the subscriber, which cancels the upstream subscription. See this class's "Cancellation" Javadoc
+   * section for why this two-step sequence exists rather than an unconditional cancel.
+   */
   @Override
   public void close() {
-    subscriber.dispose();
+    if (finished) {
+      return;
+    }
+    if (!drainQuickly()) {
+      subscriber.dispose();
+    }
+  }
+
+  /**
+   * Attempts to reach the upstream {@code Flux}'s natural terminal signal ({@code Complete}/{@code
+   * Error}) within a bounded budget of both wall-clock time ({@link #DRAIN_TIME_BUDGET}) and bytes
+   * ({@link #DRAIN_BYTE_BUDGET}), discarding any {@code Data} chunks encountered along the way. Each
+   * discarded chunk still triggers {@link QueueingSubscriber#requestOne()}, same as every other
+   * physical chunk consumed elsewhere in this class, so the drain itself doesn't stall waiting for
+   * more credit than it already has.
+   *
+   * @return {@code true} if a terminal signal was reached (this instance is now {@link #finished});
+   *     {@code false} if the byte or time budget ran out first, or the wait was interrupted — either
+   *     way, the caller ({@link #close()}) falls back to a hard cancel
+   */
+  private boolean drainQuickly() {
+    final long deadlineNanos = System.nanoTime() + DRAIN_TIME_BUDGET.toNanos();
+    int bytesDrained = 0;
+    while (bytesDrained < DRAIN_BYTE_BUDGET) {
+      final long remainingNanos = deadlineNanos - System.nanoTime();
+      if (remainingNanos <= 0) {
+        return false;
+      }
+      final Optional<StreamSignal> signal = pollWithinBudget(remainingNanos);
+      if (signal.isEmpty()) {
+        return false;
+      }
+      final Optional<Integer> dataBytesConsumed = applyDrainedSignal(signal.get());
+      if (dataBytesConsumed.isEmpty()) {
+        return true;
+      }
+      bytesDrained += dataBytesConsumed.get();
+    }
+    return false;
+  }
+
+  /**
+   * One step of {@link #drainQuickly()}'s loop: applies a signal already dequeued (via {@link
+   * #pollWithinBudget(long)}) to this instance's state.
+   *
+   * @return the number of bytes consumed, if {@code signal} was a {@code Data} chunk that leaves the
+   *     drain still in progress; {@link Optional#empty()} if {@code signal} was {@code Complete}/
+   *     {@code Error} — {@link #finished} is set to {@code true} in that case, same as {@link
+   *     #fillCurrent()}'s handling of those same signals during normal reads
+   */
+  private Optional<Integer> applyDrainedSignal(final StreamSignal signal) {
+    return switch (signal) {
+      case StreamSignal.Data(ByteBuffer buffer) -> {
+        subscriber.requestOne();
+        yield Optional.of(buffer.remaining());
+      }
+      case StreamSignal.Complete ignored -> {
+        finished = true;
+        yield Optional.empty();
+      }
+      case StreamSignal.Error ignored -> {
+        finished = true;
+        yield Optional.empty();
+      }
+    };
+  }
+
+  /**
+   * Fetches the next signal for {@link #drainQuickly()} — from {@link #stashedSignal} if present
+   * (without spending any of {@code timeoutNanos}), otherwise via a bounded {@link
+   * BlockingQueue#poll(long, TimeUnit)}. Unlike {@link #takeNextSignal()}, never blocks
+   * unboundedly — an empty result here means the budget ran out, not that no more data will ever
+   * arrive.
+   */
+  private Optional<StreamSignal> pollWithinBudget(final long timeoutNanos) {
+    if (stashedSignal.isPresent()) {
+      final StreamSignal signal = stashedSignal.get();
+      stashedSignal = Optional.empty();
+      return Optional.of(signal);
+    }
+    try {
+      return Optional.ofNullable(queue.poll(timeoutNanos, TimeUnit.NANOSECONDS));
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return Optional.empty();
+    }
   }
 
   private static final class QueueingSubscriber extends BaseSubscriber<ByteBuffer> {

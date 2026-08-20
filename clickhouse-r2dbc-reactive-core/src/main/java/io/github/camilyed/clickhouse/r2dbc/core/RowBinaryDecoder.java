@@ -163,11 +163,16 @@ public final class RowBinaryDecoder {
    * this method existed silently discarded the reader state on cancellation instead — {@link
    * ListDecodingRowBinaryReader} (inherited from client-v2's {@code AbstractBinaryFormatReader})
    * already implements {@code close()} as {@code input.close()}, i.e. {@link
-   * FluxInputStreamBridge#close()}, which cancels the underlying transport subscription; that path
-   * was simply never reached when a caller cancelled mid-stream (e.g. an R2DBC consumer that stops
-   * reading rows early) rather than letting the sequence complete or error naturally. Left the
-   * connection merely idle rather than explicitly torn down — see {@code RowBinaryDecoderTest}'s
-   * cancellation tests for the regression coverage.
+   * FluxInputStreamBridge#close()}; that path was simply never reached when a caller cancelled
+   * mid-stream (e.g. an R2DBC consumer that stops reading rows early) rather than letting the
+   * sequence complete or error naturally. Left the connection merely idle rather than explicitly
+   * torn down — see {@code RowBinaryDecoderTest}'s cancellation tests for the regression coverage.
+   * {@code FluxInputStreamBridge#close()} itself only hard-cancels the underlying transport
+   * subscription as a fallback, after a short bounded attempt to reach that subscription's own
+   * natural end first — see that class's "Cancellation" Javadoc section for why: a caller like
+   * {@code Flux.next()} reaches here the instant it has one element, before the response has
+   * necessarily been observed as fully received, and hard-cancelling unconditionally in that case
+   * would needlessly forfeit the underlying transport's connection-pool reuse.
    */
   private static void closeReader(final ListDecodingRowBinaryReader reader) {
     try {

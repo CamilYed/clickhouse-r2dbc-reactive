@@ -10,6 +10,24 @@ and commit it to `main` first — the workflow looks for a `## ` heading contain
 the version it was given and fails the release if it can't find one. See
 [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release) for the full release checklist.
 
+## [Unreleased] — 0.2.1
+
+### Fixed
+
+- **Cancelling a query via `Flux.next()`-style single-element consumption no longer forfeits
+  connection-pool reuse.** `RowBinaryDecoder`'s disposal hook (added in `0.2.0` to fix a real
+  resource-cleanup gap on downstream cancellation) called `FluxInputStreamBridge#close()`
+  unconditionally, which unconditionally cancelled the underlying transport subscription — correct
+  for a caller that genuinely abandons a large, still-streaming response early, but wasteful for
+  `Flux.next()`, which cancels its upstream the instant it has one element, before the response has
+  necessarily been observed as fully received. That unconditional cancel closed the connection (and
+  triggered a best-effort `KILL QUERY` for an already-finished query) even for small, effectively
+  fully-arrived responses — the exact access pattern `PointQueryBenchmark`/
+  `BoundedPoolConcurrencyBenchmark` and `ClickHouseHttpTransportConnectionReuseTest` use.
+  `FluxInputStreamBridge#close()` now first tries a short, bounded drain toward the upstream's
+  natural terminal signal (50ms / 64KB budget) before falling back to a hard cancel — see that
+  class's "Cancellation" Javadoc section for the full reasoning.
+
 ## [0.2.0] — 2026-08-20 (Phase 7: operational control & R2DBC correctness)
 
 See [ROADMAP.md's Phase 7 section](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
