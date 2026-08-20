@@ -10,7 +10,7 @@ and commit it to `main` first — the workflow looks for a `## ` heading contain
 the version it was given and fails the release if it can't find one. See
 [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release) for the full release checklist.
 
-## [Unreleased] — 0.2.0 (Phase 7: operational control & R2DBC correctness)
+## [0.2.0] — 2026-08-20 (Phase 7: operational control & R2DBC correctness)
 
 See [ROADMAP.md's Phase 7 section](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
 for the full scoping and acceptance criteria this release was built against.
@@ -65,6 +65,24 @@ for the full scoping and acceptance criteria this release was built against.
   discarding the result. `ClickHouseResult.decode` and `Connection.insertStreaming` skip their own
   per-chunk/per-row byte- and row-counting wiring the same way. Behavior is unchanged for any
   listener that doesn't override `isEnabled()` (the default stays `true`).
+- **`FluxInputStreamBridge` now opportunistically coalesces already-buffered network chunks** before
+  crossing from Reactor Netty's event loop to `RowDecodingScheduler`'s worker thread, instead of one
+  blocking hand-off per chunk. Found and root-caused via `StreamingScanBenchmark`: chunk count scales
+  linearly with row count, and each cross-thread hand-off has a real, measurable cost. Clear win at
+  10k/100k-row scans; the 1M-row tier's result is not yet a settled single number — see
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still) and
+  [README's Known limitations](README.md#known-limitations) for the honest, still-open measurement
+  question. `RowBinaryDecoder.RESPONSE_CHUNK_DEMAND` raised `4` → `16` alongside this fix, so more
+  chunks can be outstanding for the coalescing loop to work with.
+
+### Deferred
+
+- **Netty `ByteBuf` leak-detection test lane** (Phase 7 P0 item 6) — scoped in
+  [ROADMAP.md](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020) but not implemented
+  for this release. A partial pilot exists on the unmerged `feature/183-netty-leak-detection-lane`
+  branch (paranoid-level detector, covering cancellation and reset-mid-response — two of the six
+  target shapes), not finished or merged. Moved out of `0.2.0` scope explicitly rather than left
+  silently undone; tracked as follow-up work for a future release.
 
 ### Fixed
 

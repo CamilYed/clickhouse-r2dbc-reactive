@@ -853,11 +853,13 @@ gaps" discipline already applied to R2DBC semantics and the mid-stream-error que
 - **No memory/resource leaks.** Two concrete mechanisms, not just an aspiration: (a) Netty
   `ByteBuf` reference counting — enable Netty's leak detector at `paranoid` level
   (`-Dio.netty.leakDetection.level=paranoid`) in `transport-http`'s and `testkit`'s test JVM args,
-  so a forgotten `.release()` fails CI instead of showing up as a slow leak in production; (b)
-  bounded, deterministic cleanup on cancellation — already an explicit Phase 4 checklist item
-  (`FluxInputStreamBridge.close()`/`ControlledClickHouseServer`'s `activeConnectionCount()` are the
-  first two places this is already tested). The step-6 `WeakReference` finding above is a related
-  but different concern (a lifetime bug, not a leak) — noted there, not here.
+  so a forgotten `.release()` fails CI instead of showing up as a slow leak in production —
+  **deferred out of `0.2.0`**, see Phase 7 item 6's entry below for the current status and the
+  parked partial pilot; (b) bounded, deterministic cleanup on cancellation — already an explicit
+  Phase 4 checklist item (`FluxInputStreamBridge.close()`/`ControlledClickHouseServer`'s
+  `activeConnectionCount()` are the first two places this is already tested), shipped and not
+  affected by (a)'s deferral. The step-6 `WeakReference` finding above is a related but different
+  concern (a lifetime bug, not a leak) — noted there, not here.
 - **Logging.** Not started yet. When it starts: `slf4j-api` only (never a concrete binding) as a
   dependency of `core`/`transport-http`/`connector`, so we never force a logging backend on a
   consumer — same reasoning as R2DBC drivers universally do this. Log at query lifecycle
@@ -1134,12 +1136,17 @@ matter more here because this phase is concurrency- and resource-lifecycle-heavy
    this first pass: predictable ordering, simple error semantics, no surprise concurrency increase.
    Batched/coalesced multi-row `INSERT` SQL is explicitly deferred — a large insert should keep using
    `insertStreaming` (already the documented fast path), not wait on this.
-6. **Netty leak-detection test lane.** A dedicated test task/lane run with an aggressive Netty leak
-   detector, specifically covering cancellation, disconnect mid-response, decoder failure, timeout,
-   retry, and downstream cancellation after a few records — the shapes most likely to strand a
-   `ByteBuf`. Already named as important in [Non-functional
-   requirements](#non-functional-requirements-logging-metrics-leaks); this is where it actually gets
-   built.
+6. **Netty leak-detection test lane — deferred out of `0.2.0`.** A dedicated test task/lane run with
+   an aggressive Netty leak detector, specifically covering cancellation, disconnect mid-response,
+   decoder failure, timeout, retry, and downstream cancellation after a few records — the shapes most
+   likely to strand a `ByteBuf`. Already named as important in [Non-functional
+   requirements](#non-functional-requirements-logging-metrics-leaks); this is where it was meant to
+   get built. Not implemented for `0.2.0`: a partial pilot exists on the unmerged
+   `feature/183-netty-leak-detection-lane` branch (paranoid-level detector, covering only
+   cancellation and reset-mid-response — two of the six target shapes above), left unfinished rather
+   than rushed in. Explicitly moved to a future release; see
+   [CHANGELOG.md](CHANGELOG.md#020--2026-08-20-phase-7-operational-control--r2dbc-correctness)'s
+   `0.2.0` Deferred section.
 7. **An R2DBC compatibility/TestKit lane**, using official R2DBC test tooling where it applies, with
    ClickHouse's intentional non-support explicitly documented rather than silently skipped:
    transactions, savepoints, generated keys (where they don't make sense for this model), batch
@@ -1257,14 +1264,15 @@ block on earlier ones except where noted):
       PR 1, the shared consumption guard.
 - [x] Typed `Row.get` has controlled, tested conversions for the P0 type matrix — PR 2.
 - [x] `Statement.add()` works correctly (sequential, one `Result` per binding set) — PR 3.
-- [ ] Cancellation/timeout/error paths leave no `ByteBuf` leaks (leak-detector lane passes) — **item
-      6 was never actually implemented.** Checked directly, not assumed: no
-      `-Dio.netty.leakDetection.level=paranoid` JVM arg exists anywhere in the build (`grep` across
-      every `build.gradle.kts` finds nothing), and no PR in the [PR sequence](#pr-sequence) table
-      above scoped it — the table jumps from item 5 (PR 4) to item 11 (PR 6) with no item-6 row.
-      This box cannot honestly be checked yet; either scope a PR 9b for it before cutting `0.2.0`,
-      or explicitly move it to a documented follow-up and re-word this line accordingly — but not
-      silently claim done.
+- [ ] ~~Cancellation/timeout/error paths leave no `ByteBuf` leaks (leak-detector lane passes)~~ —
+      **decided: deferred out of `0.2.0`, not silently dropped.** Item 6 was never actually
+      implemented (no `-Dio.netty.leakDetection.level=paranoid` JVM arg exists anywhere in the
+      build; no PR in the [PR sequence](#pr-sequence) table above scoped it). A partial pilot exists
+      on the unmerged `feature/183-netty-leak-detection-lane` branch (covers 2 of the 6 target
+      shapes), left unfinished. This box is intentionally left unchecked for `0.2.0` — see item 6's
+      own entry above and
+      [CHANGELOG.md](CHANGELOG.md#020--2026-08-20-phase-7-operational-control--r2dbc-correctness)'s
+      Deferred section — rather than blocking the release on finishing it now.
 - [x] A test actively protects the Netty event loop from a blocking decode call — PR 6, the
       driver-owned `RowDecodingScheduler` plus its ownership/threading tests.
 - [x] It's written down which R2DBC compatibility cases are supported vs. deliberately unsupported —
@@ -1272,10 +1280,14 @@ block on earlier ones except where noted):
 - [x] README documents the outer R2DBC pool and inner transport pool as one coherent story —
       re-verified after PR 5; the "no R2DBC option" gap the section used to call out is closed.
 - [ ] The release has a changelog entry, a Git tag, and a GitHub Release pointing at the same commit
-      as the Maven Central artifact — PR 9 adds `CHANGELOG.md` and wires tag/Release creation into
-      `release.yml`; this box checks once an actual `0.2.0` release runs through it end to end.
-- [ ] A benchmark baseline is recorded (docs/PERFORMANCE.md) but is not a flaky PR gate — recorded
-      for `0.1.0` already; re-confirm nothing in Phase 7 regressed it before cutting `0.2.0`.
+      as the Maven Central artifact — `CHANGELOG.md`'s `[0.2.0]` section is now finalized and dated
+      on `main`; the `workflow_dispatch` run against `release.yml` (tag + GitHub Release + Maven
+      Central publish) hasn't happened yet. This box checks once that run completes end to end.
+- [x] A benchmark baseline is recorded (docs/PERFORMANCE.md) — re-confirmed for Phase 7: full-scan
+      regression found, root-caused, and mostly addressed (chunk coalescing); 10k/100k results are
+      solid, 1M rows is an open, honestly-documented measurement question rather than a blocker (see
+      [docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still)) — not a flaky PR
+      gate either way.
 
 ## Working with Claude / IntelliJ
 
