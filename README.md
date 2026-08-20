@@ -255,25 +255,24 @@ benchmark's description, and every open caveat.
 | Scenario | Result |
 | --- | --- |
 | Non-blocking, matched 8-connection pool, real throughput via the public R2DBC SPI | 🟢 **~4x more queries/sec** at every concurrency level tested (8/32/128) — the scenario this project is built for |
-| Full table scan (10k/100k/1M rows) | 🔴 tied at 10k, **19.5% higher latency at 100k, 56.9% higher at 1M** — see below, this is new and it is real |
+| Full table scan (10k/100k/1M rows) | 🟢 **9.8% lower latency at 10k, 11.5% lower at 100k**, 🟡 11.8% higher at 1M — see below, a real regression was found and mostly fixed |
 | Transport alone (bytes, no decode) | 🟢 43–45% lower latency at every tier, including 1M rows |
 | Decode alone, no network | 🟢 7–14% lower latency at every tier |
 | Single-row point lookup / `SELECT 1` floor | 🟡 essentially tied (within ±2%) |
 | Blocking `.block()`-per-query calling style, matched pool | 🔴 ~5–8% higher latency — don't call it this way, see below |
 
-**The full-scan regression is a genuine, newly-surfaced finding, not old news re-labeled.** Earlier
-numbers on this page used a decode shortcut (`RowBinaryDecoder.decodeRows`) that is documented as
-unsafe against a live network response — every benchmark in the suite now goes through the real
-production path (`RowBinaryDecoder.decode` + `RowDecodingScheduler`), and paying that real cost
-changes the picture: **transport wins big, decode wins on its own, but the combination — the actual
-shipped code path — loses, and loses more as results get larger.** That's not a contradiction to
-explain away; it's the most useful thing this rewrite found, and it's not yet root-caused (leading
-suspect: the transport→decode-scheduler hand-off itself). See
-[docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-transport-wins-decode-wins-the-combination-doesnt)
-for the isolation breakdown and [How to use this driver
+**The full-scan regression was real, root-caused, and mostly fixed.** Once every benchmark started
+going through the real production decode path (`RowBinaryDecoder.decode` + `RowDecodingScheduler`,
+replacing an earlier scheduler-free shortcut that never paid its real cost), a genuine regression
+showed up: transport won big on its own, decode won on its own, but the combination — the actual
+shipped code path — lost, worse as results grew. Root cause: `FluxInputStreamBridge` did one
+cross-thread `queue.take()` per network chunk, and chunk count scales linearly with row count.
+Fixed by opportunistically merging already-queued chunks before crossing threads — 100k rows now
+wins outright (was 19.5% slower), 1M rows is down to an 11.8% gap (was 56.9%), not fully closed
+yet. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#full-table-scan-found-and-mostly-fixed) for the
+full investigation and [How to use this driver
 well](docs/PERFORMANCE.md#how-to-use-this-driver-well) for what this means for choosing this driver
-today: a clear win for many-small-concurrent-queries workloads, not yet a win for large single
-scans.
+today.
 
 ## Known limitations
 

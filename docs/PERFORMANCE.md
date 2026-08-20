@@ -94,47 +94,65 @@ the protocol path changed; the more likely explanation is that earlier single-fo
 themselves noise (see the confidence warning at the top of this page). Treat the protocol floor as
 a wash until a multi-fork run says otherwise in either direction.
 
-### Full table scan: the gap grows, and now goes the other way
+### Full table scan: found, and mostly fixed
 
 <p align="center">
-  <img src="images/2026-08-20-streaming-scan.png" width="720" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2">
+  <img src="images/2026-08-20-streaming-scan.png" width="720" alt="StreamingScanBenchmark mean latency by row count, this driver vs client-v2, after the chunk-coalescing fix">
 </p>
+
+This section originally reported a growing, unexplained regression (tied at 10k, 19.5% slower at
+100k, 56.9% slower at 1M) once every benchmark started going through the real production decode
+path (`RowBinaryDecoder.decode` + `RowDecodingScheduler`, replacing an earlier scheduler-free
+shortcut that never paid its real off-event-loop cost). That regression is now root-caused and
+mostly fixed — see the isolation section below for the mechanism, and
+[`FluxInputStreamBridge`](../clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/FluxInputStreamBridge.java)'s
+"Chunk coalescing" Javadoc section for the fix itself. Current numbers:
 
 | Rows | this driver (mean) | client-v2 (mean) | verdict |
 | --- | --- | --- | --- |
-| 10,000 | 3576 µs | 3632 µs | this driver 1.5% faster |
-| 100,000 | 18,474 µs | 15,462 µs | **this driver 19.5% slower** |
-| 1,000,000 | 152,257 µs | 97,040 µs | **this driver 56.9% slower** |
+| 10,000 | 3353 µs | 3719 µs | **this driver 9.8% faster** |
+| 100,000 | 13,659 µs | 15,443 µs | **this driver 11.5% faster** |
+| 1,000,000 | 110,596 µs | 98,951 µs | this driver 11.8% slower |
 
-This is the most important, least flattering number on this page, and it is new: earlier runs of
-this benchmark used `RowBinaryDecoder.decodeRows`, a scheduler-free shortcut documented as unsafe
-against a live network source (it runs decode work on whatever thread is subscribing — the Netty
-event loop, in production). Every benchmark in this suite now goes through
-`RowBinaryDecoder.decode(source, RowDecodingScheduler)`, the actual path the shipped connector
-uses. The old numbers were measuring a driver that never paid its real scheduling cost. These do.
+100k flipped from an 19.5% loss to an 11.5% win. 1M went from a 56.9% loss to an 11.8% loss — most
+of the gap closed, not all of it. Single-fork, same caveat as everywhere on this page, but the
+direction and magnitude are consistent across all three tiers, which a single noisy fork wouldn't
+produce by chance.
 
-### Why: transport wins, decode wins, the combination doesn't
+### Why it happened, and why the fix mostly worked
 
 <p align="center">
-  <img src="images/2026-08-20-isolation-trio.png" width="720" alt="Isolation: transport only vs decode only vs the full production pipeline, this driver vs client-v2, at 1,000,000 rows">
+  <img src="images/2026-08-20-isolation-trio.png" width="720" alt="Isolation: transport only vs decode only vs the full production pipeline, this driver vs client-v2, at 1,000,000 rows, after the chunk-coalescing fix">
 </p>
 
 | Isolation (1M rows) | this driver (mean) | client-v2 (mean) | verdict |
 | --- | --- | --- | --- |
 | transport only (bytes, no decode) | 15,128 µs | 27,644 µs | **this driver 45.3% faster** |
 | decode only (in-memory bytes) | 55,323 µs | 64,382 µs | **this driver 14.1% faster** |
-| transport + decode (production path) | 152,257 µs | 97,040 µs | **this driver 56.9% slower** |
+| transport + decode (production path, after the fix) | 110,596 µs | 98,951 µs | this driver 11.8% slower |
 
-Read top to bottom: this driver's non-blocking transport is a genuine, large win on its own
-(43–45% lower latency at every tier, not just 1M). Its decode logic, measured with zero network
-involved, is also a genuine win (7–14% lower latency). Put them together the way production
-actually does — `RowDecodingScheduler` picking up each response off the event loop — and the
-combination is slower than client-v2's straight-line blocking decode, by a wide and growing
-margin. Two pieces that each win, combined into a pipeline that loses, is not something either
-isolated benchmark could have shown on its own — it points at the hand-off between transport and
-the decode scheduler (queueing, thread hop, or both) as the actual cost, not either piece in
-isolation. **Not yet root-caused with a profiler — this is the top open item on this page,** see
-[Open follow-ups](#open-follow-ups).
+Root cause, confirmed by instrumentation before writing any fix: `FluxInputStreamBridge` (the
+adapter between Reactor Netty's push-based chunk delivery and the decoder's blocking pull-based
+`InputStream` reads) did one `ArrayBlockingQueue.take()` — a real cross-thread synchronization
+point between Netty's event loop and `RowDecodingScheduler`'s worker thread — per network chunk.
+A temporary chunk counter added to `StreamingScanBenchmark` showed chunk count scaling almost
+perfectly linearly with row count (~285–293 rows per chunk at every tier: 10k rows → ~34 chunks,
+100k → ~342, 1M → ~3545), and the estimated per-chunk cost from the timing gap (~8–12µs) was
+consistent across tiers — exactly what a fixed per-handoff cost multiplied by a row-count-scaling
+handoff count would produce.
+
+**The fix**: `FluxInputStreamBridge.fillCurrent()` still does one blocking `take()` for the first
+available chunk, but then opportunistically drains any chunks *already sitting in the queue* with
+non-blocking `poll()` calls, merging them into one larger buffer (up to 64KB) before returning —
+trading handoffs away only when the producer is already ahead, never adding latency when it isn't.
+The backpressure credit model is untouched: every physical chunk dequeued still triggers exactly
+one demand-replenishing `request(1)`, just timed at dequeue instead of buffer-exhaustion.
+
+**Not fully closed at 1M rows (11.8% remaining).** Two most likely explanations, neither confirmed
+yet: the 64KB coalescing cap may still be too small relative to how far ahead a fast producer gets
+at this data rate, or the outstanding demand window itself (`RESPONSE_CHUNK_DEMAND = 4` in
+`RowBinaryDecoder`, unchanged by this fix) limits how many chunks can ever be sitting in the queue
+ready to merge. See [Open follow-ups](#open-follow-ups).
 
 ### Aggregation: a wash
 
@@ -227,15 +245,17 @@ excess demand queues inside Reactor Netty with nothing blocked. Don't size
 `transportMaxConnections` the way you'd size a JDBC pool ("one per expected concurrent request");
 size it for how many requests you actually want in flight against ClickHouse at once.
 
-**The production decode path has a real, currently-unexplained scheduling cost at large result
-sets.** `RowDecodingScheduler` moves decode work off the Netty event loop for correctness (decoding
-directly on the event loop would block it for every other in-flight request sharing that loop) —
-necessary, but the isolation benchmark above shows the combination costing more than the sum of its
-parts once results get large (100k+ rows). If your workload is dominated by large single-result
-scans rather than many small concurrent queries, this driver's current build may not be the faster
-choice yet — the concurrency scenario above is where it wins decisively; the large-single-scan
-scenario is where it currently does not. This is being actively investigated, not shipped as
-"fine."
+**The production decode path used to have an unexplained scheduling cost at large result sets —
+found and mostly fixed 2026-08-20.** `RowDecodingScheduler` moves decode work off the Netty event
+loop for correctness (decoding directly on the event loop would block it for every other in-flight
+request sharing that loop), but the hand-off itself — one cross-thread `queue.take()` per network
+chunk in `FluxInputStreamBridge` — turned out to be a real, measurable cost that scaled with result
+size. Fixed by opportunistically coalescing already-queued chunks before crossing threads (see the
+"Full table scan" results above and that class's own "Chunk coalescing" Javadoc section for the
+full mechanism). 100k rows now wins outright; 1M rows is down to an 11.8% gap from 56.9%, not fully
+closed yet. If your workload is dominated by very large single-result scans, expect a small residual
+gap at that scale today — the concurrency scenario above is still where this driver wins most
+decisively.
 
 **Don't call `RowBinaryDecoder.decodeRows` (the scheduler-free shortcut) against a live network
 source.** It's safe only when the source is already fully in memory (exactly what
@@ -266,9 +286,14 @@ connectivity) and is logged, not surfaced back to the caller.
 
 ## Open follow-ups
 
-- **Root-cause the transport+decode scheduler-hop cost** (the isolation-trio finding above) with
-  `-prof gc`/async-profiler before proposing a fix — the leading candidate is queueing/thread-hop
-  cost in `RowDecodingScheduler`'s hand-off, not yet confirmed.
+- **Close the remaining 11.8% gap at 1M rows.** The chunk-coalescing fix closed most of the
+  transport+decode scheduler-hop cost (see "Full table scan" above) but not all of it at the
+  largest tier. Two untested candidates: raising `MAX_COALESCE_BYTES` past 64KB, or raising
+  `RowBinaryDecoder.RESPONSE_CHUNK_DEMAND` (still 4) so more chunks can be queued ahead for
+  coalescing to work with — try one variable at a time, not both together.
+- **`-prof gc` on the fixed `StreamingScanBenchmark`** to confirm the coalescing fix didn't trade
+  handoff cost for allocation cost (each merge allocates one new buffer) — plausible given the
+  reduced-but-not-eliminated 1M gap, not yet checked.
 - **Re-run at 3 forks.** Every number on this page is single-fork; several (protocol floor,
   aggregation) are close enough that fork noise could plausibly change the verdict.
 - **Re-run `MixedWorkloadRapidRefreshCancelBenchmark` to completion** — this run has no `ourDriver`

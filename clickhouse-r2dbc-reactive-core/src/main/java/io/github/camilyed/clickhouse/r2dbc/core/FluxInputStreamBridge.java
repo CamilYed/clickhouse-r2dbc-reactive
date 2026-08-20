@@ -3,6 +3,8 @@ package io.github.camilyed.clickhouse.r2dbc.core;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import org.reactivestreams.Subscription;
@@ -47,6 +49,28 @@ import reactor.core.publisher.Flux;
  * type specifically so {@link #fillCurrent()}'s {@code switch} is exhaustive: adding a new signal
  * variant without handling it here would be a compile error, not a silent bug.
  *
+ * <h2>Chunk coalescing</h2>
+ *
+ * {@code queue.take()} is a real cross-thread synchronization point (Reactor Netty's event loop on
+ * one side, this class's dedicated worker thread on the other) — measured directly via
+ * docs/PERFORMANCE.md's {@code StreamingScanBenchmark} investigation: chunk count scales linearly
+ * with row count (~285-293 rows per network chunk, confirmed by instrumentation), and the estimated
+ * per-chunk cost (~8-12µs) accounts for the latency gap that grows with result size. {@link
+ * #fillCurrent()} therefore does one blocking {@code take()} for the first available signal, then
+ * opportunistically drains any <em>already-queued</em> {@code Data} signals with non-blocking
+ * {@code queue.poll()} calls, merging them into a single larger {@link #current} buffer (up to
+ * {@link #MAX_COALESCE_BYTES}) before returning. This never blocks waiting for more data to arrive
+ * — a {@code poll()} that finds the queue empty just means nothing was ready yet, so this trades
+ * away some handoffs only when the producer is already ahead, never at the cost of added latency
+ * when it isn't. A {@code Complete}/{@code Error} encountered mid-merge is stashed in {@link
+ * #stashedSignal} rather than discarded, so the next {@link #fillCurrent()} call picks it up
+ * without another {@code take()}. Each individual {@code Data} signal dequeued — whether via the
+ * initial {@code take()} or an opportunistic {@code poll()} — still triggers exactly one {@link
+ * QueueingSubscriber#requestOne()}, preserving the 1-for-1 credit balance described above. Only
+ * *when* that call happens moved — now at dequeue time, inside {@link #fillCurrent()}/{@link
+ * #coalesce(ByteBuffer)}, rather than at buffer-exhaustion time inside {@link #read(byte[], int,
+ * int)} — not the invariant itself.
+ *
  * <h2>Cancellation</h2>
  *
  * {@link #close()} disposes the subscriber, which cancels the upstream subscription — whether
@@ -55,11 +79,30 @@ import reactor.core.publisher.Flux;
  */
 public final class FluxInputStreamBridge extends InputStream {
 
+  /**
+   * Soft cap on how many bytes {@link #fillCurrent()} will opportunistically merge from
+   * already-queued chunks into one {@link #current} buffer — see this class's "Chunk coalescing"
+   * Javadoc section. Bounded so a producer that's built up a very deep backlog doesn't force one
+   * huge allocation; in practice, rarely binding since the queue itself never holds more than
+   * {@code demand + 1} items at once (see {@link #FluxInputStreamBridge}'s constructor). A
+   * self-documented placeholder like {@code RowBinaryDecoder.RESPONSE_CHUNK_DEMAND} — not yet tuned
+   * against a range of values, just chosen large enough not to bind in practice today.
+   */
+  private static final int MAX_COALESCE_BYTES = 64 * 1024;
+
   private final BlockingQueue<StreamSignal> queue;
   private final QueueingSubscriber subscriber;
 
   private ByteBuffer current = ByteBuffer.allocate(0);
   private boolean finished;
+
+  /**
+   * A {@code Complete}/{@code Error} signal found while {@link #fillCurrent()} was
+   * opportunistically draining additional already-queued {@code Data} chunks — stashed here instead
+   * of discarded, so the next {@link #fillCurrent()} call consumes it directly without another
+   * {@code queue.take()}.
+   */
+  private StreamSignal stashedSignal;
 
   /**
    * Reused across every {@link #read()} call rather than allocated fresh each time — this class is
@@ -111,33 +154,89 @@ public final class FluxInputStreamBridge extends InputStream {
     }
     final int toCopy = Math.min(length, current.remaining());
     current.get(destination, offset, toCopy);
-    if (!current.hasRemaining()) {
-      subscriber.requestOne();
-    }
     return toCopy;
   }
 
-  private boolean fillCurrent() throws IOException {
+  /**
+   * Fetches the next signal — from {@link #stashedSignal} if {@link #fillCurrent()} previously
+   * parked one there, otherwise by blocking on {@link #queue}. Every {@code Data} signal dequeued
+   * here triggers exactly one {@link QueueingSubscriber#requestOne()} — the one point in this class
+   * where a physical chunk is consumed and credit must be replenished; see this class's "Chunk
+   * coalescing" Javadoc section for why that moved here from {@link #read(byte[], int, int)}.
+   */
+  private StreamSignal takeNextSignal() throws IOException {
+    if (stashedSignal != null) {
+      final StreamSignal signal = stashedSignal;
+      stashedSignal = null;
+      return signal;
+    }
     try {
       final StreamSignal signal = queue.take();
-      return switch (signal) {
-        case StreamSignal.Data(ByteBuffer buffer) -> {
-          current = buffer;
-          yield true;
-        }
-        case StreamSignal.Complete ignored -> {
-          finished = true;
-          yield false;
-        }
-        case StreamSignal.Error(Throwable cause) -> {
-          finished = true;
-          throw new IOException("Upstream Flux signalled an error", cause);
-        }
-      };
+      if (signal instanceof StreamSignal.Data) {
+        subscriber.requestOne();
+      }
+      return signal;
     } catch (final InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IOException("Interrupted while waiting for data", e);
     }
+  }
+
+  private boolean fillCurrent() throws IOException {
+    final StreamSignal signal = takeNextSignal();
+    return switch (signal) {
+      case StreamSignal.Data(ByteBuffer buffer) -> {
+        current = coalesce(buffer);
+        yield true;
+      }
+      case StreamSignal.Complete ignored -> {
+        finished = true;
+        yield false;
+      }
+      case StreamSignal.Error(Throwable cause) -> {
+        finished = true;
+        throw new IOException("Upstream Flux signalled an error", cause);
+      }
+    };
+  }
+
+  /**
+   * Opportunistically merges any additional {@code Data} chunks already sitting in {@link #queue}
+   * onto {@code first} via non-blocking {@link BlockingQueue#poll()} calls, up to {@link
+   * #MAX_COALESCE_BYTES} total — see this class's "Chunk coalescing" Javadoc section. A {@code
+   * Complete}/{@code Error} found mid-drain is parked in {@link #stashedSignal} rather than
+   * discarded. Returns {@code first} unchanged (no extra allocation) when nothing more was
+   * immediately available — the common case once the producer isn't running ahead.
+   */
+  private ByteBuffer coalesce(final ByteBuffer first) {
+    List<ByteBuffer> extra = null;
+    int totalBytes = first.remaining();
+    while (totalBytes < MAX_COALESCE_BYTES) {
+      final StreamSignal next = queue.poll();
+      if (next == null) {
+        break;
+      }
+      if (!(next instanceof StreamSignal.Data(ByteBuffer buffer))) {
+        stashedSignal = next;
+        break;
+      }
+      subscriber.requestOne();
+      if (extra == null) {
+        extra = new ArrayList<>();
+      }
+      extra.add(buffer);
+      totalBytes += buffer.remaining();
+    }
+    if (extra == null) {
+      return first;
+    }
+    final ByteBuffer merged = ByteBuffer.allocate(totalBytes);
+    merged.put(first);
+    for (final ByteBuffer buffer : extra) {
+      merged.put(buffer);
+    }
+    merged.flip();
+    return merged;
   }
 
   @Override

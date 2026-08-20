@@ -12,8 +12,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
 
 class FluxInputStreamBridgeTest {
 
@@ -108,6 +110,50 @@ class FluxInputStreamBridgeTest {
     } catch (final IOException e) {
       throw new UncheckedIOException(e);
     }
+  }
+
+  @Test
+  void shouldMergeMultipleAlreadyBufferedChunksIntoASingleRead() throws IOException {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(
+            ByteBuffer.wrap("a".getBytes(StandardCharsets.UTF_8)),
+            ByteBuffer.wrap("b".getBytes(StandardCharsets.UTF_8)),
+            ByteBuffer.wrap("c".getBytes(StandardCharsets.UTF_8)),
+            ByteBuffer.wrap("d".getBytes(StandardCharsets.UTF_8)));
+    final byte[] destination = new byte[4];
+
+    // when
+    final int bytesReadInOneCall;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      bytesReadInOneCall = bridge.read(destination, 0, 4);
+    }
+
+    // then
+    assertThat(bytesReadInOneCall).isEqualTo(4);
+    assertThat(destination).isEqualTo("abcd".getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void shouldStillReadEachChunkSeparatelyWhenTheyArriveOneAtATime() throws IOException {
+    // given
+    final AtomicReference<FluxSink<ByteBuffer>> sinkRef = new AtomicReference<>();
+    final Flux<ByteBuffer> source = Flux.create(sinkRef::set);
+
+    // when
+    final int first;
+    final int second;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      sinkRef.get().next(ByteBuffer.wrap("a".getBytes(StandardCharsets.UTF_8)));
+      first = bridge.read();
+      sinkRef.get().next(ByteBuffer.wrap("b".getBytes(StandardCharsets.UTF_8)));
+      sinkRef.get().complete();
+      second = bridge.read();
+    }
+
+    // then
+    assertThat(first).isEqualTo('a');
+    assertThat(second).isEqualTo('b');
   }
 
   @Test
