@@ -97,20 +97,18 @@ smoothed over:
    not (yet) a reproduced architectural regression. Documented, not dismissed: **this needs a
    `-prof gc` pass and another multi-fork run before being called either "fixed" or "a real
    finding."**
-2. **`ConcurrencyBenchmark`'s `@Threads(8)` mean/p99 regression is now 3-fork confirmed as real
-   (not sampling noise) — but its cause is still not isolated.** See the dedicated section below
-   (2026-08-19): the same shape (worse from mean through ~p99.9, a crossover to a large win at the
-   extreme tail) reproduced with 3 forks × 3 warmup iterations. That rules out "it was one noisy
-   run," but it does **not** confirm the "unmatched pool" explanation either — `@Threads(8)` and
-   `BoundedPoolConcurrencyBenchmark` differ in two variables at once (blocking vs. non-blocking
-   calling style, and unmatched vs. matched pool size), so neither benchmark alone isolates which
-   one actually causes the regression. A true negative/control test — `@Threads(8)` blocking
-   callers with a **matched** pool on both sides — has not been built yet; see the proposal at the
-   end of that section.
+2. **`ConcurrencyBenchmark`'s `@Threads(8)` mean/p99 regression's cause is now isolated: blocking
+   calling style, not unmatched pools.** See the dedicated sections below (2026-08-19, 2026-08-20):
+   `MatchedPoolThreadsConcurrencyBenchmark` — the pool-matched control experiment this section used
+   to call "not yet built" — is now built and 3-fork confirmed. With pools matched on both sides,
+   the mean/percentile regression persists (reproducible ~7-9% gap across all 3 independent forks),
+   which rules out pool mismatch and points at the blocking-caller shape itself. **Not yet
+   root-caused** — needs a `-prof gc`/async-profiler pass before drawing further conclusions.
 
-What's left before this file is "done": a `-prof gc` pass on the 1M tail spike; the pool-matched
-`@Threads(8)` control experiment described below; widening `BoundedPoolConcurrencyBenchmark`'s
-matrix (more pool sizes, higher concurrency); actually running `AggregationBenchmark` (built
+What's left before this file is "done": a `-prof gc` pass on the 1M tail spike; a `-prof
+gc`/async-profiler pass on `MatchedPoolThreadsConcurrencyBenchmark` to root-cause the confirmed
+blocking-caller regression; widening `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes,
+higher concurrency); actually running `AggregationBenchmark` (built
 2026-08-19, see below); and the wide multi-type decode/INSERT benchmarks, still designed but not
 built.
 
@@ -123,7 +121,8 @@ built.
 > | Done | Open |
 > | --- | --- |
 > | H0 (`byte[1]` alloc) — fixed, confirmed | Isolate the still-unexplained `StreamingScanBenchmark` 1M full-pipeline regression (transport alone still wins by ~46% at 1M, so it's not explained by transport — likely decode, scheduler handoff, or combined GC pressure) |
-> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | A pool-matched `@Threads(8)` control experiment to isolate whether `ConcurrencyBenchmark`'s regression is caused by blocking callers or by unmatched pools (currently both variables differ at once — see 2026-08-19 section) |
+> | H1 (`LinkedHashMap` per row) — fixed via the `DecodedRow` redesign | `-prof gc`/async-profiler pass on `MatchedPoolThreadsConcurrencyBenchmark` to root-cause the confirmed mean/p99.9 regression under blocking calls with a matched pool (see 2026-08-20 section — pool mismatch ruled out, blocking-caller shape implicated but not yet root-caused) |
+> | `MatchedPoolThreadsConcurrencyBenchmark` — **3-fork confirmed (2026-08-20)**: pool-matched `@Threads(8)` control experiment isolates the cause of `ConcurrencyBenchmark`'s regression as the blocking-caller shape, not pool mismatch — reproducible ~7-9% mean/percentile gap across all 3 independent forks (a single-fork run had suggested the opposite and was corrected) | |
 > | `DecodedRow` redesign — **3-fork confirmed** (2026-08-14): `StreamingScanBenchmark` and `DecoderOnlyBenchmark`'s production path both beat `clientV2` at all three tiers | Full `./gradlew spotlessCheck clean build` on the whole session's work (only compilation + individual benchmarks/tests confirmed so far) |
 > | `ClickHouseHttpTransport(baseUrl, Authentication, maxConnections)` — added and **test-verified green** (2026-08-14) | Widen `BoundedPoolConcurrencyBenchmark`'s matrix (more pool sizes/concurrency levels) |
 > | `BoundedPoolConcurrencyBenchmark` — **3-fork confirmed, three independent runs** (2026-08-14 ×2, 2026-08-19): direction (this driver faster) holds every time, magnitude varies run to run (~1–10%) | Run `AggregationBenchmark` (built 2026-08-19, not yet compiled/run — no JDK 21 in the environment that wrote it) |
@@ -1427,6 +1426,55 @@ under blocking-style contention specifically) and would be worth a `-prof gc`/as
 before drawing conclusions, per the JMH tooling's own standing reminder about not reading numbers
 without asking why they are what they are. Not built in this session — a real decision for whoever
 picks this up next, not a small "while I'm in here" addition.
+
+**Built and run (2026-08-20): `MatchedPoolThreadsConcurrencyBenchmark`.** Exactly the control
+experiment proposed above — `@Threads(8)`, blocking calls on both sides, identical shape to
+`ConcurrencyBenchmark`, but both drivers now get the same `POOL_SIZE=8` connection budget
+`BoundedPoolConcurrencyBenchmark` uses.
+
+A single-fork run first appeared to resolve the question cleanly in this driver's favor: mean
+latency came out essentially tied (2220 vs 2224 µs/op), and the tail win widened (this driver ahead
+from p99.9 through max, up to ~5.6x faster at max). **That read did not survive a 3-fork
+confirmation and should not have been reported as settled from one fork** — the standing lesson
+this file has learned the hard way more than once now. The 3-fork run (`-Pjmh.forks=3
+-Pjmh.warmupIterations=3`) tells a different story:
+
+| | clientV2 | this driver |
+| --- | --- | --- |
+| mean | 2140 µs | 2308 µs (~7.8% slower) |
+| p50 | 1989 µs | 2122 µs |
+| p90 | 2908 µs | 3187 µs |
+| p99 | 4522 µs | 5128 µs |
+| p99.9 | 7782 µs | 8835 µs |
+| max | 56295 µs | 125436 µs |
+
+client-v2 is ahead at every percentile this time, mean through max. Per-fork breakdown (mean
+latency, computed from each fork's own raw histogram, not the pooled aggregate) shows this is
+consistent across all three independent forks, not one outlier fork dragging the average:
+
+| fork | clientV2 mean | this driver mean |
+| --- | --- | --- |
+| 0 | 2162 µs | 2355 µs |
+| 1 | 2131 µs | 2290 µs |
+| 2 | 2128 µs | 2279 µs |
+
+Every single fork shows the same ~7-9% gap in the same direction — this is a reproducible finding,
+not sampling noise. The tail (`max`) is a different story and genuinely noisy in both directions:
+fork 0's max (60424 µs) and fork 2's max (125436 µs, this driver) look like isolated GC/OS
+scheduling spikes rather than a stable trend — the same pattern already documented for
+`StreamingScanBenchmark`'s 1M-row tail spike elsewhere in this file, not (yet) attributed to either
+driver's architecture.
+
+**This resolves the open question from the section above, in the direction the doc itself flagged
+as "more interesting": pool mismatch was not the (sole) cause of `ConcurrencyBenchmark`'s
+regression.** With pools matched, the mean/percentile regression is still there, reproducibly, up
+to p99.9. That points at the blocking-caller shape itself — forcing this driver's non-blocking
+pipeline through one `.blockFirst()` call per platform thread erases whatever advantage the
+non-blocking model gives it (confirmed separately by `BoundedPoolConcurrencyBenchmark`'s clean win
+under the same pool size, driven non-blocking) and adds a small but consistent cost on top,
+plausibly from Reactor's own subscribe/schedule overhead paid per blocking call with nothing to
+amortize it against. **Not yet root-caused** — per this section's own original wording, that needs
+a `-prof gc`/async-profiler pass before drawing further conclusions, not more raw latency numbers.
 
 ---
 
