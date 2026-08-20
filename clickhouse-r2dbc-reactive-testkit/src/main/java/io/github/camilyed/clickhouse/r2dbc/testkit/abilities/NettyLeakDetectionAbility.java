@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.testkit.abilities;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector;
+import io.netty.buffer.Unpooled;
 
 /**
  * Test DSL: asserts no Netty {@code ByteBuf} (or other pooled/reference-counted resource) leaked
@@ -26,15 +27,19 @@ public interface NettyLeakDetectionAbility {
   }
 
   /**
-   * Best-effort: a leak is only reported once the tracked object becomes unreachable and is garbage
-   * collected, and {@link System#gc()} only requests a collection, never guarantees one - so this
-   * can under-detect (a real leak that just hasn't been GC'd yet slips through) but will never
-   * over-report (nothing is invented that didn't actually happen). Good enough to catch a genuinely
-   * forgotten {@code .release()} in CI over many runs, not a hard real-time guarantee.
+   * Best-effort: a leak is only reported once the tracked object becomes unreachable, is garbage
+   * collected, and Netty drains its leak-tracking {@code ReferenceQueue} - which only happens as a
+   * side effect of tracking the <em>next</em> resource, not automatically in the background - so
+   * each attempt here also allocates and releases a throwaway buffer to force that drain. Even so,
+   * {@link System#gc()} only requests a collection, never guarantees one, so this can under-detect
+   * (a real leak that just hasn't been GC'd yet slips through) but will never over-report (nothing
+   * is invented that didn't actually happen). Good enough to catch a genuinely forgotten {@code
+   * .release()} in CI over many runs, not a hard real-time guarantee.
    */
   default void assertNoByteBufLeaksWereDetected() {
     for (int attempt = 0; attempt < 5; attempt++) {
       System.gc();
+      Unpooled.buffer(16).release();
     }
     assertThat(LeakRecordingResourceLeakDetector.recordedLeaks())
         .describedAs("Netty resource leaks recorded during this test")

@@ -15,6 +15,14 @@ import org.junit.jupiter.api.Test;
  * silently - a harness nobody has seen fail is not proven to work. Run with {@code
  * -Dio.netty.leakDetection.level=paranoid} (see this module's {@code build.gradle.kts}), same as
  * every other test relying on {@link NettyLeakDetectionAbility}.
+ *
+ * <p>Polling for a leak report is not just "call {@code System.gc()} and check" - Netty only drains
+ * and reports its leak-tracking {@code ReferenceQueue} as a side effect of tracking the
+ * <em>next</em> resource, not automatically in the background the moment the GC actually collects
+ * an abandoned buffer. Every poll attempt here therefore also allocates and releases a fresh
+ * throwaway buffer to force that drain to happen - without it, this test passed by coincidence on a
+ * machine where something else nearby happened to allocate a tracked buffer during the polling
+ * window (confirmed: green locally, red on a quieter CI runner with nothing else running).
  */
 class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
 
@@ -24,15 +32,8 @@ class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
     thereAreNoRecordedByteBufLeaksYet();
     allocateAndForgetToRelease();
 
-    // when / then - leaks are only reported once the tracked object is unreachable and collected,
-    // which System.gc() only requests, never guarantees, so this polls rather than asserting once
-    await()
-        .atMost(Duration.ofSeconds(10))
-        .untilAsserted(
-            () -> {
-              System.gc();
-              assertThat(LeakRecordingResourceLeakDetector.recordedLeaks()).isNotEmpty();
-            });
+    // when / then
+    awaitUntilALeakIsRecorded();
   }
 
   @Test
@@ -52,16 +53,25 @@ class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
     // given
     thereAreNoRecordedByteBufLeaksYet();
     allocateAndForgetToRelease();
-    await()
-        .atMost(Duration.ofSeconds(10))
-        .untilAsserted(
-            () -> {
-              System.gc();
-              assertThat(LeakRecordingResourceLeakDetector.recordedLeaks()).isNotEmpty();
-            });
+    awaitUntilALeakIsRecorded();
 
     // when / then
     assertThatThrownBy(this::assertNoByteBufLeaksWereDetected).isInstanceOf(AssertionError.class);
+  }
+
+  private void awaitUntilALeakIsRecorded() {
+    await()
+        .atMost(Duration.ofSeconds(30))
+        .untilAsserted(
+            () -> {
+              System.gc();
+              nudgeTheLeakDetectorToDrainItsQueue();
+              assertThat(LeakRecordingResourceLeakDetector.recordedLeaks()).isNotEmpty();
+            });
+  }
+
+  private void nudgeTheLeakDetectorToDrainItsQueue() {
+    Unpooled.buffer(16).release();
   }
 
   private void allocateAndForgetToRelease() {
