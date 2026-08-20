@@ -6,6 +6,7 @@ import static org.awaitility.Awaitility.await;
 
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.NettyLeakDetectionAbility;
 import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.ToByteArrayAbility;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
@@ -25,7 +26,7 @@ import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
 import reactor.test.StepVerifier;
 
-class ClickHouseHttpTransportTest implements ToByteArrayAbility {
+class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetectionAbility {
 
   @Test
   void shouldReturnTheConfiguredResponseBody() {
@@ -168,6 +169,7 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   void shouldCloseTheConnectionWhenTheSubscriptionIsCancelled() {
     // given
     final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+    thereAreNoRecordedByteBufLeaksYet();
 
     // when
     try (final var server =
@@ -181,6 +183,9 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
           .atMost(Duration.ofSeconds(2))
           .untilAsserted(() -> assertThat(server.hasClosedConnection()).isTrue());
     }
+
+    // and - cancelling after the first chunk must not strand the ByteBuf it arrived in
+    assertNoByteBufLeaksWereDetected();
   }
 
   @Test
@@ -384,6 +389,7 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
   void shouldSignalAnErrorWhenTheConnectionIsResetMidResponse() {
     // given
     final byte[] firstChunk = "first-chunk".getBytes(StandardCharsets.UTF_8);
+    thereAreNoRecordedByteBufLeaksYet();
 
     // when
     try (final var server =
@@ -403,6 +409,9 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility {
       // then
       assertThat(thrown).isNotNull();
     }
+
+    // and - the chunk that did arrive before the reset must not be stranded
+    assertNoByteBufLeaksWereDetected();
   }
 
   @Test
