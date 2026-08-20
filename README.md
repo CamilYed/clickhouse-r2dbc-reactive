@@ -197,7 +197,6 @@ dependencies {
     implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:<version>")
     implementation("org.springframework.boot:spring-boot-starter-webflux")
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
-    implementation("io.r2dbc:r2dbc-pool")
 }
 ```
 
@@ -207,19 +206,17 @@ spring:
     url: r2dbc:clickhouse://localhost:8123
     username: default
     password: ""
-    pool:
-      enabled: true
-      initial-size: 5
-      min-idle: 5
-      max-size: 20
-      max-idle-time: 30m
-      validation-depth: local
 ```
 
-`spring.r2dbc.url`/`username`/`password`/`pool.*` are all standard Spring Boot R2DBC properties —
-nothing ClickHouse-specific about the property names, only about the `r2dbc:clickhouse://` scheme
-they configure. `spring.r2dbc.pool.*` is what builds and tunes the R2DBC-SPI-level pool described
-in [Connection pooling](#connection-pooling) below; see that section for what each property does.
+That's it — `spring.r2dbc.url`/`username`/`password` are standard Spring Boot R2DBC properties,
+nothing ClickHouse-specific about the names, only about the `r2dbc:clickhouse://` scheme they
+configure. No `io.r2dbc:r2dbc-pool` dependency and no `pool:` block above: this driver's own
+transport already pools physical connections underneath (see [Connection
+pooling](#connection-pooling) below), so there's nothing extra to add to get a working,
+production-usable setup. Add `io.r2dbc:r2dbc-pool` and `spring.r2dbc.pool.*` only if you've decided
+you specifically want R2DBC-SPI-level pooling on top of that — [Connection
+pooling](#connection-pooling) below explains what that second layer actually buys you and when it's
+worth reaching for.
 
 **One thing Spring Boot's own auto-configuration does *not* get right for this driver, on its
 own:** building a `DatabaseClient` bean fails outright with `IllegalStateException: Cannot
@@ -241,10 +238,11 @@ abstraction, so the demo's repository issues fully pre-formed SQL instead).
 ## Performance
 
 Every number below is from a real ClickHouse server, against `com.clickhouse:client-v2:0.9.8`, this
-driver's real production decode path (`RowDecodingScheduler`, not a benchmark-only shortcut). Latest
-run is single-fork (a first signal, not yet a 3-fork-confirmed number — see the confidence warning
-at the top of [docs/PERFORMANCE.md](docs/PERFORMANCE.md), which has full methodology, every
-benchmark's description, and every open caveat.
+driver's real production decode path (`RowDecodingScheduler`, not a benchmark-only shortcut). Most
+of this page is single-fork (a first signal, not yet multi-fork confirmed); `StreamingScanBenchmark`
+was specifically re-run at 3 forks, and that re-run surfaced a real measurement-stability problem at
+its largest tier — see the note right after the table below, and the confidence warning at the top
+of [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for full methodology and every open caveat.
 
 <p align="center">
   <img src="docs/images/2026-08-20-throughput.png" width="32%" alt="Real point-query throughput through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2">
@@ -255,26 +253,45 @@ benchmark's description, and every open caveat.
 | Scenario | Result |
 | --- | --- |
 | Non-blocking, matched 8-connection pool, real throughput via the public R2DBC SPI | 🟢 **~4x more queries/sec** at every concurrency level tested (8/32/128) — the scenario this project is built for |
-| Full table scan (10k/100k/1M rows) | 🟢 **9.8% lower latency at 10k, 11.5% lower at 100k**, 🟡 11.8% higher at 1M — see below, a real regression was found and mostly fixed |
+| Full table scan, 10k rows | 🟢 **~12% lower latency**, consistent across repeated 3-fork runs |
+| Full table scan, 100k rows | 🟢 **roughly 4–11% lower latency**, a real but noisier win |
+| Full table scan, 1M rows | 🟡 **unresolved — anywhere from tied to ~30% higher latency**, depending on the run; see below |
 | Transport alone (bytes, no decode) | 🟢 43–45% lower latency at every tier, including 1M rows |
 | Decode alone, no network | 🟢 7–14% lower latency at every tier |
 | Single-row point lookup / `SELECT 1` floor | 🟡 essentially tied (within ±2%) |
 | Blocking `.block()`-per-query calling style, matched pool | 🔴 ~5–8% higher latency — don't call it this way, see below |
 
-**The full-scan regression was real, root-caused, and mostly fixed.** Once every benchmark started
-going through the real production decode path (`RowBinaryDecoder.decode` + `RowDecodingScheduler`,
+**The full-scan regression was real and root-caused; the fix clearly helps at 10k/100k, and at 1M
+the measurement itself turned out not to be trustworthy yet.** Once every benchmark started going
+through the real production decode path (`RowBinaryDecoder.decode` + `RowDecodingScheduler`,
 replacing an earlier scheduler-free shortcut that never paid its real cost), a genuine regression
 showed up: transport won big on its own, decode won on its own, but the combination — the actual
 shipped code path — lost, worse as results grew. Root cause: `FluxInputStreamBridge` did one
 cross-thread `queue.take()` per network chunk, and chunk count scales linearly with row count.
-Fixed by opportunistically merging already-queued chunks before crossing threads — 100k rows now
-wins outright (was 19.5% slower), 1M rows is down to an 11.8% gap (was 56.9%), not fully closed
-yet. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#full-table-scan-found-and-mostly-fixed) for the
-full investigation and [How to use this driver
-well](docs/PERFORMANCE.md#how-to-use-this-driver-well) for what this means for choosing this driver
-today.
+Fixed by opportunistically merging already-queued chunks before crossing threads. A single-fork run
+first looked like a near-complete fix at 1M; a follow-up 3-fork run instead showed the same code and
+configuration producing results anywhere from tied with client-v2 to ~30% slower, run to run —
+ruled out as the cause: GC pauses (measured, negligible), and Testcontainers giving each JMH fork a
+different container (re-tested against a shared long-lived server, same instability). The likely
+remaining suspects — JIT/tiered-compilation timing or OS-level thread scheduling across separate JVM
+launches — need profiling tools this investigation didn't have available locally. See
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still) for the full breakdown
+and [How to use this driver well](docs/PERFORMANCE.md#how-to-use-this-driver-well) for what this
+means for choosing this driver today.
 
 ## Known limitations
+
+> [!NOTE]
+> **Full-table-scan performance at very large result sets (1M+ rows) is not settled — treat it as a
+> range, not a number.** Repeated 3-fork benchmark runs of the identical code and configuration
+> produced results anywhere from tied with `client-v2` to ~30% slower, run to run, at the 1M-row
+> tier specifically (10k/100k rows do not show this instability). GC pauses and per-fork
+> Testcontainers instances were tested and ruled out as the cause; the leading remaining suspects —
+> JVM JIT/compilation timing or OS-level thread scheduling differences across separate JVM launches
+> — need local profiling tools (`async-profiler`, JFR, `powermetrics`) this investigation didn't have
+> available. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still) for the
+> full breakdown. This is a benchmarking-methodology gap, not a known driver defect — but it means
+> the "1M rows" figures on this page should not be read as settled the way the 10k/100k ones are.
 
 > [!IMPORTANT]
 > **Cancelling a subscription stops the query on the ClickHouse server via a best-effort `KILL
@@ -422,6 +439,13 @@ whether you configure it or not.
    error or silently exceed the bound) in
    [`ClickHouseConnectionFactoryR2dbcPoolAgainstRealClickHouseTest`](clickhouse-r2dbc-reactive-connector/src/test/java/io/github/camilyed/clickhouse/r2dbc/connector/ClickHouseConnectionFactoryR2dbcPoolAgainstRealClickHouseTest.java)
    against a real server.
+
+   **tl;dr: most applications don't need to touch this layer at all.** It exists for
+   `Connection#validate(ValidationDepth)` and API-contract reasons, not because this driver leaves a
+   scarce resource unguarded without it — that's the transport-level pool described under "2." below,
+   and it's on by default with sensible settings and no configuration required. Skip ahead to that
+   part unless you specifically need `ConnectionPool`'s eviction/validation behavior. The rest of
+   this subsection is reference material for when you do.
 
    **How to configure it** — two ways, depending on whether Spring Boot is involved:
 

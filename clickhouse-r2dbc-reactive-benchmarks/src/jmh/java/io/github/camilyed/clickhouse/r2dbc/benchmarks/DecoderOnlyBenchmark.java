@@ -63,9 +63,10 @@ public class DecoderOnlyBenchmark {
    * Mirrors {@code RowBinaryDecoder.RESPONSE_CHUNK_DEMAND} (a private constant there) so {@link
    * #ourDriverWithoutMapCopy} feeds {@link FluxInputStreamBridge} identically to production — kept
    * in sync manually since there's no shared constant to reference across modules; revisit if that
-   * value ever changes.
+   * value ever changes. Currently {@code 16} — see that constant's Javadoc for the chunk-coalescing
+   * follow-up that raised it from {@code 4}.
    */
-  private static final int RESPONSE_CHUNK_DEMAND = 4;
+  private static final int RESPONSE_CHUNK_DEMAND = 16;
 
   /**
    * Row-count tiers — same shape as {@link StreamingScanBenchmark}'s, for a like-for-like split.

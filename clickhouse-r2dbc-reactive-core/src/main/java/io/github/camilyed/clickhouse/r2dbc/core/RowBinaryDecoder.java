@@ -45,16 +45,23 @@ public final class RowBinaryDecoder {
   /**
    * How many {@code ByteBuffer} chunks {@link FluxInputStreamBridge} is allowed to hold in flight
    * while the blocking reader decodes a response body (see that class's Javadoc for the exact
-   * "credit" backpressure mechanics this bounds). A small, deliberately <em>unbenchmarked</em>
-   * default — big enough that network reads and blocking row decoding can overlap a little instead
-   * of fully serializing (chunk arrives, decoder blocks reading it, only then is the next chunk
-   * requested), without buffering an unbounded number of chunks ahead of a decoder that's fallen
-   * behind. Tuning this against real throughput/latency numbers is explicitly out of scope until
-   * this project's performance phase starts (see README.md's "Performance and dependency impact"
-   * section) — treat this constant as a documented placeholder to revisit with measurements, not a
-   * benchmarked value.
+   * "credit" backpressure mechanics this bounds, and its "Chunk coalescing" section for why this
+   * value directly caps how much {@link FluxInputStreamBridge#coalesce}'s opportunistic {@code
+   * queue.poll()} drain can ever merge — it can never see more already-queued chunks than this
+   * demand allows in flight at once).
+   *
+   * <p>Raised from {@code 4} to {@code 16} per docs/PERFORMANCE.md's chunk-coalescing follow-up: a
+   * 3-fork {@code StreamingScanBenchmark} run at {@code demand=4} showed the coalescing fix's win
+   * was mostly noise (100k rows regressed back to ~4% slower, 1M rows to ~33% slower, once averaged
+   * across forks instead of trusting a single lucky one) — the working theory is that a 4-chunk
+   * window rarely has more than one chunk sitting in the queue by the time {@link
+   * FluxInputStreamBridge#coalesce} looks, so there was little for {@code poll()} to actually
+   * merge. A wider window gives coalescing more material per blocking {@code take()} at the cost of
+   * buffering more unread bytes ahead of a decoder that's fallen behind. Still a deliberately
+   * <em>unbenchmarked-in-isolation</em> value — one variable changed at a time per that follow-up's
+   * own methodology note; re-measure with a 3-fork run before trusting either direction further.
    */
-  private static final int RESPONSE_CHUNK_DEMAND = 4;
+  private static final int RESPONSE_CHUNK_DEMAND = 16;
 
   private RowBinaryDecoder() {}
 
