@@ -14,6 +14,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.clickhouse.ClickHouseContainer;
+import org.testcontainers.images.builder.Transferable;
 
 /**
  * A real ClickHouse instance for benchmark classes to share within one JVM fork, plus a plain
@@ -70,7 +71,46 @@ public final class BenchmarkEnvironment {
    */
   private static final String CLICK_HOUSE_IMAGE = "clickhouse/clickhouse-server:26.7.3.19";
 
-  private static final ClickHouseContainer CLICK_HOUSE = new ClickHouseContainer(CLICK_HOUSE_IMAGE);
+  /**
+   * Explicit Docker memory limit for the shared container. Bounded by whatever Docker Desktop
+   * itself has been given under Settings → Resources → Memory (~7837 MB observed 2026-08-20) — if
+   * that total is below what a benchmark needs, this constant alone can't manufacture more RAM;
+   * raise Docker Desktop's own allocation first.
+   */
+  private static final long CONTAINER_MEMORY_BYTES = 7_000L * 1024 * 1024;
+
+  /**
+   * Explicit {@code max_server_memory_usage} override, injected as a config file rather than left
+   * to ClickHouse's own auto-detection. A first attempt only raised {@link #CONTAINER_MEMORY_BYTES}
+   * (the Docker cgroup limit) and stopped there — the server-reported ceiling barely moved (~5.53
+   * GiB, then ~5.18 GiB on the next run) even after the cgroup limit was raised to ~6.84 GiB,
+   * meaning this image's auto-detection isn't reliably tracking the cgroup limit under Docker
+   * Desktop's Linux VM. Setting the server setting directly removes that guesswork. Left with
+   * headroom below {@link #CONTAINER_MEMORY_BYTES} for OS/page-cache/thread memory ClickHouse's own
+   * tracker doesn't fully account for.
+   */
+  private static final long SERVER_MEMORY_USAGE_BYTES = 6_000_000_000L;
+
+  private static final String MEMORY_CONFIG_XML =
+      "<clickhouse><max_server_memory_usage>"
+          + SERVER_MEMORY_USAGE_BYTES
+          + "</max_server_memory_usage></clickhouse>";
+
+  private static final int POOL_SIZE = 8;
+
+  private static final ClickHouseContainer CLICK_HOUSE =
+      new ClickHouseContainer(CLICK_HOUSE_IMAGE)
+          .withCreateContainerCmdModifier(
+              cmd ->
+                  cmd.getHostConfig()
+                      // memorySwap == memory disables swap entirely - a benchmark run that starts
+                      // swapping produces meaningless timing, so fail with a clear OOM instead of a
+                      // silently-thrashing container.
+                      .withMemory(CONTAINER_MEMORY_BYTES)
+                      .withMemorySwap(CONTAINER_MEMORY_BYTES))
+          .withCopyToContainer(
+              Transferable.of(MEMORY_CONFIG_XML),
+              "/etc/clickhouse-server/config.d/benchmark-memory-limit.xml");
 
   private static final HttpClient ADMIN_HTTP_CLIENT = HttpClient.newHttpClient();
 

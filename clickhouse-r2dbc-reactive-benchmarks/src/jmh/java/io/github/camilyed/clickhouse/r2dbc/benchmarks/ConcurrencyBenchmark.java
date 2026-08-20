@@ -4,8 +4,10 @@ import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -67,6 +69,7 @@ public class ConcurrencyBenchmark {
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private RowDecodingScheduler decodingScheduler;
   private long[] ids;
   private final AtomicLong idCursor = new AtomicLong();
 
@@ -85,6 +88,7 @@ public class ConcurrencyBenchmark {
             BenchmarkEnvironment.httpUrl(),
             BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
+    decodingScheduler = RowDecodingScheduler.defaults();
     clientV2 =
         new Client.Builder()
             .addEndpoint(BenchmarkEnvironment.httpUrl())
@@ -94,18 +98,23 @@ public class ConcurrencyBenchmark {
             .build();
   }
 
-  /** Releases both clients' connection pools at the end of the trial. */
+  /** Releases both clients' connection pools and this driver's decode scheduler. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    decodingScheduler.dispose();
   }
 
   /**
    * This driver under {@code @Threads(8)}: each worker thread blocks on its own {@link
-   * RowBinaryDecoder#decodeRows} call — {@link ClickHouseHttpTransport} and its underlying Reactor
-   * Netty client are safe to share and call concurrently from multiple threads (no per-call mutable
-   * state; every {@link #ourDriver} invocation builds its own {@link Flux} from scratch), so no
-   * additional synchronization is introduced here beyond what {@link #nextId()} already provides.
+   * RowBinaryDecoder#decode} call — the real production decode path (off the Netty event loop, via
+   * the shared {@link #decodingScheduler}), not the scheduler-free {@link
+   * RowBinaryDecoder#decodeRows} test/benchmark shortcut. {@link ClickHouseHttpTransport} and its
+   * underlying Reactor Netty client are safe to share and call concurrently from multiple threads
+   * (no per-call mutable state; every {@link #ourDriver} invocation builds its own {@link Flux}
+   * from scratch), and {@link RowDecodingScheduler} is likewise safe for concurrent use by design,
+   * so no additional synchronization is introduced here beyond what {@link #nextId()} already
+   * provides.
    */
   @Benchmark
   @Threads(8)
@@ -114,7 +123,10 @@ public class ConcurrencyBenchmark {
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
-    final DecodedRow row = RowBinaryDecoder.decodeRows(body).blockFirst(Duration.ofSeconds(10));
+    final DecodedRow row =
+        RowBinaryDecoder.decode(body, decodingScheduler)
+            .flatMapMany(DecodedResult::rows)
+            .blockFirst(Duration.ofSeconds(10));
     blackhole.consume(row);
   }
 

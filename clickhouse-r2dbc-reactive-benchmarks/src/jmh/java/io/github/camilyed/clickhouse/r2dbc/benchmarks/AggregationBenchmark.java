@@ -4,7 +4,9 @@ import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -76,6 +78,7 @@ public class AggregationBenchmark {
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private RowDecodingScheduler decodingScheduler;
 
   /** Starts the shared container and seeds {@link PointQueryTable}. */
   @Setup(Level.Trial)
@@ -87,6 +90,7 @@ public class AggregationBenchmark {
             BenchmarkEnvironment.httpUrl(),
             BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
+    decodingScheduler = RowDecodingScheduler.defaults();
     clientV2 =
         new Client.Builder()
             .addEndpoint(BenchmarkEnvironment.httpUrl())
@@ -96,25 +100,26 @@ public class AggregationBenchmark {
             .build();
   }
 
-  /** Releases client-v2's connection pool at the end of the trial. */
+  /** Releases client-v2's connection pool and this driver's decode scheduler. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    decodingScheduler.dispose();
   }
 
   /**
-   * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decodeRows},
-   * draining and blackhole-consuming every decoded group row — the same "consume the whole row,
-   * don't assert per-field types" pattern {@link PointQueryBenchmark}/{@link
-   * StreamingScanBenchmark} already use for this driver's side, since {@code decodeRows} needs no
-   * per-column getter calls.
+   * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decode} — the real
+   * production decode path (off the Netty event loop, via {@link #decodingScheduler}), not the
+   * scheduler-free {@link RowBinaryDecoder#decodeRows} test/benchmark shortcut — draining and
+   * blackhole-consuming every decoded group row.
    */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(AGGREGATION_SQL)).asByteArray().map(ByteBuffer::wrap);
     final long rowCount =
-        RowBinaryDecoder.decodeRows(body)
+        RowBinaryDecoder.decode(body, decodingScheduler)
+            .flatMapMany(DecodedResult::rows)
             .doOnNext(blackhole::consume)
             .count()
             .block(Duration.ofSeconds(30));

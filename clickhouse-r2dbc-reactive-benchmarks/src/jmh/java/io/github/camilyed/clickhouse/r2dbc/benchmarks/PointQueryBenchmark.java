@@ -4,8 +4,10 @@ import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -63,6 +65,7 @@ public class PointQueryBenchmark {
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private RowDecodingScheduler decodingScheduler;
   private long[] ids;
   private final AtomicLong idCursor = new AtomicLong();
 
@@ -81,6 +84,7 @@ public class PointQueryBenchmark {
             BenchmarkEnvironment.httpUrl(),
             BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
+    decodingScheduler = RowDecodingScheduler.defaults();
     clientV2 =
         new Client.Builder()
             .addEndpoint(BenchmarkEnvironment.httpUrl())
@@ -90,15 +94,18 @@ public class PointQueryBenchmark {
             .build();
   }
 
-  /** Releases both clients' connection pools at the end of the trial. */
+  /** Releases both clients' connection pools and this driver's decode scheduler. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    decodingScheduler.dispose();
   }
 
   /**
-   * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decodeRows},
-   * parameterized via ClickHouse's {@code {id:UInt64}} mechanism.
+   * This driver: {@link ClickHouseHttpTransport#query} + {@link RowBinaryDecoder#decode} — the real
+   * production decode path (off {@link #ourTransport}'s Netty event loop), not the scheduler-free
+   * {@link RowBinaryDecoder#decodeRows} test/benchmark shortcut, since this benchmark's source is a
+   * live network response — parameterized via ClickHouse's {@code {id:UInt64}} mechanism.
    *
    * <p>Previously, the one known asymmetry with {@link #clientV2} was that this driver materialized
    * each row into a {@code Map<String, Object>} while client-v2 read typed values directly off its
@@ -114,7 +121,10 @@ public class PointQueryBenchmark {
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
-    final DecodedRow row = RowBinaryDecoder.decodeRows(body).blockFirst(Duration.ofSeconds(10));
+    final DecodedRow row =
+        RowBinaryDecoder.decode(body, decodingScheduler)
+            .flatMapMany(DecodedResult::rows)
+            .blockFirst(Duration.ofSeconds(10));
     blackhole.consume(row);
   }
 

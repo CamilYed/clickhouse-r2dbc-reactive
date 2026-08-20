@@ -4,8 +4,10 @@ import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
@@ -79,6 +81,7 @@ public class MatchedPoolThreadsConcurrencyBenchmark {
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private RowDecodingScheduler decodingScheduler;
   private long[] ids;
   private final AtomicLong idCursor = new AtomicLong();
 
@@ -99,6 +102,7 @@ public class MatchedPoolThreadsConcurrencyBenchmark {
             BenchmarkEnvironment.httpUrl(),
             Authentication.basic(BenchmarkEnvironment.username(), BenchmarkEnvironment.password()),
             POOL_SIZE);
+    decodingScheduler = RowDecodingScheduler.defaults();
     clientV2 =
         new Client.Builder()
             .addEndpoint(BenchmarkEnvironment.httpUrl())
@@ -110,16 +114,22 @@ public class MatchedPoolThreadsConcurrencyBenchmark {
             .build();
   }
 
-  /** Releases both clients' connection pools at the end of the trial. */
+  /** Releases both clients' connection pools and this driver's decode scheduler. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    decodingScheduler.dispose();
   }
 
   /**
    * This driver under {@code @Threads(8)} with a matched {@link #POOL_SIZE}-connection pool: each
-   * worker thread blocks on its own {@link RowBinaryDecoder#decodeRows} call, identical calling
-   * shape to {@link ConcurrencyBenchmark#ourDriver} — only the pool size changed.
+   * worker thread blocks on its own {@link RowBinaryDecoder#decode} call — the real production
+   * decode path (off the Netty event loop, via the shared {@link #decodingScheduler}), not the
+   * scheduler-free {@link RowBinaryDecoder#decodeRows} test/benchmark shortcut this class used
+   * before its own scheduler-fairness gap was found (see {@link ConcurrencyBenchmark}'s Javadoc for
+   * the same fix and why the previously "3-fork confirmed" numbers here need re-running) —
+   * otherwise identical calling shape to {@link ConcurrencyBenchmark#ourDriver}, only the pool size
+   * changed.
    */
   @Benchmark
   @Threads(8)
@@ -128,7 +138,10 @@ public class MatchedPoolThreadsConcurrencyBenchmark {
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
-    final DecodedRow row = RowBinaryDecoder.decodeRows(body).blockFirst(Duration.ofSeconds(10));
+    final DecodedRow row =
+        RowBinaryDecoder.decode(body, decodingScheduler)
+            .flatMapMany(DecodedResult::rows)
+            .blockFirst(Duration.ofSeconds(10));
     blackhole.consume(row);
   }
 

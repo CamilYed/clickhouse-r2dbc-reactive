@@ -3,8 +3,10 @@ package io.github.camilyed.clickhouse.r2dbc.benchmarks;
 import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
@@ -73,6 +75,7 @@ public class BoundedPoolConcurrencyBenchmark {
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private RowDecodingScheduler decodingScheduler;
   private long[] ids;
   private final AtomicLong idCursor = new AtomicLong();
 
@@ -92,6 +95,7 @@ public class BoundedPoolConcurrencyBenchmark {
             BenchmarkEnvironment.httpUrl(),
             Authentication.basic(BenchmarkEnvironment.username(), BenchmarkEnvironment.password()),
             POOL_SIZE);
+    decodingScheduler = RowDecodingScheduler.defaults();
     clientV2 =
         new Client.Builder()
             .addEndpoint(BenchmarkEnvironment.httpUrl())
@@ -103,10 +107,11 @@ public class BoundedPoolConcurrencyBenchmark {
             .build();
   }
 
-  /** Releases both clients' connection pools at the end of the trial. */
+  /** Releases both clients' connection pools and this driver's decode scheduler. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    decodingScheduler.dispose();
   }
 
   /**
@@ -126,12 +131,20 @@ public class BoundedPoolConcurrencyBenchmark {
     blackhole.consume(completed);
   }
 
+  /**
+   * Uses {@link RowBinaryDecoder#decode} — the real production decode path, off the Netty event
+   * loop via {@link #decodingScheduler} — rather than the scheduler-free {@link
+   * RowBinaryDecoder#decodeRows} shortcut. That distinction matters most exactly here: this method
+   * runs inside a non-blocking {@code Flux.flatMap} pipeline over live Netty responses, so skipping
+   * the scheduler hop would mean blocking decode work runs directly on the event-loop thread this
+   * benchmark's whole non-blocking premise depends on staying free.
+   */
   private Mono<DecodedRow> singlePointQuery() {
     final long id = nextId();
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decodeRows(body).next();
+    return RowBinaryDecoder.decode(body, decodingScheduler).flatMapMany(DecodedResult::rows).next();
   }
 
   /**

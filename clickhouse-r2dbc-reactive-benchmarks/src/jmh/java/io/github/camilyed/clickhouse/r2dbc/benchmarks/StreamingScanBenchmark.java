@@ -4,7 +4,9 @@ import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -76,6 +78,7 @@ public class StreamingScanBenchmark {
 
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
+  private RowDecodingScheduler decodingScheduler;
   private Histogram ourDriverTtfr;
   private Histogram clientV2Ttfr;
 
@@ -89,6 +92,7 @@ public class StreamingScanBenchmark {
             BenchmarkEnvironment.httpUrl(),
             BenchmarkEnvironment.username(),
             BenchmarkEnvironment.password());
+    decodingScheduler = RowDecodingScheduler.defaults();
     clientV2 =
         new Client.Builder()
             .addEndpoint(BenchmarkEnvironment.httpUrl())
@@ -100,27 +104,35 @@ public class StreamingScanBenchmark {
     clientV2Ttfr = new Histogram(1, TTFR_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
   }
 
-  /** Releases both clients' connection pools, logs each driver's time-to-first-row summary. */
+  /**
+   * Releases both clients' connection pools and this driver's decode scheduler, logs each driver's
+   * time-to-first-row summary.
+   */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    decodingScheduler.dispose();
     logTtfr("ourDriver", ourDriverTtfr);
     logTtfr("clientV2", clientV2Ttfr);
   }
 
   /**
-   * This driver: streams every row via {@link RowBinaryDecoder#decodeRows}, timing the gap between
-   * subscribe and the first emitted row into {@link #ourDriverTtfr}, then draining the rest of the
-   * stream (this method's own JMH-measured latency is effectively time-to-last-row).
+   * This driver: streams every row via {@link RowBinaryDecoder#decode} — the real production decode
+   * path (off the Netty event loop, via {@link #decodingScheduler}), not the scheduler-free {@link
+   * RowBinaryDecoder#decodeRows} test/benchmark shortcut — timing the gap between subscribe and the
+   * first emitted row into {@link #ourDriverTtfr}, then draining the rest of the stream (this
+   * method's own JMH-measured latency is effectively time-to-last-row).
    *
    * <p>The first-row check is a plain array-backed flag read-then-set, not an {@code AtomicLong}
-   * compare-and-swap — {@link RowBinaryDecoder#decodeRows} applies no {@code publishOn}/{@code
-   * subscribeOn}, so {@link reactor.core.publisher.Flux#generate} emits every row synchronously on
-   * this method's own calling thread; there is no cross-thread visibility to buy with a CAS. An
-   * earlier version of this method used {@code AtomicLong#compareAndSet} unconditionally on every
-   * row (not just the first) — a real per-row cost {@code clientV2} never paid, since its own
-   * first-row check is exactly the plain branch used here. Fixed so both methods pay the same
-   * per-row instrumentation cost: one field read, and {@code System.nanoTime()} exactly once.
+   * compare-and-swap. Unlike an earlier version of this benchmark (back when it called {@link
+   * RowBinaryDecoder#decodeRows}, which applies no {@code publishOn}/{@code subscribeOn} of its
+   * own), row emission now happens on {@link #decodingScheduler}'s worker thread, not this method's
+   * calling thread — but the plain field is still safe to read after {@code .block()} returns,
+   * since blocking on a {@link reactor.core.publisher.Mono}/{@link Flux}'s completion is itself a
+   * happens-before edge (the same guarantee any {@code java.util.concurrent} blocking wait gives),
+   * not because of same-thread execution. An {@code AtomicLong#compareAndSet} would still be
+   * unnecessary overhead here: nothing reads {@code firstRowNanos} concurrently with the write,
+   * only after the whole stream has completed.
    */
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
@@ -129,7 +141,8 @@ public class StreamingScanBenchmark {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(SELECT_ALL_SQL)).asByteArray().map(ByteBuffer::wrap);
     final long rowCount =
-        RowBinaryDecoder.decodeRows(body)
+        RowBinaryDecoder.decode(body, decodingScheduler)
+            .flatMapMany(DecodedResult::rows)
             .doOnNext(
                 row -> {
                   if (firstRowNanos[0] == -1L) {
