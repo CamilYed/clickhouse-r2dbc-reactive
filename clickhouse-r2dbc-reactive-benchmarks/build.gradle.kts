@@ -37,6 +37,20 @@ dependencies {
     compileOnly(libs.jspecify)
 
     runtimeOnly(libs.slf4j.simple)
+
+    // Silences (and actually fixes, not just hides) a macOS-only warning seen during benchmark runs:
+    // "Unable to load io.netty.resolver.dns.macos.MacOSDnsServerAddressStreamProvider ...
+    // UnsatisfiedLinkError". Reactor Netty's HttpClient uses Netty's async DNS resolver by default,
+    // which wants this native library on macOS; without it, resolver init falls back silently - a
+    // one-time cost, but a "trusted" benchmark run shouldn't carry a known native-library failure on
+    // only one implementation (client-v2 doesn't touch Netty's async resolver at all). See
+    // CLAUDE_REPRESENTATIVE_BENCHMARK_PLAN.md section 4: verify the resolved version before trusting
+    // a macOS run via `./gradlew :clickhouse-r2dbc-reactive-benchmarks:dependencyInsight
+    // --dependency netty-resolver-dns --configuration jmhRuntimeClasspath`. Classifier assumes Apple
+    // Silicon (osx-aarch_64); Intel Mac benchmark runs need osx-x86_64 instead - swap it locally if
+    // your build reports "no matching variant" for this artifact. No-op on Linux/CI: the artifact
+    // simply won't be usable there, but nothing depends on it being present off macOS.
+    runtimeOnly(variantOf(libs.netty.resolver.dns.native.macos) { classifier("osx-aarch_64") })
 }
 
 jmh {

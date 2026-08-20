@@ -34,6 +34,14 @@ assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 reactor-core = { module = "io.projectreactor:reactor-core", version.ref = "reactor" }
 reactor-test = { module = "io.projectreactor:reactor-test", version.ref = "reactor" }
 reactor-netty-http = { module = "io.projectreactor.netty:reactor-netty-http", version.ref = "reactor-netty" }
+# Deliberately no version.ref: reactor-netty-http already pulls in a matching io.netty:netty-bom
+# constraint transitively, and this optional native resolver artifact must resolve to exactly that
+# same Netty release or it can fail to load (UnsatisfiedLinkError) or, worse, silently mismatch.
+# See CLAUDE_REPRESENTATIVE_BENCHMARK_PLAN.md section 4 - verify the resolved version with
+# `./gradlew :clickhouse-r2dbc-reactive-benchmarks:dependencyInsight --dependency netty-resolver-dns
+# --configuration jmhRuntimeClasspath` before trusting a macOS benchmark run; add an explicit
+# version.ref here only if that verification shows this floats to something unexpected.
+netty-resolver-dns-native-macos = { module = "io.netty:netty-resolver-dns-native-macos" }
 
 r2dbc-spi = { module = "io.r2dbc:r2dbc-spi", version.ref = "r2dbc-spi" }
 r2dbc-pool = { module = "io.r2dbc:r2dbc-pool", version.ref = "r2dbc-pool" }
