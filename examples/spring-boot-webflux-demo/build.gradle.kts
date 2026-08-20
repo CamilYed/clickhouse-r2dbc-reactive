@@ -45,7 +45,7 @@ dependencies {
     // works end to end". The whole-driver black-box proof for local changes still lives in
     // connector's own real-ClickHouse tests (see ROADMAP.md's module map). Bump this version
     // alongside every release.
-    runtimeOnly("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.1.0")
+    runtimeOnly("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
         exclude(group = "org.junit.vintage", module = "junit-vintage-engine")

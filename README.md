@@ -76,7 +76,7 @@ a driver where those properties are explicit, tested, and owned by a single, wel
 
 ## Status
 
-Functional, `0.1.0` published to Maven Central. The full R2DBC SPI surface exists and is exercised
+Functional, `0.2.0` published to Maven Central. The full R2DBC SPI surface exists and is exercised
 against a real ClickHouse server (Testcontainers): connection lifecycle,
 `SELECT`/`INSERT`/parameterized statements, batches, row/column metadata, `getRowsUpdated()`, and
 R2DBC exception mapping for ClickHouse server errors. **The driver has not been run against a
@@ -95,7 +95,7 @@ to depend on today", kept up to date as things are found and fixed — treat thi
 of it, not the other way around.
 
 Since `0.1.0`, [ROADMAP.md's Phase 7](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
-(`0.2.0`, in progress) has added configurable transport pool options, a real statement-timeout
+(`0.2.0`, published) has added configurable transport pool options, a real statement-timeout
 implementation, correct multi-`Result` `Statement.add()` batching, a driver observability SPI, and
 an R2DBC SPI Technology Compatibility Kit lane run against a real server (see
 [Connection pooling](#connection-pooling) and [docs/R2DBC_COMPATIBILITY.md](docs/R2DBC_COMPATIBILITY.md)
@@ -112,7 +112,7 @@ version.
 
 ```kotlin
 dependencies {
-    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.1.0")
+    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0")
 }
 ```
 
@@ -131,7 +131,7 @@ cd clickhouse-r2dbc-reactive
 ```
 
 then depend on it with `mavenLocal()` in your `repositories { }` block and the version from
-`gradle.properties`/`-PreleaseVersion` (defaults to `0.1.0-SNAPSHOT`).
+`gradle.properties`/`-PreleaseVersion` (defaults to `0.2.1-SNAPSHOT`).
 
 ## Usage
 
@@ -680,7 +680,7 @@ lists what shipped in each release.
 `0.1.0` (execution-path analysis, transport spike, the full first R2DBC connector surface, Maven
 Central publication) and [Phase 7/`0.2.0`](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
 (configurable transport pool, statement timeout, correct `Statement.add()` batching, an
-observability SPI, the R2DBC compatibility lane) are both done or in their final PR. What's next:
+observability SPI, the R2DBC compatibility lane) are both done and published. What's next:
 
 - Native TCP transport / HTTP multiplexing, evaluated as a separate track, not assumed to be faster
   without a profiler-identified bottleneck forcing it (see
