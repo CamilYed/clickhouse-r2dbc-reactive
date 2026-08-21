@@ -1,9 +1,17 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -62,6 +70,34 @@ public record ClickHouseQuery(
    * This query with {@code boundValues} encoded into ClickHouse's own {@code param_<name>} wire
    * representation and attached as {@link #parameters()}. A {@code null} value encodes to
    * ClickHouse's own null marker, {@code \N}.
+   *
+   * <p><b>Type-specific encoding, beyond the {@code String}/{@code null} cases above:</b>
+   *
+   * <ul>
+   *   <li>{@link java.time.LocalDate}, {@link UUID}, {@link java.math.BigDecimal}, {@link Boolean},
+   *       and any {@code enum} constant already round-trip correctly through Java's own {@code
+   *       toString()} — {@code LocalDate} matches ClickHouse's {@code Date} literal format
+   *       (ISO-8601, {@code yyyy-MM-dd}) exactly, and ClickHouse's {@code Bool} type explicitly
+   *       accepts the lowercase {@code true}/{@code false} text {@code Boolean#toString()} produces
+   *       (verified against ClickHouse's own Bool-type documentation, not assumed) — so no
+   *       special-casing is needed for them.
+   *   <li>{@link LocalDateTime}, {@link Instant}, {@link OffsetDateTime}, and {@link ZonedDateTime}
+   *       are formatted as {@code yyyy-MM-dd HH:mm:ss} — a space, not Java's {@code toString()}
+   *       {@code T} separator, since ClickHouse's own "Queries with Parameters" documentation gives
+   *       {@code 2024-01-15 10:30:15} as the {@code DateTime} literal form. {@code Instant}/{@code
+   *       OffsetDateTime}/{@code ZonedDateTime} are normalized to UTC first ({@code
+   *       withZoneSameInstant}/{@code toInstant}), since a {@code DateTime} parameter carries no
+   *       timezone of its own on the wire. Sub-second precision is deliberately truncated to whole
+   *       seconds — this always parses cleanly against a plain {@code DateTime} column; a caller
+   *       binding against a {@code DateTime64} column that needs fractional-second precision should
+   *       bind an already-formatted {@code String} instead, since this driver has no way to know a
+   *       placeholder's declared ClickHouse type from the Java value alone.
+   *   <li>{@link List} is encoded as a ClickHouse {@code Array} literal, {@code [e1,e2,...]} —
+   *       {@code String} elements are single-quoted and escaped (backslash/quote/tab/newline/CR);
+   *       every other element type is encoded the same way a top-level scalar of that type would
+   *       be. Nested {@code List}s (arrays of arrays) are not yet supported and fail fast with
+   *       {@link UnsupportedOperationException} rather than silently producing a wrong literal.
+   * </ul>
    */
   public ClickHouseQuery withParameters(final Map<String, Object> boundValues) {
     final Map<String, String> encoded = new LinkedHashMap<>();
@@ -81,6 +117,9 @@ public record ClickHouseQuery(
     return new ClickHouseQuery(sql, queryId, parameters, Map.copyOf(newSettings));
   }
 
+  private static final DateTimeFormatter CLICKHOUSE_DATE_TIME_FORMAT =
+      DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT);
+
   // value is genuinely nullable here - bindNull(...) stores a null entry in boundValues, and this
   // method's job is precisely to turn that into ClickHouse's own null marker below.
   private static String encodeParameterValue(final @Nullable Object value) {
@@ -89,6 +128,23 @@ public record ClickHouseQuery(
     }
     if (value instanceof String string) {
       return escapeForClickHouseParam(string);
+    }
+    if (value instanceof LocalDateTime localDateTime) {
+      return CLICKHOUSE_DATE_TIME_FORMAT.format(localDateTime);
+    }
+    if (value instanceof Instant instant) {
+      return CLICKHOUSE_DATE_TIME_FORMAT.format(LocalDateTime.ofInstant(instant, ZoneOffset.UTC));
+    }
+    if (value instanceof OffsetDateTime offsetDateTime) {
+      return CLICKHOUSE_DATE_TIME_FORMAT.format(
+          offsetDateTime.withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime());
+    }
+    if (value instanceof ZonedDateTime zonedDateTime) {
+      return CLICKHOUSE_DATE_TIME_FORMAT.format(
+          zonedDateTime.withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime());
+    }
+    if (value instanceof List<?> list) {
+      return encodeArrayParameterValue(list);
     }
     return value.toString();
   }
@@ -99,6 +155,44 @@ public record ClickHouseQuery(
       final char c = value.charAt(i);
       switch (c) {
         case '\\' -> escaped.append("\\\\");
+        case '\t' -> escaped.append("\\t");
+        case '\n' -> escaped.append("\\n");
+        case '\r' -> escaped.append("\\r");
+        default -> escaped.append(c);
+      }
+    }
+    return escaped.toString();
+  }
+
+  private static String encodeArrayParameterValue(final List<?> values) {
+    return values.stream()
+        .map(ClickHouseQuery::encodeArrayElement)
+        .collect(Collectors.joining(",", "[", "]"));
+  }
+
+  // element is genuinely nullable here - a caller may legitimately bind a List containing null
+  // entries (e.g. Array(Nullable(String))), same reasoning as encodeParameterValue above.
+  private static String encodeArrayElement(final @Nullable Object element) {
+    if (element == null) {
+      return "NULL";
+    }
+    if (element instanceof String string) {
+      return "'" + escapeForClickHouseArrayString(string) + "'";
+    }
+    if (element instanceof List<?>) {
+      throw new UnsupportedOperationException(
+          "Nested arrays are not yet supported as a bound parameter value");
+    }
+    return encodeParameterValue(element);
+  }
+
+  private static String escapeForClickHouseArrayString(final String value) {
+    final StringBuilder escaped = new StringBuilder(value.length());
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      switch (c) {
+        case '\\' -> escaped.append("\\\\");
+        case '\'' -> escaped.append("\\'");
         case '\t' -> escaped.append("\\t");
         case '\n' -> escaped.append("\\n");
         case '\r' -> escaped.append("\\r");
