@@ -1426,6 +1426,47 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    already emitted per Reactive Streams semantics (no retroactive un-emitting). Also worth confirming
    whether `wait_end_of_query=1` is already reachable through the generic settings API as a documented
    opt-in correctness-vs-streaming tradeoff.
+
+   **Done (2026-08-21) — confirmed against a real ClickHouse server, and the finding is worse than
+   the pre-run analysis predicted.** New `connector`-module
+   `MidStreamQueryFailureAgainstRealClickHouseTest`, two tests.
+   `shouldFailRatherThanSilentlyCompletingWhenTheFailureHappensAfterStreamingHasStarted` forces a
+   `DB::Exception` partway through a `system.numbers` scan via `throwIf(...)`, with `max_block_size`
+   set small enough that many blocks are flushed to the client before the failing one, under this
+   driver's default (non-`wait_end_of_query`) settings. The real run showed the response's trailing
+   error text gets misdecoded by client-v2's RowBinary reader as further `UInt64` values —
+   large/garbage numbers, structurally indistinguishable from genuine row data — handed to the
+   subscriber as if they were real rows, before decoding eventually fails on a later unparseable byte
+   and the stream terminates with an error. So the test only asserts what's actually guaranteed:
+   never silently completing as if the result were whole, and a fixed-size genuine prefix (the first
+   1000 rows) arriving intact and in order — not "every emitted row is genuine", which the first
+   version of this test wrongly assumed and a real run promptly disproved.
+   `shouldSurfaceACleanServerExceptionWhenWaitEndOfQueryIsEnabled` answers the `wait_end_of_query`
+   question directly: yes, already reachable today, zero code changes — `ClickHouseQuery.of(sql)
+   .withSettings(Map.of("wait_end_of_query", "1"))` is enough, since `withSettings` already passes
+   arbitrary `<name>=<value>` request parameters through untouched (see its Javadoc) — and this real
+   run confirmed it surfaces a clean `ServerException`, with none of the garbage-row risk above.
+
+   **Why this shape of corruption happens, verified against ClickHouse's own HTTP interface behavior:**
+   HTTP requires headers before body. Once `ClickHouseHttpTransport` has already received response
+   headers with no `X-ClickHouse-Exception-Code` (true here — the failure happens after streaming has
+   already started) and rows have started arriving, ClickHouse has no HTTP-legal way to retroactively
+   attach that header for a later failure. Per ClickHouse's own documented behavior
+   (github.com/ClickHouse/ClickHouse/pull/36884, and github.com/ClickHouse/ClickHouse/issues/16207/#33630
+   it closed), it instead appends the error as plain text directly into the response body, after
+   whatever rows were already written — independent of output format, so this corrupts the RowBinary
+   byte stream this transport is decoding rather than cleanly signalling failure at the transport
+   level. `ClickHouseHttpTransport.isError`/`receiveOrFail` only inspect the *initial* response
+   headers (see that class's own Javadoc on error handling), so this failure shape slips past that
+   check entirely and surfaces instead as whatever exception client-v2's RowBinary reader eventually
+   throws — but only after silently emitting the misdecoded garbage rows in between, which is the part
+   worth calling out loudly rather than burying in a test comment. Written up caller-facing in
+   README's [Known limitations](README.md#known-limitations) section, since this is a real
+   data-integrity risk a caller needs to know about, not just an internal implementation detail.
+   `wait_end_of_query=1` sidesteps the whole problem by having ClickHouse buffer the entire response
+   server-side (up to its own `http_response_buffer_size`) before sending anything, so a failure is
+   always known before headers go out — the second test's `500`-row failure point over a `10000`-row
+   `LIMIT` is deliberately tiny to stay well under that buffer regardless of its exact default.
 6. **Build a real-server parameter-binding type matrix beyond null/integer/string-escaping.**
    `ClickHouseQuery`'s current parameter encoding is `null → \N`, `String → escaped`, everything else
    → `value.toString()` — untested and likely wrong for `UUID`, `BigDecimal`, `LocalDate`/

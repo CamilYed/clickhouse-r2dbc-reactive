@@ -352,6 +352,24 @@ where this occasionally fails, that residual risk (a query that keeps running de
 cancelled) still exists, just far less often than before this was implemented — watch for the
 `WARN` log if that matters to you.
 
+> [!IMPORTANT]
+> **A query that fails *after* it has already started streaming rows back can hand you spurious
+> garbage rows mixed in with genuine ones, under this driver's default settings.** Confirmed against
+> a real server, not assumed: ClickHouse's HTTP interface can only attach its clean
+> `X-ClickHouse-Exception-Code` error header before any response bytes go out; once rows are already
+> streaming, a server-side failure gets appended as plain error text directly into the response body
+> instead — and that text gets misdecoded by the RowBinary reader as further column values
+> (indistinguishable in shape from real data) before decoding eventually fails and the `Flux`
+> terminates with an error. This driver guarantees the query never silently completes as if the
+> result were whole, and that genuine rows already emitted are never retroactively dropped or
+> reordered — but it cannot guarantee every emitted row is genuine. If your application cannot
+> tolerate that risk, set ClickHouse's own `wait_end_of_query=1` setting via
+> [`ClickHouseQuery.withSettings(Map.of("wait_end_of_query", "1"))`](clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ClickHouseQuery.java),
+> which trades incremental streaming for having ClickHouse buffer the whole response server-side and
+> only ever send a clean error. See
+> [`MidStreamQueryFailureAgainstRealClickHouseTest`](clickhouse-r2dbc-reactive-connector/src/test/java/io/github/camilyed/clickhouse/r2dbc/connector/MidStreamQueryFailureAgainstRealClickHouseTest.java)
+> for the regression tests proving both behaviors.
+
 > [!NOTE]
 > **Every query is automatically retried, but only for failures that happen before any bytes were
 > sent to the server.** A connection-level hiccup (connect refused, a momentary pool exhaustion) is
