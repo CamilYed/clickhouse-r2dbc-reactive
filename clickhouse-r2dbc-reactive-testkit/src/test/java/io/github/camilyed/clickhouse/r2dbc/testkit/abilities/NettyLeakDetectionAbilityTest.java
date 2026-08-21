@@ -7,6 +7,8 @@ import static org.awaitility.Awaitility.await;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.util.ResourceLeakDetector;
+import io.netty.util.ResourceLeakDetectorFactory;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
@@ -17,6 +19,30 @@ import org.junit.jupiter.api.Test;
  * every other test relying on {@link NettyLeakDetectionAbility}.
  */
 class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
+
+  /**
+   * TEMPORARY DIAGNOSTIC - not a real regression test, just printing/asserting the installation
+   * state directly so a build log answers "is the custom detector actually installed?" without
+   * guessing through GC/queue-drain timing. Remove once shouldDetectAnUnreleasedByteBufAsALeak
+   * passes reliably.
+   */
+  @Test
+  void diagnosticCustomDetectorInstallationState() {
+    System.out.println(
+        "DIAGNOSTIC io.netty.customResourceLeakDetector system property = "
+            + System.getProperty("io.netty.customResourceLeakDetector"));
+    System.out.println(
+        "DIAGNOSTIC io.netty.leakDetection.level system property = "
+            + System.getProperty("io.netty.leakDetection.level"));
+    System.out.println("DIAGNOSTIC ResourceLeakDetector.getLevel() = " + ResourceLeakDetector.getLevel());
+
+    final ResourceLeakDetector<Object> detector =
+        ResourceLeakDetectorFactory.instance().newResourceLeakDetector(Object.class);
+    System.out.println("DIAGNOSTIC newResourceLeakDetector(Object.class) returned class = "
+        + detector.getClass().getName());
+
+    assertThat(detector).isInstanceOf(LeakRecordingResourceLeakDetector.class);
+  }
 
   @Test
   void shouldDetectAnUnreleasedByteBufAsALeak() {
