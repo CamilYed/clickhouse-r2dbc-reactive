@@ -33,21 +33,25 @@ public interface NettyLeakDetectionAbility {
    * over-report (nothing is invented that didn't actually happen). Good enough to catch a genuinely
    * forgotten {@code .release()} in CI over many runs, not a hard real-time guarantee.
    *
-   * <p>Each attempt also allocates and immediately releases a throwaway {@code ByteBuf} after the
-   * {@code System.gc()} call - not just requesting a collection. Netty's {@code
+   * <p>Each attempt also allocates and immediately releases a throwaway <em>direct</em> {@code
+   * ByteBuf} after the {@code System.gc()} call - not just requesting a collection, and not a heap
+   * buffer. Two things have to both be true for this nudge to matter: Netty's {@code
    * ResourceLeakDetector} only drains its internal reference queue for already-GC'd-but-unreleased
    * trackers as a side effect of tracking a <em>new</em> allocation ({@code
-   * ResourceLeakDetector#track}, called from every {@code Unpooled}/{@code ByteBuf} allocation
-   * site) - it never does so spontaneously in the background. Without this nudge, a leaked buffer
-   * from earlier in the test could already be garbage-collected and sitting in that queue,
-   * unreported forever, simply because nothing in the test happened to allocate another tracked
-   * resource afterward - confirmed by {@code NettyLeakDetectionAbilityTest} actually failing to
-   * detect its own deliberately-leaked buffer before this nudge was added.
+   * ResourceLeakDetector#track}), never spontaneously in the background - and {@code
+   * Unpooled}'s heap buffers are never tracked at all ({@code UnpooledByteBufAllocator}'s heap path
+   * skips {@code toLeakAwareBuffer} entirely; only direct and composite buffers go through it), so
+   * the nudge has to allocate a direct buffer specifically or it wouldn't call {@code track()} in
+   * the first place and would drain nothing. Without this nudge, a leaked buffer from earlier in
+   * the test could already be garbage-collected and sitting in that queue, unreported forever,
+   * simply because nothing in the test happened to track another allocation afterward - confirmed
+   * by {@code NettyLeakDetectionAbilityTest} actually failing to detect its own deliberately-leaked
+   * buffer before this nudge (and the direct-vs-heap fix) was in place.
    */
   default void assertNoByteBufLeaksWereDetected() {
     for (int attempt = 0; attempt < 5; attempt++) {
       System.gc();
-      Unpooled.buffer(1).release();
+      Unpooled.directBuffer(1).release();
     }
     assertThat(LeakRecordingResourceLeakDetector.recordedLeaks())
         .describedAs("Netty resource leaks recorded during this test")
