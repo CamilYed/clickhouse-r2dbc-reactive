@@ -31,6 +31,11 @@ class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
         .untilAsserted(
             () -> {
               System.gc();
+              // Nudges Netty's ResourceLeakDetector into draining its reference queue - see
+              // NettyLeakDetectionAbility#assertNoByteBufLeaksWereDetected()'s Javadoc for why a
+              // fresh tracked allocation, not just System.gc(), is required to actually surface an
+              // already-collected leak.
+              Unpooled.buffer(1).release();
               assertThat(LeakRecordingResourceLeakDetector.recordedLeaks()).isNotEmpty();
             });
   }
@@ -57,6 +62,11 @@ class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
         .untilAsserted(
             () -> {
               System.gc();
+              // Nudges Netty's ResourceLeakDetector into draining its reference queue - see
+              // NettyLeakDetectionAbility#assertNoByteBufLeaksWereDetected()'s Javadoc for why a
+              // fresh tracked allocation, not just System.gc(), is required to actually surface an
+              // already-collected leak.
+              Unpooled.buffer(1).release();
               assertThat(LeakRecordingResourceLeakDetector.recordedLeaks()).isNotEmpty();
             });
 

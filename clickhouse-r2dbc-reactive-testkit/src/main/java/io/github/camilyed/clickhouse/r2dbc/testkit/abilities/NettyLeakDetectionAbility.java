@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.testkit.abilities;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector;
+import io.netty.buffer.Unpooled;
 
 /**
  * Test DSL: asserts no Netty {@code ByteBuf} (or other pooled/reference-counted resource) leaked
@@ -31,10 +32,22 @@ public interface NettyLeakDetectionAbility {
    * can under-detect (a real leak that just hasn't been GC'd yet slips through) but will never
    * over-report (nothing is invented that didn't actually happen). Good enough to catch a genuinely
    * forgotten {@code .release()} in CI over many runs, not a hard real-time guarantee.
+   *
+   * <p>Each attempt also allocates and immediately releases a throwaway {@code ByteBuf} after the
+   * {@code System.gc()} call - not just requesting a collection. Netty's {@code
+   * ResourceLeakDetector} only drains its internal reference queue for already-GC'd-but-unreleased
+   * trackers as a side effect of tracking a <em>new</em> allocation ({@code
+   * ResourceLeakDetector#track}, called from every {@code Unpooled}/{@code ByteBuf} allocation
+   * site) - it never does so spontaneously in the background. Without this nudge, a leaked buffer
+   * from earlier in the test could already be garbage-collected and sitting in that queue, unreported
+   * forever, simply because nothing in the test happened to allocate another tracked resource
+   * afterward - confirmed by {@code NettyLeakDetectionAbilityTest} actually failing to detect its
+   * own deliberately-leaked buffer before this nudge was added.
    */
   default void assertNoByteBufLeaksWereDetected() {
     for (int attempt = 0; attempt < 5; attempt++) {
       System.gc();
+      Unpooled.buffer(1).release();
     }
     assertThat(LeakRecordingResourceLeakDetector.recordedLeaks())
         .describedAs("Netty resource leaks recorded during this test")
