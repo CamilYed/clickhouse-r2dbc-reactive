@@ -61,7 +61,10 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * X-ClickHouse-Database} on every request once set, see {@link
    * io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions#database()}), {@code
    * connectTimeout} (default: none — see {@link ClickHouseHttpTransport}'s Javadoc for why this
-   * driver never imposes an implicit timeout), and {@link
+   * driver never imposes an implicit timeout), {@link
+   * ClickHouseConnectionFactoryProvider#RESPONSE_TIMEOUT} (default: none, same reasoning — see that
+   * option's Javadoc for how it relates to {@code connectTimeout}, {@code statementTimeout}, and
+   * {@link ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_TIMEOUT}), and {@link
    * ClickHouseConnectionFactoryProvider#SSL_ROOT_CERT} (default: none, meaning the JVM's default
    * trust store).
    *
@@ -115,6 +118,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
     final Duration connectTimeout =
         (Duration) options.getValue(ConnectionFactoryOptions.CONNECT_TIMEOUT);
+    final Duration responseTimeout =
+        durationOption(options, ClickHouseConnectionFactoryProvider.RESPONSE_TIMEOUT);
 
     final String sslRootCert =
         (String) options.getValue(ClickHouseConnectionFactoryProvider.SSL_ROOT_CERT);
@@ -151,6 +156,7 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
         TransportOptions.defaults()
             .withAuthentication(authentication)
             .withConnectTimeout(connectTimeout)
+            .withResponseTimeout(responseTimeout)
             .withTrustedCertificatePem(trustedCertificatePem)
             .withRetryPolicy(retryPolicy)
             .withMaxConnections(transportMaxConnections)
