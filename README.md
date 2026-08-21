@@ -549,6 +549,16 @@ whether you configure it or not.
    or you deliberately want more physical parallelism against ClickHouse itself (e.g. ClickHouse's
    own `max_concurrent_queries` server-side limit becomes the real ceiling before this pool would).
 
+   **Shutting it down.** `ClickHouseConnectionFactory.dispose()` releases both resources this
+   factory owns and shares across every `Connection` it produces: this transport-level connection
+   pool, and the dedicated worker pool `RowBinaryDecoder` runs client-v2's blocking calls on
+   (`RowDecodingScheduler`). Fire-and-forget and idempotent, matching `ConnectionProvider`'s own
+   `dispose()` contract; `isDisposed()` reports `true` only once both are actually torn down. Nothing
+   calls this automatically — a Spring Boot app wrapping the factory in `io.r2dbc.pool`'s
+   `ConnectionPool` still needs to dispose the underlying `ClickHouseConnectionFactory` itself
+   separately at shutdown (`ConnectionPool.dispose()` only tears down the pooled `Connection`
+   handles it manages, not the factory's own transport/scheduler underneath).
+
 **Why this is the point of the whole project, not an implementation detail:** client-v2's `Client`
 is blocking — serving *N* logical concurrent queries needs *N* platform threads each blocked
 waiting on a connection, one way or another. This driver's non-blocking pipeline lets many more

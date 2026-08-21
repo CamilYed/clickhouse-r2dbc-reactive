@@ -260,4 +260,33 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   public ConnectionFactoryMetadata getMetadata() {
     return ClickHouseConnectionFactoryMetadata.INSTANCE;
   }
+
+  /**
+   * Releases every resource this factory owns and shares across every {@link Connection} it has
+   * produced: the underlying {@link ClickHouseHttpTransport}'s Reactor Netty connection pool, and
+   * the dedicated {@link RowDecodingScheduler} worker pool. Both dispose fire-and-forget, matching
+   * the "returns immediately, releases asynchronously" contract each already documents on its own
+   * {@code dispose()}; idempotent, safe to call more than once.
+   *
+   * <p>Meant for when the factory itself is no longer needed (e.g. application shutdown) — a {@link
+   * Connection} already in flight when this is called may fail as the transport/scheduler it shares
+   * with every other {@link Connection} from this factory is torn down from under it.
+   */
+  public void dispose() {
+    decodingScheduler.dispose();
+    transport.dispose();
+  }
+
+  /**
+   * Whether {@link #dispose()} has already released every resource this factory owns — {@code true}
+   * only once both the {@link RowDecodingScheduler} and the {@link ClickHouseHttpTransport}'s
+   * connection pool report disposed. Unlike calling {@link ClickHouseHttpTransport#isDisposed()}
+   * directly, this is safe to read before the factory has ever produced a query result: {@link
+   * RowDecodingScheduler#isDisposed()} is never vacuously {@code true} the way an unused
+   * transport's connection pool is (see that method's Javadoc), so requiring both together means
+   * this only reports {@code true} once {@link #dispose()} has genuinely run.
+   */
+  public boolean isDisposed() {
+    return decodingScheduler.isDisposed() && transport.isDisposed();
+  }
 }

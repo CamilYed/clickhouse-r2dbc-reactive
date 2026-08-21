@@ -29,6 +29,10 @@ import reactor.util.retry.Retry;
 
 /**
  * Non-blocking HTTP transport for ClickHouse queries, built on Reactor Netty's {@link HttpClient}.
+ *
+ * <p>Owns a dedicated {@link ConnectionProvider} (never Reactor Netty's process-wide default) —
+ * call {@link #dispose()} or {@link #disposeLater()} once this instance is no longer needed to
+ * release its pooled connections; see those methods' Javadoc.
  */
 public final class ClickHouseHttpTransport {
 
@@ -58,6 +62,7 @@ public final class ClickHouseHttpTransport {
   private static final String CONNECTION_PROVIDER_NAME = "clickhouse-http-transport";
 
   private final HttpClient httpClient;
+  private final ConnectionProvider connectionProvider;
   private final Authentication authentication;
   private final RetryPolicy retryPolicy;
   private final @Nullable String database;
@@ -229,7 +234,8 @@ public final class ClickHouseHttpTransport {
       throw new IllegalArgumentException(
           "trustedCertificatePem can only be used with an https:// baseUrl, got: " + baseUrl);
     }
-    HttpClient client = HttpClient.create(buildConnectionProvider(options)).baseUrl(baseUrl);
+    final ConnectionProvider connectionProvider = buildConnectionProvider(options);
+    HttpClient client = HttpClient.create(connectionProvider).baseUrl(baseUrl);
     if (options.responseTimeout() != null) {
       client = client.responseTimeout(options.responseTimeout());
     }
@@ -251,9 +257,50 @@ public final class ClickHouseHttpTransport {
                                       new ByteArrayInputStream(trustedCertificatePem)))));
     }
     this.httpClient = client;
+    this.connectionProvider = connectionProvider;
     this.authentication = options.authentication();
     this.retryPolicy = options.retryPolicy();
     this.database = options.database();
+  }
+
+  /**
+   * Releases every pooled connection this transport's underlying Reactor Netty {@link
+   * ConnectionProvider} holds, and disposes the provider itself. Fire-and-forget — returns
+   * immediately; the underlying connections are released asynchronously. Idempotent — safe to call
+   * more than once. Use {@link #disposeLater()} instead if the caller needs to know once disposal
+   * has actually finished (e.g. before exiting the JVM).
+   *
+   * <p>Not called automatically by anything in this class — see {@code
+   * io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactory#dispose()}, which
+   * owns exactly one transport per factory and is responsible for disposing it once the factory
+   * itself is no longer needed.
+   */
+  public void dispose() {
+    connectionProvider.dispose();
+  }
+
+  /**
+   * Same as {@link #dispose()}, but returns a {@link Mono} that completes once every pooled
+   * connection has actually been released.
+   */
+  public Mono<Void> disposeLater() {
+    return connectionProvider.disposeLater();
+  }
+
+  /**
+   * Whether {@link #dispose()} (or a subscribed {@link #disposeLater()}) has already run.
+   *
+   * <p><b>Vacuously {@code true} on a transport that has never actually sent a request</b> —
+   * delegates directly to {@link ConnectionProvider#isDisposed()}, whose actual implementation
+   * (Reactor Netty's {@code PooledConnectionProvider}) is {@code channelPools.isEmpty() ||
+   * ...allMatch(Disposable::isDisposed)}: no per-remote-host pool exists at all until the first
+   * request is actually sent, and an empty collection vacuously satisfies {@code allMatch(...)}.
+   * Not useful as an "is this transport ready to use" check before the first query — only
+   * meaningful after at least one request has been sent, or after {@link #dispose()}/{@link
+   * #disposeLater()} has actually been called.
+   */
+  public boolean isDisposed() {
+    return connectionProvider.isDisposed();
   }
 
   // Every setter below is called only when the corresponding TransportOptions field is non-null,
