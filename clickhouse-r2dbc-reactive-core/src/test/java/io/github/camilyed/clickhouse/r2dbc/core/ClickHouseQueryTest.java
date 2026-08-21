@@ -1,8 +1,16 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -100,6 +108,111 @@ class ClickHouseQueryTest {
 
     // then
     assertThat(parameterized.parameters()).containsEntry("s", "a\\\\b\\tc\\nd\\re");
+  }
+
+  @Test
+  void shouldEncodeALocalDateTimeWithASpaceSeparatorNotJavasTIsoSeparator() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {d:DateTime}");
+
+    // when
+    final ClickHouseQuery parameterized =
+        query.withParameters(Map.of("d", LocalDateTime.of(2024, 1, 15, 10, 30, 15)));
+
+    // then
+    assertThat(parameterized.parameters()).containsEntry("d", "2024-01-15 10:30:15");
+  }
+
+  @Test
+  void shouldEncodeAnInstantNormalizedToUtc() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {d:DateTime}");
+    final Instant instant =
+        OffsetDateTime.of(2024, 1, 15, 12, 30, 15, 0, ZoneOffset.ofHours(2)).toInstant();
+
+    // when
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("d", instant));
+
+    // then
+    assertThat(parameterized.parameters()).containsEntry("d", "2024-01-15 10:30:15");
+  }
+
+  @Test
+  void shouldEncodeAnOffsetDateTimeNormalizedToUtc() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {d:DateTime}");
+    final OffsetDateTime offsetDateTime =
+        OffsetDateTime.of(2024, 1, 15, 12, 30, 15, 0, ZoneOffset.ofHours(2));
+
+    // when
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("d", offsetDateTime));
+
+    // then
+    assertThat(parameterized.parameters()).containsEntry("d", "2024-01-15 10:30:15");
+  }
+
+  @Test
+  void shouldEncodeAZonedDateTimeNormalizedToUtc() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {d:DateTime}");
+    final ZonedDateTime zonedDateTime =
+        ZonedDateTime.of(2024, 1, 15, 12, 30, 15, 0, ZoneOffset.ofHours(2));
+
+    // when
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("d", zonedDateTime));
+
+    // then
+    assertThat(parameterized.parameters()).containsEntry("d", "2024-01-15 10:30:15");
+  }
+
+  @Test
+  void shouldEncodeANumericListAsAClickHouseArrayLiteral() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {a:Array(UInt32)}");
+
+    // when
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("a", List.of(1, 2, 3)));
+
+    // then
+    assertThat(parameterized.parameters()).containsEntry("a", "[1,2,3]");
+  }
+
+  @Test
+  void shouldEncodeAStringListAsAQuotedAndEscapedClickHouseArrayLiteral() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {a:Array(String)}");
+
+    // when
+    final ClickHouseQuery parameterized =
+        query.withParameters(Map.of("a", List.of("it's", "plain")));
+
+    // then
+    assertThat(parameterized.parameters()).containsEntry("a", "['it\\'s','plain']");
+  }
+
+  @Test
+  void shouldEncodeNullElementsInsideAnArrayAsTheArrayLiteralNullKeyword() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {a:Array(Nullable(UInt32))}");
+    final List<Integer> withNull = new ArrayList<>();
+    withNull.add(1);
+    withNull.add(null);
+
+    // when
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("a", withNull));
+
+    // then
+    assertThat(parameterized.parameters()).containsEntry("a", "[1,NULL]");
+  }
+
+  @Test
+  void shouldRejectANestedArrayAsABoundParameterValue() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT {a:Array(Array(UInt32))}");
+
+    // when / then
+    assertThatThrownBy(() -> query.withParameters(Map.of("a", List.of(List.of(1, 2)))))
+        .isInstanceOf(UnsupportedOperationException.class);
   }
 
   @Test

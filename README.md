@@ -180,7 +180,12 @@ Flux<String> names =
 
 Named parameters (`{name:Type}`, ClickHouse's own binding syntax) are bound with
 `.bind("name", value)` — the type annotation in the SQL is what ClickHouse itself uses to interpret
-the bound value, this driver does not reinterpret or validate it.
+the bound value, this driver does not reinterpret or validate it. Beyond `String`/numeric/`null`,
+`UUID`, `BigDecimal`, `LocalDate`, `Boolean`, `enum` constants, `LocalDateTime`/`Instant`/
+`OffsetDateTime`/`ZonedDateTime` (normalized to UTC), `List` (as a ClickHouse `Array` literal), and
+`IPv4`/`IPv6` (bound as a plain `String`) are all supported — see
+[`ClickHouseQuery.withParameters`](clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ClickHouseQuery.java)'s
+Javadoc for exactly how each is encoded. `Map`/`Tuple` bound values are not yet supported.
 
 #### Connection options
 

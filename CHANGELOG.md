@@ -45,6 +45,19 @@ the version it was given and fails the release if it can't find one. See
   a real data-integrity risk, now called out in README's
   [Known limitations](README.md#known-limitations) with `wait_end_of_query=1` as the mitigation. See
   [ROADMAP.md's Phase 8, item 5](ROADMAP.md#phase-8--post-020-hardening-021) for the full analysis.
+- **Correct parameter-binding wire encoding for `LocalDateTime`/`Instant`/`OffsetDateTime`/
+  `ZonedDateTime` and `List` (as ClickHouse `Array` literals)**, replacing the previous unqualified
+  `value.toString()` fallback that would have sent an ISO `T`-separated datetime (wrong format for
+  ClickHouse's `DateTime`) or a Java `List.toString()` (`[1, 2, 3]`, not a valid `Array` literal).
+  `UUID`, `BigDecimal`, `LocalDate`, `Boolean`, `enum` constants, and `IPv4`/`IPv6` (bound as
+  `String`) needed no change — confirmed correct via new tests, not just left alone. `Map`/`Tuple`
+  bound-parameter values remain deliberately out of scope. **Confirmed against a real server**, which
+  also surfaced a real, previously-undocumented finding: `Array(T)` always decodes each element as
+  exactly the same Java type a scalar column of type `T` would (e.g. `Array(UInt32)` → `List<Long>`,
+  not `List<Integer>`) — now spelled out in `ClickHouseValueConverter`'s Javadoc, since that class's
+  numeric conversion matrix deliberately does not extend to `List` elements. See
+  [ROADMAP.md's Phase 8, item 6](ROADMAP.md#phase-8--post-020-hardening-021) for the full matrix and
+  the reasoning behind each type's encoding.
 
 ### Fixed
 
