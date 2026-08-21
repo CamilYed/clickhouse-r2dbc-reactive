@@ -19,10 +19,11 @@ import org.junit.jupiter.api.Test;
  *
  * <p>{@code isDisposed()} on a transport that has never actually sent a request is vacuously {@code
  * true}, not {@code false}, as this class's own Javadoc documents — Reactor Netty's {@code
- * PooledConnectionProvider#isDisposed()} is {@code channelPools.isEmpty() || ...allMatch(isDisposed)},
- * and no per-remote-host pool exists at all until the first {@code acquire()} (i.e. the first
- * request actually sent). {@link #shouldNotBeDisposedBeforeDisposeIsCalled()} below sends one real
- * request first specifically to avoid asserting against that vacuous-true state.
+ * PooledConnectionProvider#isDisposed()} is {@code channelPools.isEmpty() ||
+ * ...allMatch(isDisposed)}, and no per-remote-host pool exists at all until the first {@code
+ * acquire()} (i.e. the first request actually sent). {@link
+ * #shouldNotBeDisposedBeforeDisposeIsCalled()} below sends one real request first specifically to
+ * avoid asserting against that vacuous-true state.
  */
 class ClickHouseHttpTransportDisposalTest implements ToByteArrayAbility {
 
@@ -34,8 +35,11 @@ class ClickHouseHttpTransportDisposalTest implements ToByteArrayAbility {
     try (final var server =
         ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
       final var transport = new ClickHouseHttpTransport(server.baseUrl());
-      transport.query(ClickHouseQuery.of("SELECT 1")).aggregate().asByteArray().block(
-          Duration.ofSeconds(5));
+      transport
+          .query(ClickHouseQuery.of("SELECT 1"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
 
       // then
       assertThat(transport.isDisposed()).isFalse();

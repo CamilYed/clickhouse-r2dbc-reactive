@@ -282,9 +282,9 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * only once both the {@link RowDecodingScheduler} and the {@link ClickHouseHttpTransport}'s
    * connection pool report disposed. Unlike calling {@link ClickHouseHttpTransport#isDisposed()}
    * directly, this is safe to read before the factory has ever produced a query result: {@link
-   * RowDecodingScheduler#isDisposed()} is never vacuously {@code true} the way an unused transport's
-   * connection pool is (see that method's Javadoc), so requiring both together means this only
-   * reports {@code true} once {@link #dispose()} has genuinely run.
+   * RowDecodingScheduler#isDisposed()} is never vacuously {@code true} the way an unused
+   * transport's connection pool is (see that method's Javadoc), so requiring both together means
+   * this only reports {@code true} once {@link #dispose()} has genuinely run.
    */
   public boolean isDisposed() {
     return decodingScheduler.isDisposed() && transport.isDisposed();

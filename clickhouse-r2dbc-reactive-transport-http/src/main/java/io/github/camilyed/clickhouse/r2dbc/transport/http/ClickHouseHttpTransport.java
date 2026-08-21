@@ -294,10 +294,10 @@ public final class ClickHouseHttpTransport {
    * delegates directly to {@link ConnectionProvider#isDisposed()}, whose actual implementation
    * (Reactor Netty's {@code PooledConnectionProvider}) is {@code channelPools.isEmpty() ||
    * ...allMatch(Disposable::isDisposed)}: no per-remote-host pool exists at all until the first
-   * request is actually sent, and an empty collection vacuously satisfies {@code allMatch(...)}. Not
-   * useful as an "is this transport ready to use" check before the first query — only meaningful
-   * after at least one request has been sent, or after {@link #dispose()}/{@link #disposeLater()}
-   * has actually been called.
+   * request is actually sent, and an empty collection vacuously satisfies {@code allMatch(...)}.
+   * Not useful as an "is this transport ready to use" check before the first query — only
+   * meaningful after at least one request has been sent, or after {@link #dispose()}/{@link
+   * #disposeLater()} has actually been called.
    */
   public boolean isDisposed() {
     return connectionProvider.isDisposed();
