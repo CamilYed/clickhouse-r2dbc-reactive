@@ -20,6 +20,7 @@ proposed to the ClickHouse team.
 - [Phase 5 (later) — Load and performance testing](docs/PERFORMANCE.md)
 - [Phase 6 (later) — Spring WebFlux interop demo](#phase-6-later--spring-webflux-interop-demo)
 - [Phase 7 — Operational control & R2DBC correctness (0.2.0)](#phase-7--operational-control--r2dbc-correctness-020)
+- [Phase 8 — Post-0.2.0 hardening (0.2.1+)](#phase-8--post-020-hardening-021)
 - [Working with Claude / IntelliJ](#working-with-claude--intellij)
 
 ## Module map
@@ -1289,6 +1290,243 @@ block on earlier ones except where noted):
       solid, 1M rows is an open, honestly-documented measurement question rather than a blocker (see
       [docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still)) — not a flaky PR
       gate either way.
+
+## Phase 8 — Post-0.2.0 hardening (0.2.1+)
+
+Starts 2026-08-21. Scope comes from a fresh, independent external review of the repository done
+after `0.2.0` published and after the follow-up factory-lifecycle/leak-detection/connection-reuse
+work — kept in full as
+[docs/REVIEW_POST_0.2.0_FRESH_REPO_SOURCE.md](docs/REVIEW_POST_0.2.0_FRESH_REPO_SOURCE.md), same
+pattern as Phase 7's `docs/REVIEW_0.2.0_PLAN_SOURCE.md`. The review explicitly credits everything
+Phase 7 already shipped and told Claude not to re-do it — see that file's section 1 — so this phase
+starts from what's actually still open, not a re-litigation of `0.2.0`.
+
+Four items below were independently re-verified against current `main` before being copied in here
+as roadmap commitments (not taken on faith, same discipline as Phase 7):
+
+- `Enum8`/`Enum16` still decode as client-v2's internal `EnumValue`, confirmed in
+  `RealWorldTableAgainstRealClickHouseTest`'s own Javadoc (`shouldDecodeEnumTypes`).
+- The demo's `DatabaseClientOrderEventRepository.count()` workaround
+  (`SELECT toUInt32(count()) AS total`) is stale: `ClickHouseValueConverter`'s numeric matrix
+  (confirmed in source) already converts `BigInteger` ↔ `Long` exactly, range-checked — Phase 7 item
+  4 fixed the underlying gap this workaround was written around, but the demo was never updated
+  afterward.
+- `ClickHouseQuery.parameterNamesIn`'s own Javadoc admits the regex-based placeholder scan
+  (`PARAMETER_PLACEHOLDER`) cannot distinguish a real `{name:Type}` parameter from the same text
+  inside a SQL string literal or comment.
+- `ClickHouseConnectionFactoryProvider` confirmed to expose `sslRootCert`/`retryMaxAttempts`/
+  `retryDelay`/`transport...`/`observationListener` as R2DBC options, but no `responseTimeout`
+  option — `TransportOptions`/`ClickHouseHttpTransport` support a response timeout, but it's only
+  reachable by constructing the transport directly, not through `ConnectionFactories.get(...)` or
+  Spring's `spring.r2dbc.url`.
+
+The remaining items below were not independently re-run against a real server or re-read line by
+line this pass — treat them as a starting hypothesis to confirm with a real test before fixing, per
+CLAUDE.md's TDD rule, same as every other phase.
+
+**Performance/benchmark items from the review are deliberately excluded from the P0–P2 lists below**
+and tracked separately (see "Deferred — performance/benchmark work"), per the user's standing
+direction: finish the non-performance work first; performance/benchmark work waits for a proper
+(cloud) benchmark environment. This includes the review's own single-most-emphasized finding
+(benchmark response-compression parity) — real finding, but a benchmarking-methodology question that
+needs JMH re-runs, not a production-code defect blocking anything else in this phase.
+
+### Should have (P1) — correctness / production-readiness gaps
+
+1. **Normalize `Enum8`/`Enum16` to a stable public `String` at the driver boundary**, instead of
+   leaking client-v2's internal `EnumValue` through `Row`. Small, verified, high ergonomics payoff —
+   the demo currently has to do `row.get("status", Object.class).toString()` to work around this.
+   Acceptance: `row.get("status", String.class)` returns the member name directly against a real
+   ClickHouse `Enum8`/`Enum16` column; update `RealWorldTableAgainstRealClickHouseTest` and the demo
+   repository/README to no longer need the `Object.class`/`.toString()` workaround.
+2. **Remove the demo's stale `toUInt32(count())` workaround.** Test `SELECT count() AS total` +
+   `row.get("total", Long.class)` against a real server first (per the verified finding above, this
+   should already work); once green, delete the `toUInt32(...)` cast and its now-inaccurate Javadoc
+   explanation in `DatabaseClientOrderEventRepository`. Don't touch anything else in the same PR.
+3. **Replace the regex-only parameter-placeholder scan with a small SQL-literal/comment-aware
+   scanner.** Doesn't need to become a full SQL parser — just skip single-quoted string literals and
+   line/block comments while looking for `{name:Type}`. Add failing tests first:
+   `SELECT '{not_a_parameter:String}'` and `SELECT 1 -- {not_a_parameter:UInt32}` should not be
+   treated as bind parameters today (confirmed) and must not be after the fix either — the fix is
+   about literals/comments the scan currently gets wrong, not about changing today's understood
+   behavior for genuine placeholders.
+4. **Add an R2DBC-configurable `responseTimeout` option**, e.g. `responseTimeout=PT30S`, distinct
+   from `connectTimeout` (TCP connect), `statementTimeout`/`max_execution_time` (server-side query
+   execution limit), and `transportPendingAcquireTimeout` (pool queue wait) — document the four
+   clearly against each other, since they're easy to conflate.
+5. **Characterize mid-stream ClickHouse failure semantics with a named real-server test**: some rows
+   already received, then the query fails server-side, then the response stream terminates. No
+   existing test proves what this driver actually does today. Required behavior, stated explicitly
+   rather than left to fall out of whatever happens to occur: never silently complete as if the
+   result were whole; surface a useful `R2dbcException`/transport error; preserve whatever rows were
+   already emitted per Reactive Streams semantics (no retroactive un-emitting). Also worth confirming
+   whether `wait_end_of_query=1` is already reachable through the generic settings API as a documented
+   opt-in correctness-vs-streaming tradeoff.
+6. **Build a real-server parameter-binding type matrix beyond null/integer/string-escaping.**
+   `ClickHouseQuery`'s current parameter encoding is `null → \N`, `String → escaped`, everything else
+   → `value.toString()` — untested and likely wrong for `UUID`, `BigDecimal`, `LocalDate`/
+   `LocalDateTime`/`Instant`/`OffsetDateTime`/`ZonedDateTime`, `Boolean`, arrays, `Map`, `Tuple`,
+   `Enum`, `IPv4`/`IPv6`. Write the matrix as tests against a real server first (bind → decode →
+   assert), then expand the encoder only for the cases tests show actually fail — prefer an explicit
+   small encoder over "everything uses `toString()`".
+7. **Design an opt-in, server-error-code-aware retry mode**, on top of the existing safe
+   pre-send-only default (`RetryPolicy`/`RETRY_MAX_ATTEMPTS`/`RETRY_DELAY` stay the default — this is
+   additive, not a replacement). client-v2 0.9.8's `ServerException.isRetryable()` (available now,
+   wasn't at our old `v0.9.0` pin) can identify ClickHouse server error codes considered retryable;
+   this driver deliberately doesn't act on it yet. Needs operation-scoped semantics before
+   implementation, not just "retry more": a `SELECT` where no rows were emitted yet may be safe to
+   retry on a server-classified-retryable error; `INSERT`/streaming `INSERT` should stay
+   conservative/no-retry unless idempotency is explicit. Tests must cover a retryable server error
+   before any rows, a non-retryable server error, a retryable-looking error after partial data
+   (should not retry — partial data was already emitted), `INSERT` never duplicated, and cancellation
+   never triggering a retry.
+8. **Evaluate a POST-body path for long analytical `SELECT`s**, currently sent entirely via
+   `?query=<url-encoded-sql>`. Add a real integration/proxy-boundary test with deliberately long SQL
+   first (large CTEs/JOIN graphs/many parameters — real request-line/URI limits some
+   proxies/load-balancers impose) to prove there's an actual problem before redesigning the request
+   shape. If a body-based path is built, treat the existing pre-send-only retry-safety reasoning as
+   invalidated for that path until re-proven — the `requestSent`/`doAfterRequest` signal currently
+   means "zero bytes reached the server," which stops being straightforwardly true once a body is
+   being streamed (see `insertWithSummary`'s own "never retried" reasoning in [Production readiness
+   review](#production-readiness-review) for why that distinction already matters elsewhere in this
+   codebase).
+9. **Fix the demo's false HTTP-streaming claim.** `OrderEventController#all()`'s Javadoc claims the
+   response is written as it arrives, but with no streaming media type, Spring WebFlux/Jackson
+   collects an ordinary `Flux<OrderEvent>` into one JSON array before writing it — the R2DBC/database
+   side may stream correctly while the HTTP layer buffers. Add `GET /order-events/stream` producing
+   `application/x-ndjson` (or SSE), and prove with a real assertion that the first HTTP element
+   arrives before the source completes — not `expectBodyList(...)`, which waits for the whole
+   response and proves nothing about streaming. This matters more than most items here: end-to-end
+   streaming is a core reason this driver exists, and the demo currently doesn't actually demonstrate
+   it at the HTTP boundary.
+10. **Prove Spring shutdown actually disposes factory-owned resources.** `0.2.1`'s new
+    `ClickHouseConnectionFactory.dispose()`/`isDisposed()` (see [Connection
+    pooling](README.md#connection-pooling)'s "Shutting it down" note) is not called automatically by
+    anything — `io.r2dbc.pool`'s `ConnectionPool.dispose()` only tears down pooled `Connection`
+    handles, not the factory underneath. Add a demo-level shutdown test proving that when the Spring
+    context closes, the underlying transport/decoder-scheduler are actually disposed too, not just
+    the outer pool — currently nothing in the demo calls `factory.dispose()` at all.
+11. **Add a current-`main` demo integration lane, alongside the existing published-release lane.**
+    The demo intentionally depends on
+    `io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0` from Maven Central — good as a real
+    consumer proof, but it means a regression on current `main` can go unnoticed until the next
+    release, since the demo never tests unreleased code. Add a second lane using
+    `project(":clickhouse-r2dbc-reactive-connector")` without replacing the published-release one —
+    both questions ("does the last release work for a consumer" and "does current `main` still work")
+    are worth answering separately.
+
+### Could have (P2) — documentation / policy gaps, cheap and low-risk
+
+12. State current TLS scope explicitly and unambiguously in docs: server TLS verification and custom
+    CA (`sslRootCert`) are supported; mTLS client-certificate authentication and HTTP proxy
+    (routing/auth) are not. mTLS is the most likely of the two to become a real ask.
+13. Define and document a minimum-supported-ClickHouse-version policy. `nightly.yml` currently tests
+    `latest` and one pinned version but the project has never stated a minimum; don't guess one — pick
+    a small, intentional compatibility matrix (minimum tested / current stable / latest) and document
+    per-feature minimums separately where they differ (e.g. `JSON` needs 25.3+ GA, already documented
+    elsewhere).
+14. Decide and document the project's intended multi-host/failover contract: single endpoint only
+    (load balancing is the caller's job, e.g. an external LB/ClickHouse Cloud endpoint/DNS), or
+    driver-owned multi-endpoint failover. Leaving it ambiguous is worse than picking the conservative
+    option and stating it. If multi-host is ever chosen, it's a real feature (per-endpoint pooling,
+    failover/retry semantics, `query_id`/cancellation routed to the right node, health/selection
+    strategy, TLS/SNI per endpoint) — not a quick patch, and not started here.
+15. Characterize semicolon-separated compound statements (`SELECT 1; SELECT 2`) with a small test —
+    `docs/R2DBC_COMPATIBILITY.md` already marks this "untested." Fail fast with a clear error if
+    ClickHouse's HTTP interface is fundamentally one-statement-per-request, rather than leaving actual
+    behavior to depend on server quirks nobody's checked.
+16. Add a "client-v2 upgrade checklist" to `CONTRIBUTING.md`. This driver never reuses client-v2's
+    HTTP transport, but does reuse its RowBinary reader/decoder classes, including a small number of
+    `.internal` hooks — a real version-upgrade risk worth a named checklist (full real-world type
+    matrix, fragmented-buffer tests, cancellation/leak tests, decoder-only + public-API benchmark
+    smoke runs, `.internal` API diff) rather than relying on memory next time the version catalog
+    entry changes.
+
+### Deferred — performance/benchmark work (stays out of scope until a proper benchmark environment exists)
+
+Per the user's standing direction, performance/benchmark work waits for a real (cloud) benchmark
+environment rather than continuing to iterate on a local/loopback one. These items from the review
+are real findings, not dismissed — they're staged here alongside the existing performance backlog
+(task list items covering `RowDecodingScheduler` worker-count tuning, the JDK 21 virtual-thread
+scheduler experiment, mixed heavy-workload benchmarks, and the `StreamingScanBenchmark` chunk-handoff
+regression at 1M rows) rather than acted on now:
+
+- **Benchmark response-compression parity** — the review's single most emphasized finding. client-v2
+  defaults to LZ4 server-response compression (`COMPRESS_SERVER_RESPONSE` defaults to `true`,
+  confirmed in the pinned `0.9.8` source); this driver's Reactor Netty transport doesn't implement
+  response decompression and doesn't send `compress=1`; the comparative JMH benchmark clients don't
+  visibly disable client-v2's default either. On a local loopback benchmark this can bias the
+  comparison in either direction depending on whether CPU (compression cost) or bandwidth (transfer
+  cost) dominates locally — the direction isn't obvious without measuring. Before treating the
+  current large-result transport/scan numbers as a controlled comparison: verify the effective
+  compression setting on both sides with a real probe (not just builder defaults), rerun with both
+  sides at compression OFF, and label older large-result benchmark write-ups as unmatched-compression
+  until re-run. Do not implement response compression in the production driver just to make the
+  benchmark look fair — controlled comparison first, feature decision after.
+- **Benchmark-harness resource-lifecycle bug**: `OurDriverPointQueryClient` (and potentially other
+  benchmark helpers) stores only the logical `Connection` it creates via
+  `ClickHouseConnectionFactory.from(options)`, not the factory itself — `close()` closes the
+  connection but never calls `factory.dispose()`, so the factory-owned transport/connection-pool/
+  decoder-scheduler it created are never released. A benchmark-code bug, not a production-code one
+  (production callers are expected to hold and dispose their own factory, which this benchmark
+  adapter just isn't doing) — fix is to store `ClickHouseConnectionFactory` alongside `Connection` and
+  dispose both symmetrically with how the client-v2 benchmark adapter closes its own resources.
+- **Verify `@OperationsPerInvocation(4096)`'s interpretation** in
+  `PublicApiMatchedPoolThroughputBenchmark` against a manual logical-QPS calculation
+  (`REQUESTS_PER_INVOCATION / measured invocation duration` vs. JMH's reported `ops/s`); update the
+  Javadoc's "not yet empirically verified" note once confirmed either way. JMH's documented semantics
+  already say the design is sound — this is a sanity check, not a redesign.
+- **Cloud JMH JSON/artifact/report pipeline** (`.github/workflows/benchmark.yml` +
+  `scripts/benchmarks/analyze.py`, producing `summary.md`/charts as a GitHub Actions artifact,
+  `workflow_dispatch`-triggered). `nightly.yml` already says JMH regression tracking isn't wired up
+  because there's no baseline-comparison strategy yet — this is the natural next step once there's a
+  real environment to run it against, but no performance-gate thresholds until multiple paired runs
+  establish actual variance.
+- **Response LZ4 compression as a driver feature.** Sequenced deliberately after benchmark fairness,
+  not before: measure OFF/OFF first, then design `responseCompression = NONE | LZ4` with streaming
+  decompression, bounded memory, preserved backpressure, no full-response aggregation, and the same
+  fragmented-frame/cancellation/leak-detection test coverage every other transport feature gets — then
+  benchmark local-loopback and a more realistic remote/higher-latency network, both OFF/OFF and
+  ON/ON.
+- **The richer streaming-analytics demo** (event generator, large NDJSON scan with visible
+  time-to-first-row, slow-consumer/backpressure demonstration, 128-logical-queries-over-8-physical-
+  connections, cancellation + `KILL QUERY`, live metrics) — valuable for showing *why* this driver
+  exists, but a substantial, separate build-out; not started. If built, keep `/lab/*`
+  driver-behavior-demonstration endpoints separate from the realistic application endpoints, and keep
+  the demo from growing into its own DDD project.
+
+### Later (P3) — adoption features, not started
+
+- **Optional `clickhouse-r2dbc-reactive-spring` module** — a typed binding DSL for `DatabaseClient`,
+  a ClickHouse-aware `BindMarkersFactory` strategy, and (only if technically honest) a Spring Data
+  R2DBC dialect, plus Spring Boot auto-configuration. This is the largest remaining adoption gap
+  (Spring's generic bind markers can't carry ClickHouse's `{name:Type}` syntax, and Spring Data's
+  dialect resolver doesn't know ClickHouse at all — both already documented in the demo). Keep it a
+  separate module rather than polluting `core`/`connector`; don't claim full Spring Data support
+  until insert/select/typed-binding/pagination/mapping/startup/shutdown are all proven against a real
+  app, and transactions must keep failing loudly either way.
+- **Optional `clickhouse-r2dbc-reactive-micrometer` adapter** for the existing
+  `DriverObservationListener` SPI — query duration, time-to-first-row, rows/bytes, success/failure/
+  cancel, active queries, transport pool acquired/pending/timeout, `KILL QUERY` attempt/failure, retry
+  count. No high-cardinality tags (no full SQL, `query_id`, or arbitrary parameter values); no
+  Micrometer dependency in `core`/`transport-http`/`connector`.
+- **Cancellation-outcome observability** — expose "kill attempted"/"kill failed" through the existing
+  observation SPI rather than only a `WARN` log, useful for expensive analytical workloads. Don't make
+  cancellation synchronously wait for server confirmation by default; that would change cancellation
+  latency.
+- **Type coverage, ordered by realistic likelihood of use**: `Time`/`Time64` and parameter-binding for
+  already-readable types first (ties into item 6 above); `Dynamic`/`Variant`/`Geo`/vector types later,
+  since they're newer and less settled. Don't expand type coverage just to move a checklist
+  percentage.
+- **OSS/maintenance housekeeping**: `SECURITY.md`, GitHub issue templates (bug report requiring driver
+  version/ClickHouse version/JDK/URL options with secrets removed/reproducer/stack trace; performance
+  regression requiring JMH JSON), and converting a handful of the most actionable items above into
+  real GitHub issues so contributors don't have to read the entire ROADMAP to find something to work
+  on. Don't create dozens of speculative issues at once.
+- **A short "what's actually next" pointer doc** (e.g. `docs/PRODUCTION_READINESS.md`), separate from
+  this ever-growing historical ROADMAP — current released version, current-HEAD goals, P0/P1 gaps,
+  known limitations, links back into ROADMAP for history. Worth doing once this phase's items are
+  triaged (fixed / open), not before — writing it now would just duplicate this section.
 
 ## Working with Claude / IntelliJ
 
