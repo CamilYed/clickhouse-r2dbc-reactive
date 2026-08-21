@@ -1,13 +1,9 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -37,8 +33,6 @@ import org.jspecify.annotations.Nullable;
 public record ClickHouseQuery(
     String sql, String queryId, Map<String, String> parameters, Map<String, String> settings) {
 
-  private static final Pattern PARAMETER_PLACEHOLDER = Pattern.compile("\\{([a-zA-Z_]\\w*):[^}]+}");
-
   /** A query with a freshly generated {@code query_id}, no bound parameters, no settings. */
   public static ClickHouseQuery of(final String sql) {
     return new ClickHouseQuery(sql, UUID.randomUUID().toString(), Map.of(), Map.of());
@@ -53,16 +47,15 @@ public record ClickHouseQuery(
 
   /**
    * The distinct {@code {name:Type}} parameter names {@code sql} declares, in first-occurrence
-   * order. Does not attempt to distinguish a real placeholder from incidental {@code {...:...}}
-   * text inside a string literal or comment — a known, narrow limitation of this regex-based scan.
+   * order. Skips single-quoted string literals, double-quoted/backtick-quoted identifiers, and
+   * every comment form ClickHouse's own lexer accepts (including nested block comments) while
+   * scanning, so placeholder-shaped text sitting inside any of those is never mistaken for a real
+   * bind parameter — see {@link ClickHouseSqlPlaceholderScanner}'s Javadoc for the full reasoning
+   * and what this deliberately still doesn't attempt (it's a scanner for exactly these spans, not a
+   * SQL parser).
    */
   public static List<String> parameterNamesIn(final String sql) {
-    final Set<String> names = new LinkedHashSet<>();
-    final Matcher matcher = PARAMETER_PLACEHOLDER.matcher(sql);
-    while (matcher.find()) {
-      names.add(matcher.group(1));
-    }
-    return List.copyOf(names);
+    return ClickHouseSqlPlaceholderScanner.parameterNamesIn(sql);
   }
 
   /**
