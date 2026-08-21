@@ -33,19 +33,16 @@ import reactor.core.publisher.Mono;
  * adapter, not assumed.
  *
  * <p>Rows are mapped back via {@code Row.get(name, Class)} with hand-picked target types rather
- * than Spring Data's converters — a real, driver-wide gotcha surfaced doing that, documented here
- * rather than hidden behind a silently-"working" helper:
- *
- * <ul>
- *   <li>{@code count()}'s {@code UInt64} result is explicitly cast to {@code UInt32} server-side
- *       before decoding: this driver decodes ClickHouse {@code UInt64} as {@link
- *       java.math.BigInteger} (client-v2's own RowBinary reader does the same — verified against
- *       its pinned source, not assumed), not {@code Long}; {@code Row.get} only casts the
- *       already-decoded value rather than widening it, so asking for {@code Long.class} against a
- *       raw {@code UInt64} column throws {@link ClassCastException}. A real application counting
- *       rows that could exceed {@code UInt32}'s range would request {@link java.math.BigInteger}
- *       instead.
- * </ul>
+ * than Spring Data's converters. {@code count()}'s {@code UInt64} result decodes as {@link
+ * java.math.BigInteger} (client-v2's own RowBinary reader does the same — verified against its
+ * pinned source, not assumed), not {@code Long} directly — but {@code Row.get(name, Long.class)}
+ * against it works anyway: the driver's numeric conversion matrix widens/narrows between {@code
+ * Byte}/{@code Short}/{@code Integer}/{@code Long}/{@code Float}/{@code Double}/{@link
+ * java.math.BigInteger}/{@link java.math.BigDecimal} on request, range-checked (no silent overflow).
+ * An earlier version of this method worked around this with a server-side {@code
+ * toUInt32(count())} cast instead — stale even at the time this comment was written, since the
+ * conversion above already existed; simplified to a plain {@code count()} once actually tested
+ * against a real server.
  *
  * <p>{@code status} ({@code Enum8}) still needs the {@code Object.class}/{@code toString()}
  * workaround here, even though {@code core.ListDecodingRowBinaryReader} was fixed to decode {@code
@@ -110,7 +107,7 @@ class DatabaseClientOrderEventRepository implements OrderEventRepository {
   @Override
   public Mono<Long> count() {
     return databaseClient
-        .sql("SELECT toUInt32(count()) AS total FROM order_events")
+        .sql("SELECT count() AS total FROM order_events")
         .map(row -> row.get("total", Long.class))
         .one();
   }
