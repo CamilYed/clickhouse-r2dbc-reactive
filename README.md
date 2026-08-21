@@ -44,25 +44,32 @@ The design direction started as a public design discussion with the ClickHouse t
 
 ## Contents
 
-- [Why](#why)
-- [Status](#status)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Performance](#performance)
-- [Known limitations](#known-limitations)
-- [What "fully reactive" means here](#what-fully-reactive-means-here)
-- [Connection pooling](#connection-pooling)
-- [Architecture direction](#architecture-direction)
-- [Modules](#modules)
-- [Requirements](#requirements)
-- [Testing strategy](#testing-strategy)
-- [Roadmap](#roadmap)
-- [What this project is not](#what-this-project-is-not)
-- [Relationship to ClickHouse/clickhouse-java](#relationship-to-clickhouseclickhouse-java)
-- [Contributing](#contributing)
-- [License](#license)
+- [Getting started](#getting-started)
+  - [Why](#why)
+  - [Status](#status)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+  - [Usage](#usage)
+- [Deep dive](#deep-dive)
+  - [Performance](#performance)
+  - [Known limitations](#known-limitations)
+  - [What "fully reactive" means here](#what-fully-reactive-means-here)
+  - [Connection pooling](#connection-pooling)
+  - [Architecture direction](#architecture-direction)
+  - [Modules](#modules)
+  - [Testing strategy](#testing-strategy)
+- [Project](#project)
+  - [Roadmap](#roadmap)
+  - [What this project is not](#what-this-project-is-not)
+  - [Relationship to ClickHouse/clickhouse-java](#relationship-to-clickhouseclickhouse-java)
+  - [Contributing](#contributing)
+  - [License](#license)
 
-## Why
+## Getting started
+
+What this project is, whether it's ready for you, and how to add it to a build.
+
+### Why
 
 A production Spring WebFlux application using the existing ClickHouse R2DBC driver showed that
 the effective execution path contains two separate resource-management layers: the logical R2DBC
@@ -74,7 +81,7 @@ Returning `Publisher`, `Mono`, `Flux`, or `CompletableFuture` from an API is not
 non-blocking, bounded, cancellable, and streaming end to end. This project is an attempt to build
 a driver where those properties are explicit, tested, and owned by a single, well-defined layer.
 
-## Status
+### Status
 
 Functional, `0.2.0` published to Maven Central. The full R2DBC SPI surface exists and is exercised
 against a real ClickHouse server (Testcontainers): connection lifecycle,
@@ -104,7 +111,16 @@ below) — see [CHANGELOG.md](CHANGELOG.md) for the full, release-by-release lis
 Still expect breaking changes at this stage — the SPI surface and options above are exercised by
 an automated test suite, not yet by a production workload.
 
-## Installation
+### Requirements
+
+| Requirement | Version |
+| --- | --- |
+| JDK | 21 |
+| Reactive Streams | via Project Reactor |
+| ClickHouse Java Client | `client-v2`, its public row-decoding classes only — its transport is confirmed blocking and is not used (see [Architecture direction](#architecture-direction)) |
+| Verified database | ClickHouse (local Testcontainers instance for integration tests) |
+
+### Installation
 
 Published to Maven Central under `io.github.camilyed`. Check the badge at the top of this file, or
 [central.sonatype.com](https://central.sonatype.com/search?q=io.github.camilyed), for the latest
@@ -122,7 +138,7 @@ classpath (they're `implementation`, not `api`, dependencies of the connector on
 this driver's own internals, not part of its public surface — see
 [Architecture direction](#architecture-direction)).
 
-### Building from source instead
+#### Building from source instead
 
 ```bash
 git clone https://github.com/CamilYed/clickhouse-r2dbc-reactive.git
@@ -133,7 +149,7 @@ cd clickhouse-r2dbc-reactive
 then depend on it with `mavenLocal()` in your `repositories { }` block and the version from
 `gradle.properties`/`-PreleaseVersion` (defaults to `0.2.1-SNAPSHOT`).
 
-## Usage
+### Usage
 
 The driver registers itself with the standard R2DBC `ServiceLoader` bootstrap path under the driver
 identifier `clickhouse` — no direct dependency on this driver's own classes is needed to obtain a
@@ -166,7 +182,7 @@ Named parameters (`{name:Type}`, ClickHouse's own binding syntax) are bound with
 `.bind("name", value)` — the type annotation in the SQL is what ClickHouse itself uses to interpret
 the bound value, this driver does not reinterpret or validate it.
 
-### Connection options
+#### Connection options
 
 Set through the R2DBC URL's query string or `ConnectionFactoryOptions.builder()` directly:
 
@@ -190,7 +206,7 @@ reference application (hexagonal layering, `io.r2dbc.pool` wiring, a real ClickH
 in `io.r2dbc.pool`'s `ConnectionPool` — what `spring.r2dbc.pool.*` configures — is covered in
 [Connection pooling](#connection-pooling) below.
 
-### Using with Spring Boot
+#### Using with Spring Boot
 
 ```kotlin
 dependencies {
@@ -235,7 +251,12 @@ what still doesn't work even with this fix (`DatabaseClient.sql(...).bind(...)` 
 `{name:Type}` parameter syntax has no equivalent in R2DBC's generic `BindMarkersFactory`
 abstraction, so the demo's repository issues fully pre-formed SQL instead).
 
-## Performance
+## Deep dive
+
+Internals, tuning, and the honest limitations — for once you're past "does this work" and into
+"how does this behave under my workload."
+
+### Performance
 
 Every number below is from a real ClickHouse server, against `com.clickhouse:client-v2:0.9.8`, this
 driver's real production decode path (`RowDecodingScheduler`, not a benchmark-only shortcut). Most
@@ -279,7 +300,7 @@ launches — need profiling tools this investigation didn't have available local
 and [How to use this driver well](docs/PERFORMANCE.md#how-to-use-this-driver-well) for what this
 means for choosing this driver today.
 
-## Known limitations
+### Known limitations
 
 > [!NOTE]
 > **Full-table-scan performance at very large result sets (1M+ rows) is not settled — treat it as a
@@ -382,7 +403,7 @@ cancelled) still exists, just far less often than before this was implemented �
 > actually running the official R2DBC SPI Technology Compatibility Kit against a real ClickHouse
 > server, not just a claim.
 
-## What "fully reactive" means here
+### What "fully reactive" means here
 
 Returning a reactive type is a necessary but insufficient condition. A driver is treated as
 reactive end to end only if it satisfies all of the following:
@@ -399,7 +420,7 @@ reactive end to end only if it satisfies all of the following:
 | Reactive error signalling | Transport and ClickHouse errors surface through `onError` with proper R2DBC exception mapping. |
 | No scheduler workaround | Moving blocking I/O to `boundedElastic`/`publishOn`/`subscribeOn` does not count as making the path reactive. |
 
-## Connection pooling
+### Connection pooling
 
 There are **two separate pools**, at two separate layers — understanding which one does what
 matters for tuning either driver correctly, and it's exactly the confusion the [Why](#why) section
@@ -590,7 +611,7 @@ scalability sweep — see that doc for the full caveats and what's still open.
 > [Testing strategy](#testing-strategy)/["fully reactive" definition](#what-fully-reactive-means-here)
 > below, that calling style is also the one thing this whole project is built to avoid you doing.
 
-## Architecture direction
+### Architecture direction
 
 ```mermaid
 flowchart TD
@@ -630,7 +651,7 @@ Responsibility boundaries:
 A particular networking library is a swappable adapter behind the transport boundary, not a
 public architectural dependency.
 
-## Modules
+### Modules
 
 The four modules below exist as Gradle modules today; whole-driver black-box coverage (through the
 public R2DBC SPI only, against real ClickHouse) lives inside `connector`'s own
@@ -650,16 +671,7 @@ avoid the two drifting apart.
 Module boundaries may change before the first release; this table reflects current intent, not a
 committed API.
 
-## Requirements
-
-| Requirement | Version |
-| --- | --- |
-| JDK | 21 |
-| Reactive Streams | via Project Reactor |
-| ClickHouse Java Client | `client-v2`, its public row-decoding classes only — its transport is confirmed blocking and is not used (see [Architecture direction](#architecture-direction)) |
-| Verified database | ClickHouse (local Testcontainers instance for integration tests) |
-
-## Testing strategy
+### Testing strategy
 
 1. **Static execution-path analysis** — map exact classes/methods in `clickhouse-java`, locate
    blocking calls, `CompletableFuture` boundaries, `InputStream` usage, pool/queue defaults, and
@@ -679,7 +691,12 @@ committed API.
    allocations/retained memory, cancellation latency, many-small-request workloads, large
    streaming-result workloads, dependency size and startup impact.
 
-## Roadmap
+## Project
+
+Where this is headed, what it deliberately isn't, and how it relates to the wider ClickHouse
+ecosystem.
+
+### Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for the detailed, gated working plan, and its
 [Production readiness review](ROADMAP.md#production-readiness-review) for the current, up-to-date
@@ -698,7 +715,7 @@ observability SPI, the R2DBC compatibility lane) are both done and published. Wh
 - Whatever [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) still
   lists as an open gap once `0.2.0` ships
 
-## What this project is not
+### What this project is not
 
 - Not a fork of `ClickHouse/clickhouse-java` or a replacement for its JDBC/Client V2 artifacts.
 - Not a second general-purpose ClickHouse client — it reuses Client V2's public row-decoding
@@ -708,7 +725,7 @@ observability SPI, the R2DBC compatibility lane) are both done and published. Wh
 - Not committed to Reactor Netty as a permanent dependency — it is the first transport candidate,
   evaluated against JDK HTTP client and other options.
 
-## Relationship to ClickHouse/clickhouse-java
+### Relationship to ClickHouse/clickhouse-java
 
 This is an independent project, not a fork. It depends on `com.clickhouse:client-v2` as a regular
 Maven dependency, reusing its public row-decoding classes only — its HTTP transport is confirmed
@@ -718,13 +735,13 @@ for the verified evidence. If the design direction proves useful, parts of it ma
 proposed back to `ClickHouse/clickhouse-java` as a module or connector, following up on
 [ClickHouse/ClickHouse#113638](https://github.com/ClickHouse/ClickHouse/discussions/113638).
 
-## Contributing
+### Contributing
 
 Issues and discussion are welcome, especially around the open gaps tracked in
 [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review). Formal
 contribution guidelines (`CONTRIBUTING.md`) exist and cover the PR checklist; see there for the
 current process.
 
-## License
+### License
 
 This project is licensed under the Apache License 2.0.
