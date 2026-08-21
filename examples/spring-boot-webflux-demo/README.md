@@ -54,13 +54,14 @@ boundary demonstrates, one layer up.
   `R2dbcEntityTemplate`/Spring Data repositories anyway, the lean starter removes the problem
   entirely rather than working around it.
 - **`DatabaseClientOrderEventRepository`** — the only place SQL and `Row.get(name, Class)` decoding
-  happen. Two real, driver-wide decode gotchas surfaced here and are documented in its own Javadoc
-  rather than hidden: `count()`'s `UInt64` result needs a server-side `toUInt32(...)` cast (this
-  driver decodes `UInt64` as `BigInteger`, not `Long`, and `Row.get` doesn't widen); `status`
-  (`Enum8`) decodes as client-v2's own internal `EnumValue` in the currently-published release, not a
-  plain `String`, so it's read via `Object.class` + `toString()` rather than `String.class` directly
-  — already fixed in unreleased driver source, this demo picks it up once it depends on a release
-  that contains the fix.
+  happen. One real, driver-wide decode gotcha remains, documented in its own Javadoc rather than
+  hidden: `status` (`Enum8`) decodes as client-v2's own internal `EnumValue` in the
+  currently-published release, not a plain `String`, so it's read via `Object.class` + `toString()`
+  rather than `String.class` directly — already fixed in unreleased driver source, this demo picks
+  it up once it depends on a release that contains the fix. (`count()`'s `UInt64` result used to need
+  a server-side `toUInt32(...)` cast here too — that was already stale, since the driver's numeric
+  conversion matrix widens `BigInteger` to `Long` on request; a plain `count()` +
+  `Row.get(name, Long.class)` works directly.)
 - **Broad type coverage through the extra `DatabaseClient`/`Row` hop** — `order_events` carries
   `UUID`, `LowCardinality(String)`, `Array(String)`, `Decimal(18,4)`, `Nullable(Decimal(18,4))`,
   `Enum8(...)`, `IPv4`, and `DateTime64(3)` columns. The full type matrix (every integer width,

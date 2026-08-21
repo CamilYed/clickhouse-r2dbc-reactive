@@ -1364,10 +1364,14 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    catching this the hard way (a green core unit test, a red demo integration test, both correct for
    what each module actually runs). Removing the workaround from the demo is a separate step, once a
    release containing this fix is published and the demo's dependency is bumped.
-2. **Remove the demo's stale `toUInt32(count())` workaround.** Test `SELECT count() AS total` +
-   `row.get("total", Long.class)` against a real server first (per the verified finding above, this
-   should already work); once green, delete the `toUInt32(...)` cast and its now-inaccurate Javadoc
-   explanation in `DatabaseClientOrderEventRepository`. Don't touch anything else in the same PR.
+2. **Done (2026-08-21). Removed the demo's stale `toUInt32(count())` workaround.**
+   `DatabaseClientOrderEventRepository.count()` now issues a plain `SELECT count() AS total` and
+   reads it as `Row.get("total", Long.class)` directly — unlike item 1 above, this one *is* safe for
+   the demo to use immediately: the underlying fix (`ClickHouseValueConverter`'s numeric conversion
+   matrix, `BigInteger` ↔ `Long` widening/narrowing) shipped in `0.2.0`, already published, which is
+   exactly what the demo depends on — unlike item 1's `Enum8`/`Enum16` normalization, which is only
+   in unreleased driver source. Javadoc and README updated to match; pending the user's real-
+   ClickHouse build run to confirm.
 3. **Replace the regex-only parameter-placeholder scan with a small SQL-literal/comment-aware
    scanner.** Doesn't need to become a full SQL parser — just skip single-quoted string literals and
    line/block comments while looking for `{name:Type}`. Add failing tests first:
