@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.camilyed.clickhouse.r2dbc.connector.fakes.RecordingDriverObservationListener;
@@ -358,5 +359,50 @@ class ClickHouseConnectionFactoryTest {
     // when / then
     assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void shouldNotBeDisposedBeforeDisposeIsCalled() {
+    // given
+    final ClickHouseConnectionFactory factory =
+        ClickHouseConnectionFactory.from(
+            ConnectionFactoryOptions.builder()
+                .option(ConnectionFactoryOptions.HOST, "localhost")
+                .build());
+
+    // then
+    assertThat(factory.isDisposed()).isFalse();
+  }
+
+  @Test
+  void shouldReportDisposedAfterDisposeReleasesEveryOwnedResource() {
+    // given - the transport's connection pool and the row-decoding scheduler are the two resources
+    // this factory owns and shares across every Connection it produces; isDisposed() is true only
+    // once both report disposed, not just one of them.
+    final ClickHouseConnectionFactory factory =
+        ClickHouseConnectionFactory.from(
+            ConnectionFactoryOptions.builder()
+                .option(ConnectionFactoryOptions.HOST, "localhost")
+                .build());
+
+    // when
+    factory.dispose();
+
+    // then
+    assertThat(factory.isDisposed()).isTrue();
+  }
+
+  @Test
+  void shouldBeIdempotentWhenDisposedMoreThanOnce() {
+    // given
+    final ClickHouseConnectionFactory factory =
+        ClickHouseConnectionFactory.from(
+            ConnectionFactoryOptions.builder()
+                .option(ConnectionFactoryOptions.HOST, "localhost")
+                .build());
+    factory.dispose();
+
+    // when / then
+    assertThatCode(factory::dispose).doesNotThrowAnyException();
   }
 }

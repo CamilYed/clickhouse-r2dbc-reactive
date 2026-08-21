@@ -14,6 +14,12 @@ the version it was given and fails the release if it can't find one. See
 
 ### Added
 
+- **`ClickHouseConnectionFactory.dispose()`/`isDisposed()`**, and the two resources it now actually
+  releases: `ClickHouseHttpTransport.dispose()`/`disposeLater()` (the underlying Reactor Netty
+  `ConnectionProvider`, previously never explicitly disposed — construction created a dedicated
+  named pool with no way to release it short of GC/JVM exit) and `RowDecodingScheduler.dispose()`
+  (already existed, but the factory that owns each scheduler instance had no lifecycle hook to call
+  it from). See README's [Connection pooling](README.md#connection-pooling) "Shutting it down" note.
 - **Netty `ByteBuf` leak-detection test lane**, completed as follow-up to the pilot deferred out of
   `0.2.0` (see that release's Deferred section below). Runs `transport-http` and `testkit` tests with
   `-Dio.netty.leakDetection.level=paranoid` and a custom `LeakRecordingResourceLeakDetector`, and now
