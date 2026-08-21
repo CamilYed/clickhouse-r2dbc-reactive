@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.LongStream;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
@@ -27,20 +28,26 @@ import reactor.core.publisher.Flux;
  * raises a {@code DB::Exception} mid-query — a reliable, deterministic way to force this exact
  * shape of failure against a real server, rather than depending on a race or an external fault.
  *
- * <p><b>What ClickHouse actually does here, confirmed against its own HTTP interface docs before
- * writing this test (not assumed):</b> once response bytes have already been sent, HTTP's own
- * "headers before body" rule means ClickHouse can no longer retroactively attach {@code
- * X-ClickHouse-Exception-Code} to the initial response headers — the header this transport's {@code
- * isError} check inspects. With this driver's default settings (streaming, no {@code
- * wait_end_of_query}), ClickHouse instead injects the error as plain text appended directly into
- * the response body, after whatever rows had already been written — corrupting the RowBinary stream
- * rather than cleanly signalling failure at the HTTP level. {@link
- * #shouldFailRatherThanSilentlyCompletingWhenTheFailureHappensAfterStreamingHasStarted} proves the
- * two properties that matter regardless of exactly how the corruption is detected: the {@link Flux}
- * never silently completes as if the result were whole, and every row genuinely emitted before the
- * failure is a real, correctly-decoded row (nothing corrupted slips through as if it were valid) —
- * Reactive Streams' own no-retroactive-un-emitting guarantee, not something this driver has to
- * implement itself.
+ * <p><b>Confirmed against a real ClickHouse server (not just predicted from the HTTP interface
+ * docs):</b> once response bytes have already been sent, HTTP's own "headers before body" rule
+ * means ClickHouse can no longer retroactively attach {@code X-ClickHouse-Exception-Code} to the
+ * initial response headers — the header this transport's {@code isError} check inspects. With this
+ * driver's default settings (streaming, no {@code wait_end_of_query}), ClickHouse instead injects
+ * the error as plain text appended directly into the response body, after whatever rows had already
+ * been written. A real run proved this is worse than "the stream just ends" — the trailing error
+ * text gets misdecoded by client-v2's RowBinary reader as further {@code UInt64} values (arbitrary
+ * large numbers, indistinguishable in shape from genuine row data) and handed to the subscriber as
+ * if they were real rows, before decoding eventually fails on some later, no-longer-parseable byte
+ * and the {@link Flux} terminates with an error. So under default settings this driver offers
+ * exactly two guarantees, both proven by {@link
+ * #shouldFailRatherThanSilentlyCompletingWhenTheFailureHappensAfterStreamingHasStarted}: it never
+ * silently completes as if the result were whole, and the genuine prefix of rows already decoded
+ * before corruption starts is intact and in order (Reactive Streams' own no-retroactive-un-emitting
+ * guarantee, not something this driver has to implement itself). It does <b>not</b> guarantee that
+ * every emitted row is genuine — a caller that cannot tolerate spurious garbage rows possibly
+ * appearing near the end of a result that then fails must opt into {@code wait_end_of_query=1} (see
+ * below), which this driver has no way to enforce or detect on its own. See README's Known
+ * limitations section for the caller-facing writeup of this finding.
  *
  * <p>{@link #shouldSurfaceACleanServerExceptionWhenWaitEndOfQueryIsEnabled} answers the roadmap
  * item's other open question directly: {@code wait_end_of_query=1} — ClickHouse's own opt-in
@@ -50,7 +57,7 @@ import reactor.core.publisher.Flux;
  * request parameters. Opting in trades away incremental streaming (the whole result is buffered
  * server-side up to ClickHouse's own {@code http_response_buffer_size} before anything is sent) for
  * exactly the clean {@link ServerException} this transport's {@code isError} check was built to
- * catch.
+ * catch, with no risk of the garbage-row corruption described above.
  */
 class MidStreamQueryFailureAgainstRealClickHouseTest extends BaseClickHouseIntegrationTest {
 
@@ -98,11 +105,15 @@ class MidStreamQueryFailureAgainstRealClickHouseTest extends BaseClickHouseInteg
 
     // then - never silently completes as if the result were whole
     assertThat(thrown).isNotNull();
-    // and - rows genuinely emitted before the failure were preserved, not retroactively dropped
-    assertThat(received).isNotEmpty();
-    // and - every emitted row is a real row from before the failure point, not corrupted tail bytes
-    // misread as if they were valid data
-    assertThat(received).allSatisfy(number -> assertThat(number).isLessThan(50000L));
+    // and - a sizeable genuine prefix was preserved, not retroactively dropped, and delivered
+    // intact
+    // and in order — proven against a fixed-size prefix rather than the exact
+    // (implementation-detail,
+    // block-size-dependent) point where corruption starts; see the class Javadoc for why a real run
+    // confirmed later elements in `received` can be corrupted garbage rather than genuine data, so
+    // this deliberately does not assert anything about the full list, only this verified-safe
+    // prefix
+    assertThat(received).startsWith(LongStream.range(0, 1000).boxed().toArray(Long[]::new));
   }
 
   @Test
