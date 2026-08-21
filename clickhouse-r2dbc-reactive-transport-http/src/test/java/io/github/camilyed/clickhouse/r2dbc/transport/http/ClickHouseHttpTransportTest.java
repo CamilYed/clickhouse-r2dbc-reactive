@@ -424,7 +424,8 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
   @Test
   void shouldNotLeakAByteBufWhenTheRowDecoderFailsMidStream() {
     // given - a response that ends abruptly inside a multi-byte value already being read (see
-    // ClickHouseWireFixtures#truncatedInt32ValueRowBinaryWithNamesAndTypes()'s Javadoc for why this,
+    // ClickHouseWireFixtures#truncatedInt32ValueRowBinaryWithNamesAndTypes()'s Javadoc for why
+    // this,
     // and not simply "no rows", is what actually forces the row decoder itself to fail rather than
     // a transport-level error).
     final byte[] truncatedBody =
