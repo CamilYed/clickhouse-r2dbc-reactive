@@ -39,10 +39,10 @@ public interface NettyLeakDetectionAbility {
    * trackers as a side effect of tracking a <em>new</em> allocation ({@code
    * ResourceLeakDetector#track}, called from every {@code Unpooled}/{@code ByteBuf} allocation
    * site) - it never does so spontaneously in the background. Without this nudge, a leaked buffer
-   * from earlier in the test could already be garbage-collected and sitting in that queue, unreported
-   * forever, simply because nothing in the test happened to allocate another tracked resource
-   * afterward - confirmed by {@code NettyLeakDetectionAbilityTest} actually failing to detect its
-   * own deliberately-leaked buffer before this nudge was added.
+   * from earlier in the test could already be garbage-collected and sitting in that queue,
+   * unreported forever, simply because nothing in the test happened to allocate another tracked
+   * resource afterward - confirmed by {@code NettyLeakDetectionAbilityTest} actually failing to
+   * detect its own deliberately-leaked buffer before this nudge was added.
    */
   default void assertNoByteBufLeaksWereDetected() {
     for (int attempt = 0; attempt < 5; attempt++) {
