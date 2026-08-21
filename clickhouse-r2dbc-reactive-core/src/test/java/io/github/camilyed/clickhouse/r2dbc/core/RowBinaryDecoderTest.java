@@ -55,6 +55,19 @@ class RowBinaryDecoderTest {
   }
 
   @Test
+  void shouldDecodeAnEnum8ColumnAsAPlainString() {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.enum8SingleValueRowBinaryWithNamesAndTypes()));
+
+    // when
+    final DecodedRow row = RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
+
+    // then
+    assertThat(row.valueAt(0)).isInstanceOf(String.class).isEqualTo("b");
+  }
+
+  @Test
   void shouldExposeColumnSchemaAlongsideDecodedRows() {
     // given
     final Flux<ByteBuffer> source =

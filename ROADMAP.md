@@ -353,10 +353,9 @@ for, not something to infer from the one spike test passing.
 **Corrected finding (previous version of this table overstated the Composite block).** Reading
 `BinaryStreamReader` directly: `readMap()`/`readTuple()` return a plain `LinkedHashMap`/`Object[]`
 regardless of type hints, for element types that aren't themselves `Array`/`Nested`. `Enum8`/
-`Enum16` return an `.internal` `EnumValue`, but it publicly overrides `toString()` to the member
-name — calling `toString()` on the opaque `Object` reads the value without importing or casting to
-the internal type (a dependency on current `toString()` behavior, not a documented contract, but no
-compile-time coupling).
+`Enum16` originally returned an `.internal` `EnumValue` here, read only via its `toString()`
+override — see "`Enum8`/`Enum16` resolved" below for how this was closed the same way `Array`/
+`Nested` was, rather than left as a permanent `toString()`-dependency workaround.
 
 **`Array`/`Nested` resolved** — both route through `BinaryStreamReader.convertArray()`, which only
 returns a plain `List` when a `List.class` type hint is supplied, and the public `next()`/
@@ -370,6 +369,27 @@ its public `readValue(column, typeHint)` method), the same shape of compromise a
 in `core` (`RowBinaryDecoderTest.shouldDecodeAnArrayColumnAsAPlainList`, hand-built wire bytes, no
 ClickHouse needed) and a real-ClickHouse test (`RealWorldTableAgainstRealClickHouseTest.
 shouldDecodeArrayType`).
+
+**`Enum8`/`Enum16` resolved (Phase 8 item 1, 2026-08-21).** Unlike `Array`/`Nested`, client-v2 has no
+type-hint mechanism for enums — `readValue(column, null)` always returns its own `.internal`
+`EnumValue`, hint or not. `core.ListDecodingRowBinaryReader` closes the same gap a different way:
+after `readValue` returns for a column whose `ClickHouseDataType` is `Enum8`/`Enum16`, it calls
+`toString()` on the result (the previously-confirmed member-name behavior above) and stores the
+plain `String` instead — same "never leak a client-v2 `.internal` type through `Row`" goal as the
+`Array`/`Nested` fix, same class, same narrow per-column-type scope. A `Nullable(Enum8)` `NULL` stays
+`null`, never the literal string `"null"`. `ClickHouseRowAssert.hasEnumName` now asserts the actual
+runtime type is `String`, not just that `toString()` matches, so it would fail again if the internal
+type ever leaked back through. **Caught the hard way, immediately after landing this fix:** the demo
+(`examples/spring-boot-webflux-demo`) deliberately depends on the last *published* Maven Central
+connector release, not this in-repo source (see its `build.gradle.kts`'s own comment and [Phase
+6](#phase-6-later--spring-webflux-interop-demo)) — an initial version of this change also switched
+`DatabaseClientOrderEventRepository` to `Row.get("status", String.class)`, which passed the fast
+unit-test suite (that module doesn't touch the demo) but failed the demo's real-ClickHouse
+integration tests with a 500 (`ClassCastException`, since the *published* release still returns
+`EnumValue`). Reverted: the demo keeps the `Object.class`/`toString()` workaround, with its Javadoc
+now explaining exactly why, until its dependency is bumped to a release that actually contains this
+fix — see [Phase 8 item 11](#phase-8--post-020-hardening-021) for adding a current-`main` demo lane
+specifically so this class of mismatch fails fast next time instead of only being caught by chance.
 
 ---
 
@@ -1333,12 +1353,17 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
 
 ### Should have (P1) — correctness / production-readiness gaps
 
-1. **Normalize `Enum8`/`Enum16` to a stable public `String` at the driver boundary**, instead of
-   leaking client-v2's internal `EnumValue` through `Row`. Small, verified, high ergonomics payoff —
-   the demo currently has to do `row.get("status", Object.class).toString()` to work around this.
-   Acceptance: `row.get("status", String.class)` returns the member name directly against a real
-   ClickHouse `Enum8`/`Enum16` column; update `RealWorldTableAgainstRealClickHouseTest` and the demo
-   repository/README to no longer need the `Object.class`/`.toString()` workaround.
+1. **Done in driver source (2026-08-21). Normalize `Enum8`/`Enum16` to a stable public `String` at
+   the driver boundary**, instead of leaking client-v2's internal `EnumValue` through `Row`. See
+   "`Enum8`/`Enum16` resolved" under [Phase 2](#phase-2--core-protocol--testkit-contract-tests) for
+   the implementation (`core.ListDecodingRowBinaryReader`) and test coverage
+   (`RealWorldTableAgainstRealClickHouseTest.shouldDecodeEnumTypes`,
+   `ClickHouseRowAssert.hasEnumName` now asserting the runtime type, not just `toString()`). **The
+   demo still uses the `Object.class`/`.toString()` workaround, on purpose** — it depends on the last
+   published Maven Central release, which doesn't contain this fix yet; that same section documents
+   catching this the hard way (a green core unit test, a red demo integration test, both correct for
+   what each module actually runs). Removing the workaround from the demo is a separate step, once a
+   release containing this fix is published and the demo's dependency is bumped.
 2. **Remove the demo's stale `toUInt32(count())` workaround.** Test `SELECT count() AS total` +
    `row.get("total", Long.class)` against a real server first (per the verified finding above, this
    should already work); once green, delete the `toUInt32(...)` cast and its now-inaccurate Javadoc
