@@ -1379,6 +1379,25 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    treated as bind parameters today (confirmed) and must not be after the fix either — the fix is
    about literals/comments the scan currently gets wrong, not about changing today's understood
    behavior for genuine placeholders.
+
+   **Done in driver source (2026-08-21), not yet released.** New package-private
+   `ClickHouseSqlPlaceholderScanner` (single left-to-right character pass, tracks quote/comment
+   context directly) replaces the `Pattern`/`Matcher` scan inside `ClickHouseQuery.parameterNamesIn`.
+   Verifying against clickhouse.com/docs/sql-reference/syntax's "Comments" section before implementing
+   (rather than assuming `--`/`/* */` was the whole story) surfaced two things the original triage
+   above didn't anticipate: ClickHouse also accepts `#!`, `# ` (hash-space), and `//` as line-comment
+   starters, and — the one that actually mattered for correctness, not just completeness — ClickHouse
+   block comments **nest** (`/* outer /* inner */ still commented */`), unlike standard SQL's. Both
+   are now handled; 30 tests in the new `ClickHouseSqlPlaceholderScannerTest` cover every
+   context-skipping rule, the backslash/doubled-character escaping rules within quoted spans
+   (verified against the same docs page), malformed placeholder shapes that must not match, and
+   boundary/unterminated-input cases. Performance was checked, not just claimed: both the old regex
+   and the new scanner are O(sql length) with no pathological worst case, and a throwaway (non-JMH,
+   per this phase's standing benchmark-work deferral) timing sanity check found the two within noise
+   of each other on a typical short query and the scanner ~8% faster on a large SQL text with 200
+   placeholders — not a meaningful win either way, which is why the scanner's own Javadoc is explicit
+   that correctness, not speed, is the reason it exists. See `ClickHouseSqlPlaceholderScanner`'s
+   Javadoc for the full write-up.
 4. **Add an R2DBC-configurable `responseTimeout` option**, e.g. `responseTimeout=PT30S`, distinct
    from `connectTimeout` (TCP connect), `statementTimeout`/`max_execution_time` (server-side query
    execution limit), and `transportPendingAcquireTimeout` (pool queue wait) — document the four

@@ -50,6 +50,15 @@ the version it was given and fails the release if it can't find one. See
   `FluxInputStreamBridge#close()` now first tries a short, bounded drain toward the upstream's
   natural terminal signal (50ms / 64KB budget) before falling back to a hard cancel — see that
   class's "Cancellation" Javadoc section for the full reasoning.
+- **`ClickHouseQuery.parameterNamesIn(String)` no longer mistakes placeholder-shaped text inside a
+  string literal, a quoted identifier, or a comment for a real `{name:Type}` bind parameter.**
+  Replaced the single `Pattern`/`Matcher` scan (which has no way to track "are we currently inside a
+  quote" while matching) with `ClickHouseSqlPlaceholderScanner`, a single-pass character scanner that
+  tracks that context directly — skipping single-quoted string literals, double-quoted/backtick-quoted
+  identifiers (both with backslash- and doubled-character escaping), and every comment form
+  ClickHouse's own lexer accepts (`--`, `#!`, `# `, `//`, and `/* */` block comments, which — verified
+  against ClickHouse's docs, not assumed — nest, unlike standard SQL's). See [ROADMAP.md's Phase 8,
+  item 3](ROADMAP.md#phase-8--post-020-hardening-021).
 
 ## [0.2.0] — 2026-08-20 (Phase 7: operational control & R2DBC correctness)
 
