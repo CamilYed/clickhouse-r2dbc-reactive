@@ -6,6 +6,9 @@ import static org.awaitility.Awaitility.await;
 
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
+import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.NettyLeakDetectionAbility;
 import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.ToByteArrayAbility;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
@@ -310,6 +313,7 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
   @Test
   void shouldFailWithinAnExplicitlyConfiguredTimeoutWhenTheServerNeverResponds() {
     // given
+    thereAreNoRecordedByteBufLeaksYet();
     try (final var server = ControlledClickHouseServer.startAcceptingButNeverResponding()) {
       final var transport =
           new ClickHouseHttpTransport(
@@ -329,6 +333,9 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
       // then
       assertThat(thrown).isNotNull();
       assertThat(Duration.between(start, Instant.now())).isLessThan(Duration.ofSeconds(5));
+      // and - a timed-out request never receives any body, but the timeout's own teardown must not
+      // strand anything either
+      assertNoByteBufLeaksWereDetected();
     }
   }
 
@@ -411,6 +418,67 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
     }
 
     // and - the chunk that did arrive before the reset must not be stranded
+    assertNoByteBufLeaksWereDetected();
+  }
+
+  @Test
+  void shouldNotLeakAByteBufWhenTheRowDecoderFailsMidStream() {
+    // given - a response that ends abruptly inside a multi-byte value already being read (see
+    // ClickHouseWireFixtures#truncatedInt32ValueRowBinaryWithNamesAndTypes()'s Javadoc for why this,
+    // and not simply "no rows", is what actually forces the row decoder itself to fail rather than
+    // a transport-level error).
+    final byte[] truncatedBody =
+        ClickHouseWireFixtures.truncatedInt32ValueRowBinaryWithNamesAndTypes();
+    thereAreNoRecordedByteBufLeaksYet();
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(truncatedBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+      final Flux<ByteBuffer> body =
+          transport.query(ClickHouseQuery.of("SELECT n")).asByteArray().map(ByteBuffer::wrap);
+
+      final Throwable thrown =
+          catchThrowable(
+              () -> RowBinaryDecoder.decodeRows(body).collectList().block(Duration.ofSeconds(5)));
+
+      // then
+      assertThat(thrown).isNotNull();
+    }
+
+    // and - the bytes that did arrive before the truncation must not be stranded
+    assertNoByteBufLeaksWereDetected();
+  }
+
+  @Test
+  void shouldNotLeakAByteBufWhenDownstreamCancelsAfterAFewRecords() {
+    // given - the same access pattern as connector-level R2DBC consumers that stop reading rows
+    // early (e.g. Result.map(...).take(n)), driven through the real production wiring
+    // (RowBinaryDecoder#decode + RowDecodingScheduler, exactly like ClickHouseResult uses) rather
+    // than the raw decodeRows() entry point, which is documented as unsafe against a live network
+    // response.
+    final byte[] twoRows = ClickHouseWireFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes();
+    thereAreNoRecordedByteBufLeaksYet();
+    final RowDecodingScheduler scheduler = RowDecodingScheduler.defaults();
+
+    try (final var server = ControlledClickHouseServer.startRespondingToSelectOneWith(twoRows)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+      final Flux<ByteBuffer> body =
+          transport.query(ClickHouseQuery.of("SELECT 1")).asByteArray().map(ByteBuffer::wrap);
+
+      // when
+      final DecodedResult result =
+          RowBinaryDecoder.decode(body, scheduler).block(Duration.ofSeconds(5));
+      StepVerifier.create(result.rows(), 1)
+          .expectNextCount(1)
+          .thenCancel()
+          .verify(Duration.ofSeconds(5));
+    } finally {
+      scheduler.dispose();
+    }
+
+    // then - stopping after row 1 of 2 must not strand the ByteBuf the second, never-consumed row
+    // arrived in
     assertNoByteBufLeaksWereDetected();
   }
 
@@ -839,6 +907,7 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
     // given - nobody is listening on this port yet, so every connection attempt fails before any
     // request bytes can be sent; a real server starts accepting on that exact port shortly after,
     // simulating a transient "server not reachable yet" condition RetryPolicy should ride out.
+    thereAreNoRecordedByteBufLeaksYet();
     final int port;
     try (final ServerSocket portProbe = new ServerSocket(0)) {
       port = portProbe.getLocalPort();
@@ -868,6 +937,9 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
 
       // then
       assertThat(receivedBody).isEqualTo(configuredBody);
+      // and - neither the failed pre-send attempts nor the eventually-successful one may strand a
+      // ByteBuf
+      assertNoByteBufLeaksWereDetected();
     } finally {
       await().atMost(Duration.ofSeconds(2)).until(() -> lateServer.get() != null);
       lateServer.get().disposeNow();
