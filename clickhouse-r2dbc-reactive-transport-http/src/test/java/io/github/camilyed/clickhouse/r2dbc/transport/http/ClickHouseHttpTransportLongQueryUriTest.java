@@ -32,7 +32,8 @@ import reactor.netty.http.server.HttpServer;
 class ClickHouseHttpTransportLongQueryUriTest {
 
   @Test
-  void shouldFailRatherThanSilentlyTruncatingOrHangingWhenTheRequestLineExceedsAnIntermediarysLimit() {
+  void
+      shouldFailRatherThanSilentlyTruncatingOrHangingWhenTheRequestLineExceedsAnIntermediarysLimit() {
     // given - a server explicitly left at Netty's own default 4096-byte maxInitialLineLength (see
     // class Javadoc), standing in for a typical reverse proxy/load balancer with the same default;
     // a SQL string long enough that query()'s encoded URI comfortably exceeds that limit
