@@ -1624,6 +1624,28 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    being streamed (see `insertWithSummary`'s own "never retried" reasoning in [Production readiness
    review](#production-readiness-review) for why that distinction already matters elsewhere in this
    codebase).
+
+   **Problem confirmed (2026-08-22), redesign not yet started.** Researched first, not assumed:
+   ClickHouse's own HTTP server is generous (`http_max_uri_size` defaults to 1 MiB —
+   clickhouse.com/docs/interfaces/http), but a real deployment commonly sits behind a reverse
+   proxy/load balancer with a far smaller request-line limit — Netty's own `HttpRequestDecoder`,
+   which both Reactor Netty's `HttpServer` and most Netty-based proxies use, defaults
+   `maxInitialLineLength` to 4096 bytes (confirmed against Reactor Netty's own
+   `HttpRequestDecoderSpec.DEFAULT_MAX_INITIAL_LINE_LENGTH`). New hermetic test
+   `ClickHouseHttpTransportLongQueryUriTest` (transport-http module) stands in for that whole class
+   of intermediary with a plain Reactor Netty server explicitly left at that exact default (no Docker
+   in this sandbox to run an actual nginx/ALB instance, but the underlying mechanism — an
+   HTTP/1.1-compliant request-line length limit — is the same either way) and sends SQL long enough
+   to comfortably exceed it through the existing `query()` path. Written to prove the driver fails
+   loudly (a connection-level error) rather than silently truncating the SQL or hanging — pending the
+   user's local build to confirm which specific exception surfaces, same honest
+   written-but-unverified pattern used throughout this Phase 8 section (no `javac` in this sandbox).
+
+   **Not yet done:** deciding whether to actually build a POST-body path is a separate follow-up,
+   deliberately not rushed alongside confirming the problem exists — a body-based path invalidates
+   the pre-send-only retry-safety reasoning (per this item's own text above) and would need its own
+   careful design, mirroring how item 7's retry-mode design was kept a distinct step from its
+   implementation.
 9. **Fix the demo's false HTTP-streaming claim.** `OrderEventController#all()`'s Javadoc claims the
    response is written as it arrives, but with no streaming media type, Spring WebFlux/Jackson
    collects an ordinary `Flux<OrderEvent>` into one JSON array before writing it — the R2DBC/database
