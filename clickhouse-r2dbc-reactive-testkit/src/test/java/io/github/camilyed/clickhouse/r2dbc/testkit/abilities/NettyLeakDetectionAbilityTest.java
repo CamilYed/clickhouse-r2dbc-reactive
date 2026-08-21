@@ -34,14 +34,51 @@ class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
     System.out.println(
         "DIAGNOSTIC io.netty.leakDetection.level system property = "
             + System.getProperty("io.netty.leakDetection.level"));
-    System.out.println("DIAGNOSTIC ResourceLeakDetector.getLevel() = " + ResourceLeakDetector.getLevel());
+    System.out.println(
+        "DIAGNOSTIC ResourceLeakDetector.getLevel() = " + ResourceLeakDetector.getLevel());
 
     final ResourceLeakDetector<Object> detector =
         ResourceLeakDetectorFactory.instance().newResourceLeakDetector(Object.class);
-    System.out.println("DIAGNOSTIC newResourceLeakDetector(Object.class) returned class = "
-        + detector.getClass().getName());
+    System.out.println(
+        "DIAGNOSTIC newResourceLeakDetector(Object.class) returned class = "
+            + detector.getClass().getName());
 
     assertThat(detector).isInstanceOf(LeakRecordingResourceLeakDetector.class);
+  }
+
+  /**
+   * TEMPORARY DIAGNOSTIC - isolates whether the break is in Netty's {@code ByteBuf}
+   * allocation/tracking path specifically, or in the GC/reference-queue-drain plumbing itself, by
+   * tracking a plain {@link Object} directly through {@link ResourceLeakDetector#track}, bypassing
+   * {@code Unpooled}/{@code ByteBuf} entirely. If this also fails, the bug is in GC/queue-drain
+   * timing or our override chain, not in how {@code Unpooled.buffer()} allocates. If this passes,
+   * the bug is specific to the {@code ByteBuf} allocation path not being tracked as expected. Remove
+   * once shouldDetectAnUnreleasedByteBufAsALeak passes reliably.
+   */
+  @Test
+  void diagnosticTrackingAPlainObjectDirectlyIsDetectedAsALeak() {
+    // given
+    thereAreNoRecordedByteBufLeaksYet();
+    final ResourceLeakDetector<Object> detector =
+        ResourceLeakDetectorFactory.instance().newResourceLeakDetector(Object.class, 1);
+    trackAndDeliberatelyForgetToClose(detector);
+
+    // when / then
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .untilAsserted(
+            () -> {
+              System.gc();
+              trackAndDeliberatelyForgetToClose(detector);
+              assertThat(LeakRecordingResourceLeakDetector.recordedLeaks()).isNotEmpty();
+            });
+  }
+
+  private void trackAndDeliberatelyForgetToClose(final ResourceLeakDetector<Object> detector) {
+    // deliberately never closing the returned tracker, and no reference kept beyond this method -
+    // that is the leak
+    final Object target = new Object();
+    detector.track(target);
   }
 
   @Test
