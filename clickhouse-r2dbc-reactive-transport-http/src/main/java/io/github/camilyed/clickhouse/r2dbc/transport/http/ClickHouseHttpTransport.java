@@ -414,12 +414,21 @@ public final class ClickHouseHttpTransport {
    * relies on — is retried according to this transport's {@link RetryPolicy}, since the server
    * never received any bytes of that attempt and retrying it cannot make the query run twice
    * server-side; see {@link RetryPolicy}'s Javadoc for the full reasoning and how this compares to
-   * client-v2's own default retry behavior. A failure after the request was sent is never retried
-   * here, for the same non-idempotency reason.
+   * client-v2's own default retry behavior. A failure after the request was sent is, by default,
+   * never retried here, for the same non-idempotency reason — <b>unless</b> {@code query} opted in
+   * via {@link ClickHouseQuery#withServerErrorRetryEnabled()}, {@link
+   * ServerException#isRetryable()} classifies the specific failure as retryable, and, critically,
+   * no response bytes have been emitted downstream yet for this query (tracked independently of
+   * {@code requestSent} — the request can be fully sent and ClickHouse can still fail before
+   * writing any of the response body, which is exactly the window this extra opt-in widens retrying
+   * into). Once any response bytes have been emitted, this transport never retries, opt-in or not —
+   * see {@link ClickHouseQuery#withServerErrorRetryEnabled()}'s Javadoc for the full safety
+   * reasoning and why this is a per-query decision rather than a blanket connection-level one.
    */
   public Mono<ClickHouseQueryResponse> queryWithSummary(final ClickHouseQuery query) {
     final AtomicLong writtenRows = new AtomicLong();
     final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final AtomicBoolean anyResponseBytesEmitted = new AtomicBoolean(false);
     final Flux<ByteBuf> response =
         httpClient
             .headers(
@@ -441,13 +450,20 @@ public final class ClickHouseHttpTransport {
                     + JSON_AS_STRING_QUERY_PARAM)
             .response(
                 (httpResponse, content) ->
-                    receiveOrFail(httpResponse, content, query.queryId(), writtenRows));
+                    receiveOrFail(httpResponse, content, query.queryId(), writtenRows))
+            .doOnNext(ignored -> anyResponseBytesEmitted.set(true));
     final ByteBufFlux rawBody =
         ByteBufFlux.fromInbound(
             retryPolicy.isEnabled()
                 ? response.retryWhen(
                     Retry.fixedDelay(retryPolicy.maxAttempts(), retryPolicy.delay())
-                        .filter(error -> !requestSent.get()))
+                        .filter(
+                            error ->
+                                canRetry(
+                                    error,
+                                    query,
+                                    requestSent.get(),
+                                    anyResponseBytesEmitted.get())))
                 : response);
     final ByteBufFlux body =
         ByteBufFlux.fromInbound(
@@ -458,6 +474,44 @@ public final class ClickHouseHttpTransport {
                   }
                 }));
     return Mono.just(new ClickHouseQueryResponse(writtenRows::get, body));
+  }
+
+  /**
+   * Whether a failure of {@code query} is safe to retry — see {@link #queryWithSummary}'s Javadoc
+   * "Retry" section for the full reasoning behind each branch below.
+   *
+   * <p>{@code requestSent}/{@code anyResponseBytesEmitted} are read once per filter invocation
+   * rather than passed as a single combined signal, since they answer two independently necessary
+   * questions: whether <em>any</em> retry is even on the table for this failure shape
+   * (pre-send-connection-level, or the opt-in server-error case), and, for the opt-in case, whether
+   * it is still safe given what has already reached the caller.
+   *
+   * <p>Package-private rather than {@code private} deliberately: this is a small, pure decision
+   * function with several independent branches (pre-send vs. post-send, bytes already emitted or
+   * not, opted in or not, retryable or not), and the "bytes already emitted, then a retryable
+   * server error" branch specifically is impractical to force through a real or fake HTTP server
+   * (once response headers/body have started flowing successfully, a genuine mid-stream failure no
+   * longer arrives as a clean {@code ServerException} the way a failure detected before any bytes
+   * were sent does — see {@code MidStreamQueryFailureAgainstRealClickHouseTest}, item 5 in
+   * ROADMAP.md's Phase 8). Testing this function directly with real {@link ServerException}
+   * instances is more precise and complete than trying to reproduce every branch end to end, while
+   * {@link ClickHouseHttpTransportTest}'s server-backed tests still separately prove the actual
+   * {@code retryWhen} wiring engages this function correctly against a real response.
+   */
+  static boolean canRetry(
+      final Throwable error,
+      final ClickHouseQuery query,
+      final boolean requestSent,
+      final boolean anyResponseBytesEmitted) {
+    if (!requestSent) {
+      return true;
+    }
+    if (anyResponseBytesEmitted) {
+      return false;
+    }
+    return query.serverErrorRetryEnabled()
+        && error instanceof ServerException serverException
+        && serverException.isRetryable();
   }
 
   /**
