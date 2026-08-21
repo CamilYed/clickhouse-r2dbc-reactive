@@ -38,8 +38,8 @@ import reactor.core.publisher.Mono;
  * pinned source, not assumed), not {@code Long} directly — but {@code Row.get(name, Long.class)}
  * against it works anyway: the driver's numeric conversion matrix widens/narrows between {@code
  * Byte}/{@code Short}/{@code Integer}/{@code Long}/{@code Float}/{@code Double}/{@link
- * java.math.BigInteger}/{@link java.math.BigDecimal} on request, range-checked (no silent overflow).
- * An earlier version of this method worked around this with a server-side {@code
+ * java.math.BigInteger}/{@link java.math.BigDecimal} on request, range-checked (no silent
+ * overflow). An earlier version of this method worked around this with a server-side {@code
  * toUInt32(count())} cast instead — stale even at the time this comment was written, since the
  * conversion above already existed; simplified to a plain {@code count()} once actually tested
  * against a real server.
