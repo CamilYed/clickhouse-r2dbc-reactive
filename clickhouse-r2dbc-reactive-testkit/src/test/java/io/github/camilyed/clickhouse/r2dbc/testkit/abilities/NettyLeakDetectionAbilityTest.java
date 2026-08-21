@@ -16,20 +16,19 @@ import org.junit.jupiter.api.Test;
  * -Dio.netty.leakDetection.level=paranoid} (see this module's {@code build.gradle.kts}), same as
  * every other test relying on {@link NettyLeakDetectionAbility}.
  *
- * <p>Deliberately allocates {@link Unpooled#directBuffer}, not {@link Unpooled#buffer}. Netty
- * never leak-tracks {@code Unpooled}'s heap buffers at all -
- * {@code AbstractByteBufAllocator#heapBuffer} calls {@code newHeapBuffer} directly with no {@code
- * toLeakAwareBuffer} wrapping, and {@code UnpooledByteBufAllocator#newHeapBuffer} doesn't call
- * {@code ResourceLeakDetector#track} either - a heap buffer's backing {@code byte[]} is ordinary
- * JVM-heap memory the garbage collector already reclaims on its own, so Netty's leak detector,
- * which exists to catch forgotten off-heap/native memory, doesn't bother. Only direct buffers and
- * composite buffers go through {@code toLeakAwareBuffer}. This was found the hard way: an earlier
- * version of this test used {@code Unpooled.buffer()} and never detected its own deliberate leak,
- * no matter how much GC/queue-drain nudging was added, because the buffer was never tracked in the
- * first place. The real driver's production path is unaffected by this - Reactor Netty's actual
- * network buffers come from {@code PooledByteBufAllocator}, whose {@code newHeapBuffer} <em>does</em>
- * call {@code toLeakAwareBuffer} unconditionally, so heap buffers flowing through the real
- * transport are genuinely tracked.
+ * <p>Deliberately allocates {@link Unpooled#directBuffer}, not {@link Unpooled#buffer}. Netty never
+ * leak-tracks {@code Unpooled}'s heap buffers at all - {@code AbstractByteBufAllocator#heapBuffer}
+ * calls {@code newHeapBuffer} directly with no {@code toLeakAwareBuffer} wrapping, and {@code
+ * UnpooledByteBufAllocator#newHeapBuffer} doesn't call {@code ResourceLeakDetector#track} either -
+ * a heap buffer's backing {@code byte[]} is ordinary JVM-heap memory the garbage collector already
+ * reclaims on its own, so Netty's leak detector, which exists to catch forgotten off-heap/native
+ * memory, doesn't bother. Only direct buffers and composite buffers go through {@code
+ * toLeakAwareBuffer}. This was found the hard way: an earlier version of this test used {@code
+ * Unpooled.buffer()} and never detected its own deliberate leak, no matter how much GC/queue-drain
+ * nudging was added, because the buffer was never tracked in the first place. The real driver's
+ * production path is unaffected by this - Reactor Netty's actual network buffers come from {@code
+ * PooledByteBufAllocator}, whose {@code newHeapBuffer} <em>does</em> call {@code toLeakAwareBuffer}
+ * unconditionally, so heap buffers flowing through the real transport are genuinely tracked.
  */
 class NettyLeakDetectionAbilityTest implements NettyLeakDetectionAbility {
 

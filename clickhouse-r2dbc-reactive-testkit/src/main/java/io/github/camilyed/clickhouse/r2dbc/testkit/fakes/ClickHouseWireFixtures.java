@@ -39,16 +39,23 @@ public final class ClickHouseWireFixtures {
   }
 
   /**
-   * One column named {@code "n"} of type {@code Int32} (a 4-byte value), but the response body ends
-   * after only 2 of those 4 bytes — a truncated/corrupt response, as opposed to a genuinely empty
-   * result set. A clean end-of-stream exactly at a row boundary (no partial row started) is a
-   * valid, zero-row result — see {@code core.fakes.RowBinaryFixtures}'s Javadoc on the reader's
-   * one-row lookahead for why. Truncation strictly <em>inside</em> a value already being read is
-   * what forces an actual decode failure rather than "no more rows."
+   * Two columns - {@code "a"} ({@code UInt8}, fully present) and {@code "b"} ({@code Int32}, a
+   * 4-byte value truncated after only 2 of those bytes) - a response that ends abruptly mid-value,
+   * forcing a genuine row-decode failure rather than a clean "no more rows" result.
+   *
+   * <p>A single truncated column is not enough to force this: client-v2's {@code
+   * AbstractBinaryFormatReader#readRecord} explicitly swallows an {@code EOFException} that hits a
+   * row's <em>first</em> column - {@code if (firstColumn) { endReached(); return false; }} - and
+   * treats it exactly like a genuinely empty result set, indistinguishable from a clean
+   * end-of-stream at a row boundary. It only rethrows (and the reader surfaces a real failure) when
+   * the {@code EOFException} hits a <em>later</em> column in a row whose first column already read
+   * successfully. So {@code "a"} has to fully succeed, and the truncation has to land on {@code
+   * "b"}, for this fixture to actually exercise a decode failure instead of silently decoding as
+   * zero rows.
    */
   public static byte[] truncatedInt32ValueRowBinaryWithNamesAndTypes() {
     return rowBinaryWithNamesAndTypes(
-        new String[] {"n"}, new String[] {"Int32"}, new byte[] {0x01, 0x02});
+        new String[] {"a", "b"}, new String[] {"UInt8", "Int32"}, new byte[] {0x01, 0x02, 0x03});
   }
 
   private static byte[] rowBinaryWithNamesAndTypes(
