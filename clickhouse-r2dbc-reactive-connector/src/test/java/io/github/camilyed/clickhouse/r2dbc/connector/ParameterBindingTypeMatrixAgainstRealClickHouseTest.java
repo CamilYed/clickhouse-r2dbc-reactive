@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.InstanceOfAssertFactories.LIST;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
@@ -241,7 +242,7 @@ class ParameterBindingTypeMatrixAgainstRealClickHouseTest extends BaseClickHouse
             .blockFirst(Duration.ofSeconds(10));
 
     // then
-    assertThat(decoded).containsExactly(1, 2, 3);
+    assertThat(decoded).asInstanceOf(LIST).containsExactly(1, 2, 3);
   }
 
   @Test
@@ -261,7 +262,7 @@ class ParameterBindingTypeMatrixAgainstRealClickHouseTest extends BaseClickHouse
             .blockFirst(Duration.ofSeconds(10));
 
     // then
-    assertThat(decoded).containsExactly("it's", "plain");
+    assertThat(decoded).asInstanceOf(LIST).containsExactly("it's", "plain");
   }
 
   private <T> Flux<T> select(final String sql, final String column, final Class<T> type) {
