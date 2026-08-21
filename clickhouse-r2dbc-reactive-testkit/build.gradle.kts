@@ -19,4 +19,30 @@ dependencies {
     api(platform(libs.testcontainers.bom))
     api(libs.testcontainers.junit.jupiter)
     api(libs.testcontainers.clickhouse)
+
+    // Netty's internal logger falls back to SLF4J's NOP implementation when no binding is on the
+    // classpath, and NOP's isErrorEnabled() always returns false. Netty's own
+    // ResourceLeakDetector#reportLeak() gates its entire report path on that flag - with no binding
+    // here, LeakRecordingResourceLeakDetector#reportTracedLeak/reportUntracedLeak were never called
+    // at all, independent of GC timing or queue-draining. See NettyLeakDetectionAbilityTest, which
+    // is what actually exposed this (its own leak went undetected even after nudging GC).
+    testRuntimeOnly(libs.slf4j.simple)
+}
+
+// Netty leak-detection test lane (ROADMAP.md Phase 7 item 6, non-functional requirements section):
+// paranoid samples every single ByteBuf allocation instead of Netty's default ~1%, so a forgotten
+// .release() in a short-lived test is actually seen instead of silently missed by sampling.
+// targetRecords raises the recorded-access history per buffer so a leak report's stack trace shows
+// where the buffer was actually last touched, not just where it was allocated. customResourceLeakDetector
+// installs LeakRecordingResourceLeakDetector as Netty's detector for every resource type - it must be
+// set via this JVM property, not programmatically, because Netty binds AbstractByteBuf's detector into
+// a static final field the first time any ByteBuf is ever allocated in the JVM, which always happens
+// before any single test method could call an install-at-runtime method (see that class's Javadoc for
+// the concrete failure this replaced).
+tasks.test {
+    jvmArgs(
+        "-Dio.netty.leakDetection.level=paranoid",
+        "-Dio.netty.leakDetection.targetRecords=25",
+        "-Dio.netty.customResourceLeakDetector=io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector"
+    )
 }

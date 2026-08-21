@@ -1136,17 +1136,21 @@ matter more here because this phase is concurrency- and resource-lifecycle-heavy
    this first pass: predictable ordering, simple error semantics, no surprise concurrency increase.
    Batched/coalesced multi-row `INSERT` SQL is explicitly deferred — a large insert should keep using
    `insertStreaming` (already the documented fast path), not wait on this.
-6. **Netty leak-detection test lane — deferred out of `0.2.0`.** A dedicated test task/lane run with
-   an aggressive Netty leak detector, specifically covering cancellation, disconnect mid-response,
-   decoder failure, timeout, retry, and downstream cancellation after a few records — the shapes most
-   likely to strand a `ByteBuf`. Already named as important in [Non-functional
+6. **Netty leak-detection test lane — deferred out of `0.2.0`, completed as follow-up work.** A
+   dedicated test task/lane run with an aggressive Netty leak detector, specifically covering
+   cancellation, disconnect mid-response, decoder failure, timeout, retry, and downstream
+   cancellation after a few records — the shapes most likely to strand a `ByteBuf`. Already named as
+   important in [Non-functional
    requirements](#non-functional-requirements-logging-metrics-leaks); this is where it was meant to
-   get built. Not implemented for `0.2.0`: a partial pilot exists on the unmerged
-   `feature/183-netty-leak-detection-lane` branch (paranoid-level detector, covering only
-   cancellation and reset-mid-response — two of the six target shapes above), left unfinished rather
-   than rushed in. Explicitly moved to a future release; see
+   get built. Not implemented for `0.2.0` — see
    [CHANGELOG.md](CHANGELOG.md#020--2026-08-20-phase-7-operational-control--r2dbc-correctness)'s
-   `0.2.0` Deferred section.
+   `0.2.0` Deferred section — but finished afterward on the rebased
+   `feature/183-leak-detection-rebased` branch (paranoid-level detector, all six target shapes now
+   covered: the original pilot's cancellation and reset-mid-response, plus timeout and retry added to
+   two already-existing scenario tests, and two new tests for decoder failure — a truncated
+   multi-byte value, not simply an empty result — and downstream cancellation after a few records,
+   the latter driven through the real production wiring (`RowBinaryDecoder#decode` +
+   `RowDecodingScheduler`), not the raw `decodeRows()` entry point).
 7. **An R2DBC compatibility/TestKit lane**, using official R2DBC test tooling where it applies, with
    ClickHouse's intentional non-support explicitly documented rather than silently skipped:
    transactions, savepoints, generated keys (where they don't make sense for this model), batch
@@ -1264,15 +1268,12 @@ block on earlier ones except where noted):
       PR 1, the shared consumption guard.
 - [x] Typed `Row.get` has controlled, tested conversions for the P0 type matrix — PR 2.
 - [x] `Statement.add()` works correctly (sequential, one `Result` per binding set) — PR 3.
-- [ ] ~~Cancellation/timeout/error paths leave no `ByteBuf` leaks (leak-detector lane passes)~~ —
-      **decided: deferred out of `0.2.0`, not silently dropped.** Item 6 was never actually
-      implemented (no `-Dio.netty.leakDetection.level=paranoid` JVM arg exists anywhere in the
-      build; no PR in the [PR sequence](#pr-sequence) table above scoped it). A partial pilot exists
-      on the unmerged `feature/183-netty-leak-detection-lane` branch (covers 2 of the 6 target
-      shapes), left unfinished. This box is intentionally left unchecked for `0.2.0` — see item 6's
-      own entry above and
+- [x] Cancellation/timeout/error paths leave no `ByteBuf` leaks (leak-detector lane passes) — deferred
+      out of `0.2.0` itself (not implemented for that release, see item 6's own entry above and
       [CHANGELOG.md](CHANGELOG.md#020--2026-08-20-phase-7-operational-control--r2dbc-correctness)'s
-      Deferred section — rather than blocking the release on finishing it now.
+      Deferred section), completed afterward: all six target shapes covered on the rebased
+      `feature/183-leak-detection-rebased` branch, pending a local `./gradlew spotlessCheck clean
+      build` confirmation before merge.
 - [x] A test actively protects the Netty event loop from a blocking decode call — PR 6, the
       driver-owned `RowDecodingScheduler` plus its ownership/threading tests.
 - [x] It's written down which R2DBC compatibility cases are supported vs. deliberately unsupported —

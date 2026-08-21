@@ -23,6 +23,41 @@ public final class ClickHouseWireFixtures {
         new String[] {"1"}, new String[] {"UInt8"}, new byte[] {0x01});
   }
 
+  /**
+   * One column named {@code "1"} of type {@code UInt8}, two rows with values {@code 1} and {@code
+   * 2} — both fully present in this single chunk. Mirrors {@code
+   * core.fakes.RowBinaryFixtures#twoRowsOfUInt8RowBinaryWithNamesAndTypes()} (kept as a small
+   * module-local copy rather than a shared dependency for the same reason as that class's own
+   * Javadoc explains: {@code testkit} depends on {@code core}, so {@code core} cannot depend back
+   * on {@code testkit} without a cycle). Exists so a test consuming rows through a real network
+   * response (not a hermetic {@code Flux.just(...)}) has more than one row to cancel after the
+   * first.
+   */
+  public static byte[] twoRowsOfUInt8RowBinaryWithNamesAndTypes() {
+    return rowBinaryWithNamesAndTypes(
+        new String[] {"1"}, new String[] {"UInt8"}, new byte[] {0x01, 0x02});
+  }
+
+  /**
+   * Two columns - {@code "a"} ({@code UInt8}, fully present) and {@code "b"} ({@code Int32}, a
+   * 4-byte value truncated after only 2 of those bytes) - a response that ends abruptly mid-value,
+   * forcing a genuine row-decode failure rather than a clean "no more rows" result.
+   *
+   * <p>A single truncated column is not enough to force this: client-v2's {@code
+   * AbstractBinaryFormatReader#readRecord} explicitly swallows an {@code EOFException} that hits a
+   * row's <em>first</em> column - {@code if (firstColumn) { endReached(); return false; }} - and
+   * treats it exactly like a genuinely empty result set, indistinguishable from a clean
+   * end-of-stream at a row boundary. It only rethrows (and the reader surfaces a real failure) when
+   * the {@code EOFException} hits a <em>later</em> column in a row whose first column already read
+   * successfully. So {@code "a"} has to fully succeed, and the truncation has to land on {@code
+   * "b"}, for this fixture to actually exercise a decode failure instead of silently decoding as
+   * zero rows.
+   */
+  public static byte[] truncatedInt32ValueRowBinaryWithNamesAndTypes() {
+    return rowBinaryWithNamesAndTypes(
+        new String[] {"a", "b"}, new String[] {"UInt8", "Int32"}, new byte[] {0x01, 0x02, 0x03});
+  }
+
   private static byte[] rowBinaryWithNamesAndTypes(
       final String[] columnNames, final String[] columnTypes, final byte[] rowBytes) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();

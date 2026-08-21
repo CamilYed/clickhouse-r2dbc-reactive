@@ -12,6 +12,15 @@ the version it was given and fails the release if it can't find one. See
 
 ## [Unreleased] — 0.2.1
 
+### Added
+
+- **Netty `ByteBuf` leak-detection test lane**, completed as follow-up to the pilot deferred out of
+  `0.2.0` (see that release's Deferred section below). Runs `transport-http` and `testkit` tests with
+  `-Dio.netty.leakDetection.level=paranoid` and a custom `LeakRecordingResourceLeakDetector`, and now
+  covers all six target shapes from [ROADMAP.md](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)'s
+  item 6: cancellation, disconnect mid-response, decoder failure, timeout, retry, and downstream
+  cancellation after a few records.
+
 ### Fixed
 
 - **Cancelling a query via `Flux.next()`-style single-element consumption no longer forfeits
