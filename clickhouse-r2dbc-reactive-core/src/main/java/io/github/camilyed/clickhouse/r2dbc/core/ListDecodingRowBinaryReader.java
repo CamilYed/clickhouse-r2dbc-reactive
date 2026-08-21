@@ -12,8 +12,8 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Decodes {@code Array}/{@code Nested} columns as a plain {@link List} instead of client-v2's
- * {@code .internal} {@code BinaryStreamReader.ArrayValue}.
+ * Decodes {@code Array}/{@code Nested} columns as a plain {@link List}, and {@code Enum8}/{@code
+ * Enum16} columns as a plain {@link String}, instead of client-v2's {@code .internal} types.
  *
  * <p>client-v2's own row-reading path ({@code next()}/{@code readRecord()}) always calls {@code
  * BinaryStreamReader.readValue(column, null)} — a {@code null} type hint — so {@code Array}/{@code
@@ -26,6 +26,19 @@ import org.jspecify.annotations.Nullable;
  * deliberate, contained compromise as {@link FluxInputStreamBridge}'s bridge to a blocking {@code
  * InputStream} (Phase 0). Every other column type keeps decoding exactly as before (hint {@code
  * null}), so this changes nothing for the type-decoding surface already covered elsewhere.
+ *
+ * <p>{@code Enum8}/{@code Enum16} columns get a second, narrower normalization: client-v2 has no
+ * type-hint mechanism for them (unlike {@code Array}/{@code Nested}'s {@code List.class} hint
+ * above) — {@code readValue(column, null)} always returns its own {@code .internal} {@code
+ * EnumValue}. That type happens to override {@link Object#toString()} to return the member name
+ * (e.g. {@code "PLACED"}), so this class calls {@code toString()} on the result for any column
+ * whose {@link ClickHouseDataType} is {@code Enum8}/{@code Enum16}, once per row, immediately after
+ * {@code readValue} returns — turning an internal type a caller would otherwise have to know to
+ * unwrap (see {@code RealWorldTableAgainstRealClickHouseTest}'s Javadoc for how this used to be
+ * read) into a plain {@link String} at the driver boundary, the same "never leak a client-v2 {@code
+ * .internal} type through {@code Row}" goal the {@code Array}/{@code Nested} handling above already
+ * serves. A {@code null} value (a {@code Nullable(Enum8)} column with no row set) is left as {@code
+ * null} rather than the literal string {@code "null"}.
  */
 final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormatReader {
 
@@ -33,6 +46,7 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
   // listHints()'s Javadoc for why caching them here, instead of recomputing per row, is safe.
   private @Nullable List<ClickHouseColumn> cachedColumns;
   private Class<?> @Nullable [] cachedListHints;
+  private boolean @Nullable [] cachedEnumColumns;
 
   ListDecodingRowBinaryReader(
       final InputStream inputStream,
@@ -48,6 +62,7 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
       return false;
     }
     final Class<?>[] listHints = listHints(columns);
+    final boolean[] enumColumns = enumColumns(columns);
     for (int i = 0; i < columns.size(); i++) {
       try {
         values[i] = binaryStreamReader.readValue(columns.get(i), listHints[i]);
@@ -57,6 +72,9 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
           return false;
         }
         throw e;
+      }
+      if (enumColumns[i] && values[i] != null) {
+        values[i] = values[i].toString();
       }
     }
     return true;
@@ -107,6 +125,28 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
     final boolean isListLike =
         dataType == ClickHouseDataType.Array || dataType == ClickHouseDataType.Nested;
     return isListLike ? List.class : null;
+  }
+
+  /**
+   * One {@link #isEnumColumn(ClickHouseColumn)} result per column of {@code columns}, computed once
+   * for the whole result — same fixed-per-result caching reasoning as {@link #listHints}.
+   */
+  private boolean[] enumColumns(final List<ClickHouseColumn> columns) {
+    boolean[] enumColumns = cachedEnumColumns;
+    if (enumColumns == null) {
+      enumColumns = new boolean[columns.size()];
+      for (int i = 0; i < columns.size(); i++) {
+        enumColumns[i] = isEnumColumn(columns.get(i));
+      }
+      cachedEnumColumns = enumColumns;
+    }
+    return enumColumns;
+  }
+
+  /** {@code true} for {@code Enum8}/{@code Enum16} — see this class's own Javadoc. */
+  private static boolean isEnumColumn(final ClickHouseColumn column) {
+    final ClickHouseDataType dataType = column.getDataType();
+    return dataType == ClickHouseDataType.Enum8 || dataType == ClickHouseDataType.Enum16;
   }
 
   /**

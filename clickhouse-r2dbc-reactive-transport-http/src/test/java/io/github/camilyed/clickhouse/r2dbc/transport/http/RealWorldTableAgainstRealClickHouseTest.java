@@ -75,15 +75,15 @@ import org.junit.jupiter.api.Test;
  *       type), the same shape as {@code Nullable}, so this proves the unwrapping works end to end
  *       rather than assuming client-v2's own tests are enough.
  *   <li><b>Specialized</b> — {@code UUID} covered ({@link #shouldDecodeSpecializedTypes()}); {@code
- *       Enum8}/{@code Enum16} covered ({@link #shouldDecodeEnumTypes()}): the returned value is
- *       still an {@code .internal} {@code EnumValue} instance, but it publicly overrides {@code
- *       toString()} to return the member name, so calling {@code toString()} on the opaque {@code
- *       Object} reads the value without ever importing or casting to the internal type — the
- *       tradeoff being a dependency on {@code toString()}'s current behavior rather than a
- *       documented contract, since the whole class is {@code .internal}. Geo types, vector-search
- *       types ({@code QBit}), and domains not attempted yet (next likely quick win: {@code
- *       readGeoPoint()}/{@code readGeoRing()} etc. also return plain arrays, same shape as {@code
- *       Map}/{@code Tuple} above).
+ *       Enum8}/{@code Enum16} covered ({@link #shouldDecodeEnumTypes()}): decodes as a plain {@link
+ *       String} of the member name (e.g. {@code "PLACED"}), not client-v2's {@code .internal}
+ *       {@code EnumValue} — {@code core}'s {@code ListDecodingRowBinaryReader} normalizes it away
+ *       at the driver boundary the same way it already does for {@code Array}/{@code Nested} (see
+ *       that class's Javadoc), so a caller can ask for {@code String.class} directly instead of
+ *       {@code Object.class} plus a {@code toString()} call. Geo types, vector-search types ({@code
+ *       QBit}), and domains not attempted yet (next likely quick win: {@code readGeoPoint()}/{@code
+ *       readGeoRing()} etc. also return plain arrays, same shape as {@code Map}/{@code Tuple}
+ *       above).
  *   <li><b>Aggregate function</b> ({@code AggregateFunction}/{@code SimpleAggregateFunction}) — not
  *       attempted; these store intermediate aggregation state, not plain literal-insertable values,
  *       so proving them needs a different test shape (insert via an aggregate query, not a

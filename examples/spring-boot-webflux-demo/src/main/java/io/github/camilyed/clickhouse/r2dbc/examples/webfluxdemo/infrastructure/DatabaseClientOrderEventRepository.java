@@ -33,8 +33,8 @@ import reactor.core.publisher.Mono;
  * adapter, not assumed.
  *
  * <p>Rows are mapped back via {@code Row.get(name, Class)} with hand-picked target types rather
- * than Spring Data's converters — two real, driver-wide gotchas surfaced doing that, both
- * documented here rather than hidden behind a silently-"working" helper:
+ * than Spring Data's converters — a real, driver-wide gotcha surfaced doing that, documented here
+ * rather than hidden behind a silently-"working" helper:
  *
  * <ul>
  *   <li>{@code count()}'s {@code UInt64} result is explicitly cast to {@code UInt32} server-side
@@ -45,14 +45,18 @@ import reactor.core.publisher.Mono;
  *       raw {@code UInt64} column throws {@link ClassCastException}. A real application counting
  *       rows that could exceed {@code UInt32}'s range would request {@link java.math.BigInteger}
  *       instead.
- *   <li>{@code status} ({@code Enum8}) decodes as client-v2's own internal {@code EnumValue}, not a
- *       plain {@link String} — asking {@code Row.get(name, String.class)} for it throws {@link
- *       ClassCastException} the same way. Read here via {@code Object.class} and {@code
- *       toString()}, then parsed into {@link OrderStatus} — see that enum's own Javadoc. Worth
- *       flagging as a possible future driver improvement (decoding {@code Enum8}/{@code Enum16} as
- *       plain {@link String} directly, rather than leaking an internal client-v2 type through the
- *       public R2DBC {@code Row} surface), not something this demo tries to fix itself.
  * </ul>
+ *
+ * <p>{@code status} ({@code Enum8}) still needs the {@code Object.class}/{@code toString()}
+ * workaround here, even though {@code core.ListDecodingRowBinaryReader} was fixed to decode {@code
+ * Enum8}/{@code Enum16} as a plain {@link String} directly (see ROADMAP.md's Phase 8 item 1, and
+ * {@link OrderStatus}'s own Javadoc) — <b>this module deliberately depends on the last published
+ * Maven Central release, not the current in-repo driver</b> (see this build's {@code
+ * build.gradle.kts}), so it only picks up that fix once a release containing it is published and
+ * this dependency is bumped. Asking for {@code Row.get(name, String.class)} against the
+ * currently-pinned release throws {@link ClassCastException} — confirmed the hard way (a green
+ * core-module unit test and a red demo integration test at the same time, both correct for what
+ * each module actually runs).
  */
 @Repository
 class DatabaseClientOrderEventRepository implements OrderEventRepository {

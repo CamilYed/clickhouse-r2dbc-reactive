@@ -65,6 +65,16 @@ public final class RowBinaryFixtures {
         });
   }
 
+  /**
+   * One column named {@code "status"} of type {@code Enum8('a' = 1, 'b' = 2)}, one row selecting
+   * member {@code 'b'} (ordinal {@code 2}) — the wire encoding for an {@code Enum8} value is a
+   * single signed byte equal to its ordinal, same as a plain {@code Int8}.
+   */
+  public static byte[] enum8SingleValueRowBinaryWithNamesAndTypes() {
+    return rowBinaryWithNamesAndTypes(
+        new String[] {"status"}, new String[] {"Enum8('a' = 1, 'b' = 2)"}, new byte[] {0x02});
+  }
+
   private static byte[] rowBinaryWithNamesAndTypes(
       final String[] columnNames, final String[] columnTypes, final byte[] rowBytes) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();

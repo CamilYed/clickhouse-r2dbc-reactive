@@ -29,6 +29,14 @@ the version it was given and fails the release if it can't find one. See
 
 ### Fixed
 
+- **`Enum8`/`Enum16` columns now decode as a plain `String` of the member name, not client-v2's
+  internal `EnumValue`.** `Row.get(name, String.class)` works directly — previously a caller had to
+  ask for `Object.class` and call `toString()` on the result to read the value without depending on
+  the internal type. See [ROADMAP.md's Phase 8, item
+  1](ROADMAP.md#phase-8--post-020-hardening-021) and the "`Enum8`/`Enum16` resolved" note under
+  [Phase 2](ROADMAP.md#phase-2--core-protocol--testkit-contract-tests). (The bundled demo still uses
+  the old workaround on purpose — it pins the last published release, which doesn't contain this fix
+  yet.)
 - **Cancelling a query via `Flux.next()`-style single-element consumption no longer forfeits
   connection-pool reuse.** `RowBinaryDecoder`'s disposal hook (added in `0.2.0` to fix a real
   resource-cleanup gap on downstream cancellation) called `FluxInputStreamBridge#close()`

@@ -103,15 +103,18 @@ public final class ClickHouseRowAssert
   }
 
   /**
-   * Asserts {@code column} is a decoded {@code Enum8}/{@code Enum16} value whose member name is
-   * {@code expected}. The decoded value is client-v2's own internal {@code EnumValue}, read here
-   * only via its public {@link Object#toString()}, not by name — see {@code
-   * RealWorldTableAgainstRealClickHouseTest}'s Javadoc for why that's the deliberate, minimal way
-   * to read it without depending on the internal type itself.
+   * Asserts {@code column} is a decoded {@code Enum8}/{@code Enum16} value equal to {@code
+   * expected} — a plain {@link String} of the member name, not client-v2's internal {@code
+   * EnumValue} (normalized away at the driver boundary by {@code ListDecodingRowBinaryReader}, see
+   * its Javadoc). Asserts the actual runtime type, not just {@code toString()} equality, so this
+   * assertion would fail again if the internal type ever leaked back through.
    */
   public ClickHouseRowAssert hasEnumName(final String column, final String expected) {
     isNotNull();
-    assertThat(actual.get(column)).as(COLUMN_DESCRIPTION, column).hasToString(expected);
+    assertThat(actual.get(column))
+        .as(COLUMN_DESCRIPTION, column)
+        .isInstanceOf(String.class)
+        .isEqualTo(expected);
     return this;
   }
 
