@@ -172,6 +172,60 @@ class FluxInputStreamBridgeTest {
   }
 
   @Test
+  void shouldReachNaturalCompletionInsteadOfCancellingWhenTheRestOfTheResponseHasAlreadyArrived()
+      throws IOException {
+    // given - mirrors Flux#next(): only the first chunk is ever read, but by the time close() runs
+    // the rest of a small response (one more chunk, then completion) has already arrived and is
+    // sitting in the queue - the realistic case for an already-received small/point-query response.
+    final AtomicBoolean cancelled = new AtomicBoolean();
+    final AtomicReference<FluxSink<ByteBuffer>> sinkRef = new AtomicReference<>();
+    final Flux<ByteBuffer> source =
+        Flux.<ByteBuffer>create(sinkRef::set).doOnCancel(() -> cancelled.set(true));
+
+    // when
+    final int firstByte;
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      sinkRef.get().next(ByteBuffer.wrap("f".getBytes(StandardCharsets.UTF_8)));
+      firstByte = bridge.read();
+      sinkRef.get().next(ByteBuffer.wrap("second".getBytes(StandardCharsets.UTF_8)));
+      sinkRef.get().complete();
+    }
+
+    // then
+    assertThat(firstByte).isEqualTo('f');
+    // and - closing must not have sent a fresh cancel to the upstream: it already reached Complete
+    // naturally before close() ever ran, so a transport underneath this source (e.g. Reactor
+    // Netty's HTTP client) would see a normally-finished response, eligible for connection reuse.
+    assertThat(cancelled.get()).isFalse();
+  }
+
+  @Test
+  void shouldFallBackToCancellingWhenMoreThanTheDrainBudgetIsStillUnread() throws IOException {
+    // given - one small chunk is read, then far more than the drain byte budget (64 KiB) arrives
+    // without ever completing - standing in for a caller abandoning a large, still-streaming
+    // response early (e.g. cancelling a big scan after the first few rows). The bounded drain must
+    // give up quickly here rather than reading the whole remaining response just to avoid a cancel.
+    final AtomicBoolean cancelled = new AtomicBoolean();
+    final AtomicReference<FluxSink<ByteBuffer>> sinkRef = new AtomicReference<>();
+    final Flux<ByteBuffer> source =
+        Flux.<ByteBuffer>create(sinkRef::set).doOnCancel(() -> cancelled.set(true));
+
+    // when
+    try (InputStream bridge = FluxInputStreamBridge.subscribeTo(source, 4)) {
+      sinkRef.get().next(ByteBuffer.wrap("f".getBytes(StandardCharsets.UTF_8)));
+      assertThat(bridge.read()).isEqualTo('f');
+      sinkRef.get().next(ByteBuffer.wrap(new byte[20_000]));
+      sinkRef.get().next(ByteBuffer.wrap(new byte[20_000]));
+      sinkRef.get().next(ByteBuffer.wrap(new byte[20_000]));
+      sinkRef.get().next(ByteBuffer.wrap(new byte[20_000]));
+      // deliberately never completed - a still-active, still-arriving response
+    }
+
+    // then
+    assertThat(cancelled.get()).isTrue();
+  }
+
+  @Test
   void shouldReturnZeroWhenReadingZeroLengthEvenAfterTheStreamHasEnded() throws IOException {
     // given
     final Flux<ByteBuffer> source =
