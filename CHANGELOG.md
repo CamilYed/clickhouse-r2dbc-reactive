@@ -26,6 +26,15 @@ the version it was given and fails the release if it can't find one. See
   covers all six target shapes from [ROADMAP.md](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)'s
   item 6: cancellation, disconnect mid-response, decoder failure, timeout, retry, and downstream
   cancellation after a few records.
+- **`responseTimeout` R2DBC connection option** (`ClickHouseConnectionFactoryProvider.RESPONSE_TIMEOUT`),
+  e.g. `r2dbc:clickhouse://host?responseTimeout=PT30S`. The transport already supported it end to end
+  (`TransportOptions`/`ClickHouseHttpTransport`, proven against a hermetic controlled server since
+  `0.2.0`); it just wasn't reachable from R2DBC connection options until now. Its Javadoc documents
+  how it relates to the other three timeouts this driver has (`connectTimeout`, server-side
+  `statementTimeout`/`max_execution_time`, `transportPendingAcquireTimeout`) — README's connection
+  options table corrected too, since it previously had `connectTimeout`'s row describing
+  `responseTimeout`'s actual behavior. See [ROADMAP.md's Phase 8, item
+  4](ROADMAP.md#phase-8--post-020-hardening-021).
 
 ### Fixed
 

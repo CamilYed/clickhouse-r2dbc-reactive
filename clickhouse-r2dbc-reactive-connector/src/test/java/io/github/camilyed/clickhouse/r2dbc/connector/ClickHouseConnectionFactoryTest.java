@@ -78,6 +78,50 @@ class ClickHouseConnectionFactoryTest {
   }
 
   @Test
+  void shouldAcceptAConfiguredResponseTimeout() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.RESPONSE_TIMEOUT, Duration.ofSeconds(30))
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldAcceptAResponseTimeoutParsedFromAUrlQueryString() {
+    // given - ConnectionFactoryOptions.parse(url) stores query-string values as plain Strings, not
+    // as the Duration this option is declared as; this is the actual R2DBC-URL bootstrap path (as
+    // opposed to shouldAcceptAConfiguredResponseTimeout above, which builds a typed option
+    // directly).
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.parse("r2dbc:clickhouse://localhost:8123?responseTimeout=PT30S");
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.getMetadata().getName()).isEqualTo("ClickHouse");
+  }
+
+  @Test
+  void shouldRejectAnInvalidResponseTimeoutParsedFromAUrlQueryString() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.parse(
+            "r2dbc:clickhouse://localhost:8123?responseTimeout=not-a-duration");
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(DateTimeParseException.class);
+  }
+
+  @Test
   void shouldRejectOptionsWithNoHost() {
     // given
     final ConnectionFactoryOptions options =

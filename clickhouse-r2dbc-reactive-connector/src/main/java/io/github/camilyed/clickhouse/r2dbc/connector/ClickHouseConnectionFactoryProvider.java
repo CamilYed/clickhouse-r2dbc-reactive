@@ -24,6 +24,42 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
   public static final String DRIVER = "clickhouse";
 
   /**
+   * How long to wait for ClickHouse's HTTP response once a request has been sent, e.g. {@code
+   * responseTimeout=PT30S} — applied to every query run over a {@link ClickHouseConnection} this
+   * factory produces. Defaults to {@code null} (no timeout at all): ClickHouse is an analytical
+   * database where a legitimate query can easily run far longer than a typical OLTP request, so
+   * this driver does not impose an arbitrary global time limit unless a caller explicitly asks for
+   * one — see {@code ClickHouseHttpTransport}'s own Javadoc for the full reasoning (an earlier
+   * version of this transport hardcoded a 2-second response timeout with no way to change it).
+   *
+   * <p>Four different timeouts exist across this driver, deliberately kept separate because each
+   * bounds a different phase of a request and conflating them silently changes what actually gets
+   * protected:
+   *
+   * <ul>
+   *   <li>{@code responseTimeout} (this option) — how long to wait for response bytes once the
+   *       request has been sent, measured client-side. Applies to every query from this factory.
+   *   <li>{@link ConnectionFactoryOptions#CONNECT_TIMEOUT} — how long to wait for the underlying
+   *       TCP connection itself to establish, before any request is even sent. Wired through to
+   *       Reactor Netty's {@code CONNECT_TIMEOUT_MILLIS} channel option by {@link
+   *       ClickHouseConnectionFactory#from}.
+   *   <li>{@code statementTimeout} ({@code ClickHouseConnection#setStatementTimeout}) —
+   *       ClickHouse's own server-side {@code max_execution_time} setting: how long the server
+   *       itself is willing to keep running the query, regardless of how promptly the client reads
+   *       the response. Set per connection (inherited by statements created afterward), not per
+   *       factory — see that method's Javadoc.
+   *   <li>{@link #TRANSPORT_PENDING_ACQUIRE_TIMEOUT} — how long a queued acquisition waits for a
+   *       pooled connection to free up before failing, entirely before any request is sent at all.
+   * </ul>
+   *
+   * A slow query that has genuinely started executing on the server is bounded by {@code
+   * statementTimeout} (server-side) and this option (client-side wait for bytes), not by {@code
+   * connectTimeout} or {@link #TRANSPORT_PENDING_ACQUIRE_TIMEOUT}, which have both already
+   * succeeded by the time a query is running.
+   */
+  public static final Option<Duration> RESPONSE_TIMEOUT = Option.valueOf("responseTimeout");
+
+  /**
    * A trusted TLS certificate for {@code ssl=true} connections, as a classpath resource path or a
    * filesystem path to a PEM-encoded certificate (or chain) — see {@link
    * ClickHouseConnectionFactory#from} for exactly how the value is resolved. Named and shaped after
@@ -71,8 +107,10 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
       Option.valueOf("transportPendingAcquireMaxCount");
 
   /**
-   * How long a queued acquisition waits for a connection to free up before failing. Defaults to
-   * Reactor Netty's own default when not set.
+   * How long a queued acquisition waits for a connection to free up before failing — entirely
+   * before any request is sent, distinct from {@link #RESPONSE_TIMEOUT} (see that option's Javadoc
+   * for how all four of this driver's timeouts relate). Defaults to Reactor Netty's own default
+   * when not set.
    */
   public static final Option<Duration> TRANSPORT_PENDING_ACQUIRE_TIMEOUT =
       Option.valueOf("transportPendingAcquireTimeout");

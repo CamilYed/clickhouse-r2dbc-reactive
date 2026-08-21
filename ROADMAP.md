@@ -1402,6 +1402,22 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    from `connectTimeout` (TCP connect), `statementTimeout`/`max_execution_time` (server-side query
    execution limit), and `transportPendingAcquireTimeout` (pool queue wait) — document the four
    clearly against each other, since they're easy to conflate.
+
+   **Done (2026-08-21).** `TransportOptions`/`ClickHouseHttpTransport` already carried
+   `responseTimeout` end to end down to Reactor Netty's `HttpClient.responseTimeout(...)`, and its
+   real timeout-firing behavior was already proven at the transport level
+   (`ClickHouseHttpTransportTest.shouldFailWithinAnExplicitlyConfiguredTimeoutWhenTheServerNeverResponds`,
+   hermetic, against a controlled server that never responds) — what was actually missing was the
+   R2DBC-facing option. Added `ClickHouseConnectionFactoryProvider.RESPONSE_TIMEOUT`
+   (`responseTimeout`), wired through `ClickHouseConnectionFactory.from` the same way as every other
+   custom `Duration` option (typed value or ISO-8601 string from a URL query string). Its Javadoc is
+   the actual "document the four clearly" write-up this item asked for, cross-linked from
+   `TRANSPORT_PENDING_ACQUIRE_TIMEOUT` and `ClickHouseConnection.setStatementTimeout`; README's
+   connection-options table corrected too — it had `connectTimeout`'s row describing
+   `responseTimeout`'s behavior, exactly the kind of conflation this item called out. Tests added to
+   `ClickHouseConnectionFactoryTest` mirroring the existing `connectTimeout`/transport-pool-option
+   coverage: typed-option acceptance, URL-query-string parsing, and rejection of an unparseable
+   duration string.
 5. **Characterize mid-stream ClickHouse failure semantics with a named real-server test**: some rows
    already received, then the query fails server-side, then the response stream terminates. No
    existing test proves what this driver actually does today. Required behavior, stated explicitly
