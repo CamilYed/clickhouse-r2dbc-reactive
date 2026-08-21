@@ -19,6 +19,14 @@ dependencies {
     api(platform(libs.testcontainers.bom))
     api(libs.testcontainers.junit.jupiter)
     api(libs.testcontainers.clickhouse)
+
+    // Netty's internal logger falls back to SLF4J's NOP implementation when no binding is on the
+    // classpath, and NOP's isErrorEnabled() always returns false. Netty's own
+    // ResourceLeakDetector#reportLeak() gates its entire report path on that flag - with no binding
+    // here, LeakRecordingResourceLeakDetector#reportTracedLeak/reportUntracedLeak were never called
+    // at all, independent of GC timing or queue-draining. See NettyLeakDetectionAbilityTest, which
+    // is what actually exposed this (its own leak went undetected even after nudging GC).
+    testRuntimeOnly(libs.slf4j.simple)
 }
 
 // Netty leak-detection test lane (ROADMAP.md Phase 7 item 6, non-functional requirements section):
