@@ -271,9 +271,9 @@ public final class ClickHouseHttpTransport {
    * has actually finished (e.g. before exiting the JVM).
    *
    * <p>Not called automatically by anything in this class — see {@code
-   * io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactory#dispose()}, which owns
-   * exactly one transport per factory and is responsible for disposing it once the factory itself is
-   * no longer needed.
+   * io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactory#dispose()}, which
+   * owns exactly one transport per factory and is responsible for disposing it once the factory
+   * itself is no longer needed.
    */
   public void dispose() {
     connectionProvider.dispose();
@@ -287,7 +287,18 @@ public final class ClickHouseHttpTransport {
     return connectionProvider.disposeLater();
   }
 
-  /** Whether {@link #dispose()} (or a subscribed {@link #disposeLater()}) has already run. */
+  /**
+   * Whether {@link #dispose()} (or a subscribed {@link #disposeLater()}) has already run.
+   *
+   * <p><b>Vacuously {@code true} on a transport that has never actually sent a request</b> —
+   * delegates directly to {@link ConnectionProvider#isDisposed()}, whose actual implementation
+   * (Reactor Netty's {@code PooledConnectionProvider}) is {@code channelPools.isEmpty() ||
+   * ...allMatch(Disposable::isDisposed)}: no per-remote-host pool exists at all until the first
+   * request is actually sent, and an empty collection vacuously satisfies {@code allMatch(...)}. Not
+   * useful as an "is this transport ready to use" check before the first query — only meaningful
+   * after at least one request has been sent, or after {@link #dispose()}/{@link #disposeLater()}
+   * has actually been called.
+   */
   public boolean isDisposed() {
     return connectionProvider.isDisposed();
   }
