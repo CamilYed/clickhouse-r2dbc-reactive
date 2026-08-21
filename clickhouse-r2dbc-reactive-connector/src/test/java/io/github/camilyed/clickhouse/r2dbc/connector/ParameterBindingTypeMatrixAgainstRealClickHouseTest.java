@@ -227,7 +227,8 @@ class ParameterBindingTypeMatrixAgainstRealClickHouseTest extends BaseClickHouse
 
   @Test
   void shouldRoundTripANumericArrayParameter() {
-    // given
+    // given - UInt32 doesn't fit in a signed Java int, so the driver decodes each element as
+    // Long (same widening already established for scalar UInt32 columns elsewhere), not Integer
     execute("CREATE TABLE numeric_array_param_test (nums Array(UInt32)) ENGINE = Memory");
 
     // when
@@ -242,7 +243,7 @@ class ParameterBindingTypeMatrixAgainstRealClickHouseTest extends BaseClickHouse
             .blockFirst(Duration.ofSeconds(10));
 
     // then
-    assertThat(decoded).asInstanceOf(LIST).containsExactly(1, 2, 3);
+    assertThat(decoded).asInstanceOf(LIST).containsExactly(1L, 2L, 3L);
   }
 
   @Test

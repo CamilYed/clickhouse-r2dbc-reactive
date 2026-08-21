@@ -1469,14 +1469,25 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    `LIMIT` is deliberately tiny to stay well under that buffer regardless of its exact default.
 6. **Build a real-server parameter-binding type matrix beyond null/integer/string-escaping.**
 
-   **Test written (2026-08-21), pending the user's real-ClickHouse build run** — same honest pattern
-   as item 5 above: the encoder changes below are reasoned from ClickHouse's own documented parameter
-   literal formats (cited inline in `ClickHouseQuery.withParameters`'s Javadoc), not personally
-   run-verified, since this sandbox has no Docker. Confirmed which types needed no change and which
-   needed real encoder work, tested first with hermetic unit tests in `core`'s `ClickHouseQueryTest`
-   (string-level, verifiable without a server) and then end to end against a real server in the new
-   `connector`-module `ParameterBindingTypeMatrixAgainstRealClickHouseTest` (bind → real table column
-   → decode → assert equal to what was bound).
+   **Done (2026-08-21) — confirmed against a real ClickHouse server**, same honest pattern as item 5
+   above: the encoder changes below are reasoned from ClickHouse's own documented parameter literal
+   formats (cited inline in `ClickHouseQuery.withParameters`'s Javadoc), then verified first with
+   hermetic unit tests in `core`'s `ClickHouseQueryTest` (string-level, verifiable without a server)
+   and then end to end against a real server in the new `connector`-module
+   `ParameterBindingTypeMatrixAgainstRealClickHouseTest` (bind → real table column → decode → assert
+   equal to what was bound). One real finding surfaced only by the actual run, not predicted upfront:
+   the numeric-array round trip initially asserted `List<Integer>` back for a bound `Array(UInt32)`
+   column and failed — the decoded elements were `Long`, not `Integer`. Not a driver bug: `Array(T)`
+   decodes each element through the identical per-`ClickHouseDataType` reader a scalar column of type
+   `T` uses (see `ListDecodingRowBinaryReader`'s Javadoc), and `UInt32` already decodes as `Long` for
+   scalar columns too (confirmed in `RealWorldTableAgainstRealClickHouseTest#shouldDecodeNumericTypes`,
+   `.hasValue("uint32_val", 4000000000L)`) — the array case was just never round-tripped against a
+   real server before. Fixed by correcting the test's expected values, and documented the underlying
+   rule (`Array(T)` element type always mirrors scalar `T`'s decode type) in
+   `ClickHouseValueConverter`'s Javadoc, since that class's existing numeric conversion matrix
+   deliberately does not extend to `List` elements — a caller asking for `List.class` back always gets
+   exactly the element types the decoder produced, with no widening/narrowing, so this was worth
+   spelling out rather than leaving as an implicit, easy-to-assume-wrong detail.
 
    `UUID`, `BigDecimal`, `LocalDate`, `Boolean`, and any `enum` constant needed **no encoder change**
    — Java's own `toString()` already matches ClickHouse's literal format for each (`LocalDate`'s

@@ -32,6 +32,23 @@ import org.jspecify.annotations.Nullable;
  * Boolean}) needs no conversion at all - the identity fast path below returns it directly - so this
  * class only ever has to handle the two matrices above. Every conversion failure throws {@link
  * ClickHouseValueConversionException}.
+ *
+ * <p><b>{@code List} elements (from an {@code Array}/{@code Nested} column) are deliberately not
+ * covered by the numeric matrix above</b> - {@code convert} only ever inspects the {@code List}
+ * itself against the identity fast path, never its elements, so a caller asking for {@code
+ * List.class} always gets back exactly the element types {@code core}'s {@code
+ * ListDecodingRowBinaryReader}/client-v2's {@code convertArray()} produced, with no
+ * widening/narrowing applied. That element type is not a guess: client-v2 decodes each array
+ * element through the identical per-{@code ClickHouseDataType} reader a scalar column of that same
+ * type uses (see {@code ListDecodingRowBinaryReader}'s Javadoc), so {@code Array(T)} always decodes
+ * to a {@code List} of exactly the Java type a scalar column of type {@code T} would - e.g. {@code
+ * Array(Int32)} to {@code List<Integer>}, {@code Array(UInt32)} to {@code List<Long>} (widened, the
+ * same as scalar {@code UInt32}), {@code Array(String)} to {@code List<String>}. The full
+ * scalar-type table this mirrors is verified against a real server in {@code
+ * RealWorldTableAgainstRealClickHouseTest#shouldDecodeNumericTypes()} (transport-http module).
+ * Requesting element-level conversion (e.g. reading an {@code Array(UInt32)} column as {@code
+ * List<Integer>}) is not supported - it would need to iterate and convert every element on every
+ * row, and no caller has needed it yet.
  */
 final class ClickHouseValueConverter {
 
