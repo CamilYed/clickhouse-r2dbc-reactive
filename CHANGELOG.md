@@ -35,6 +35,14 @@ the version it was given and fails the release if it can't find one. See
   options table corrected too, since it previously had `connectTimeout`'s row describing
   `responseTimeout`'s actual behavior. See [ROADMAP.md's Phase 8, item
   4](ROADMAP.md#phase-8--post-020-hardening-021).
+- **Test coverage characterizing a query failing mid-stream** (some rows already delivered, then
+  ClickHouse fails server-side) — `MidStreamQueryFailureAgainstRealClickHouseTest` — plus
+  confirmation that ClickHouse's own `wait_end_of_query=1` opt-in (buffer the whole response
+  server-side for a clean error instead of streaming) is already reachable today with zero code
+  changes via `ClickHouseQuery.withSettings(Map.of("wait_end_of_query", "1"))`. See
+  [ROADMAP.md's Phase 8, item 5](ROADMAP.md#phase-8--post-020-hardening-021) for the full analysis,
+  including why the streaming-by-default case is suspected (pending a real run to confirm) not to
+  surface as a clean `ServerException`.
 
 ### Fixed
 

@@ -1426,6 +1426,42 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    already emitted per Reactive Streams semantics (no retroactive un-emitting). Also worth confirming
    whether `wait_end_of_query=1` is already reachable through the generic settings API as a documented
    opt-in correctness-vs-streaming tradeoff.
+
+   **Test written (2026-08-21), characterization pending the user's real-ClickHouse build run** —
+   this item is inherently "find out what actually happens", not "implement a known fix", so unlike
+   most other items here it isn't marked Done until a real run confirms the finding. New
+   `connector`-module `MidStreamQueryFailureAgainstRealClickHouseTest`, two tests:
+   `shouldFailRatherThanSilentlyCompletingWhenTheFailureHappensAfterStreamingHasStarted` forces a
+   `DB::Exception` partway through a `system.numbers` scan via `throwIf(...)`, with `max_block_size`
+   set small enough that many blocks are flushed to the client before the failing one — under this
+   driver's default settings, and asserts the two properties the roadmap item actually requires
+   (never silently completes; every row emitted before the failure is genuine, not corrupted tail
+   bytes misread as data) without assuming a specific exception type, because the analysis below
+   suggests it likely *isn't* a clean `ServerException`.
+   `shouldSurfaceACleanServerExceptionWhenWaitEndOfQueryIsEnabled` answers the `wait_end_of_query`
+   question directly: yes, already reachable today, zero code changes — `ClickHouseQuery.of(sql)
+   .withSettings(Map.of("wait_end_of_query", "1"))` is enough, since `withSettings` already passes
+   arbitrary `<name>=<value>` request parameters through untouched (see its Javadoc).
+
+   **Why the first test doesn't assume `ServerException`, verified against ClickHouse's own HTTP
+   interface behavior before writing it, not assumed:** HTTP requires headers before body. Once
+   `ClickHouseHttpTransport` has already received response headers with no `X-ClickHouse-Exception-Code`
+   (true here — the failure happens after streaming has already started) and rows have started
+   arriving, ClickHouse has no HTTP-legal way to retroactively attach that header for a later
+   failure. Per ClickHouse's own documented behavior (github.com/ClickHouse/ClickHouse/pull/36884,
+   and github.com/ClickHouse/ClickHouse/issues/16207/#33630 it closed), it instead appends the error
+   as plain text directly into the response body, after whatever rows were already written —
+   independent of output format, so this corrupts the RowBinary byte stream this transport is
+   decoding rather than cleanly signalling failure at the transport level.
+   `ClickHouseHttpTransport.isError`/`receiveOrFail` only inspect the *initial* response headers (see
+   that class's own Javadoc on error handling), so this specific failure shape is predicted to slip
+   past that check entirely and surface instead as whatever exception client-v2's RowBinary reader
+   throws when it can't parse the trailing garbage as a valid row — plausible, but genuinely unverified
+   without a real run, which is exactly why this item stays open until one happens.
+   `wait_end_of_query=1` sidesteps the whole problem by having ClickHouse buffer the entire response
+   server-side (up to its own `http_response_buffer_size`) before sending anything, so a failure is
+   always known before headers go out — the second test's `500`-row failure point over a `10000`-row
+   `LIMIT` is deliberately tiny to stay well under that buffer regardless of its exact default.
 6. **Build a real-server parameter-binding type matrix beyond null/integer/string-escaping.**
    `ClickHouseQuery`'s current parameter encoding is `null → \N`, `String → escaped`, everything else
    → `value.toString()` — untested and likely wrong for `UUID`, `BigDecimal`, `LocalDate`/
