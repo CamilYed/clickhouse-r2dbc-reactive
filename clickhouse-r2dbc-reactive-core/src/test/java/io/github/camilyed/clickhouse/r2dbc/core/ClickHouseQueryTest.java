@@ -225,6 +225,52 @@ class ClickHouseQueryTest {
   }
 
   @Test
+  void shouldHaveServerErrorRetryDisabledByDefault() {
+    // when
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT 1");
+
+    // then
+    assertThat(query.serverErrorRetryEnabled()).isFalse();
+  }
+
+  @Test
+  void shouldEnableServerErrorRetryWhenRequested() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT 1");
+
+    // when
+    final ClickHouseQuery withServerErrorRetry = query.withServerErrorRetryEnabled();
+
+    // then
+    assertThat(withServerErrorRetry.serverErrorRetryEnabled()).isTrue();
+  }
+
+  @Test
+  void shouldKeepServerErrorRetryEnabledWhenParametersAreBoundAfterwards() {
+    // given
+    final ClickHouseQuery query =
+        ClickHouseQuery.of("SELECT {a:UInt32}").withServerErrorRetryEnabled();
+
+    // when
+    final ClickHouseQuery parameterized = query.withParameters(Map.of("a", 42));
+
+    // then
+    assertThat(parameterized.serverErrorRetryEnabled()).isTrue();
+  }
+
+  @Test
+  void shouldKeepServerErrorRetryEnabledWhenSettingsAreAttachedAfterwards() {
+    // given
+    final ClickHouseQuery query = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+    // when
+    final ClickHouseQuery withSettings = query.withSettings(Map.of("max_execution_time", "5.000"));
+
+    // then
+    assertThat(withSettings.serverErrorRetryEnabled()).isTrue();
+  }
+
+  @Test
   void shouldCarryServerSettingsUnchangedWhenAttached() {
     // given
     final ClickHouseQuery query = ClickHouseQuery.of("SELECT 1");

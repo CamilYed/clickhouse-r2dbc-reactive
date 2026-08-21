@@ -1017,6 +1017,201 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
     assertThat(Duration.between(start, Instant.now())).isLessThan(Duration.ofSeconds(2));
   }
 
+  @Test
+  void shouldAlwaysAllowRetryingAFailureThatHappensBeforeTheRequestWasSent() {
+    // given - requestSent=false is the existing pre-send-connection-level case; canRetry must
+    // return true here regardless of the other conditions, since a request that never left the
+    // client cannot have caused any server-side effect to duplicate
+    final ServerException nonRetryableError = new ServerException(60, "not found", 500, "q1");
+
+    // when
+    final boolean canRetry =
+        ClickHouseHttpTransport.canRetry(
+            nonRetryableError, ClickHouseQuery.of("SELECT 1"), false, false);
+
+    // then
+    assertThat(canRetry).isTrue();
+  }
+
+  @Test
+  void shouldNeverAllowRetryingOnceAnyResponseBytesWereAlreadyEmitted() {
+    // given - even an opted-in query with a retryable server error must not retry once the caller
+    // has already received some of the response, or a retry would duplicate/corrupt what was
+    // already delivered
+    final ServerException retryableError =
+        new ServerException(202, "too many simultaneous queries", 500, "q1");
+    final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+    // when
+    final boolean canRetry = ClickHouseHttpTransport.canRetry(retryableError, optedIn, true, true);
+
+    // then
+    assertThat(canRetry).isFalse();
+  }
+
+  @Test
+  void shouldNotAllowRetryingAServerErrorWhenNotOptedIn() {
+    // given - the default ClickHouseQuery.of(...) has serverErrorRetryEnabled()==false
+    final ServerException retryableError =
+        new ServerException(202, "too many simultaneous queries", 500, "q1");
+
+    // when
+    final boolean canRetry =
+        ClickHouseHttpTransport.canRetry(
+            retryableError, ClickHouseQuery.of("SELECT 1"), true, false);
+
+    // then
+    assertThat(canRetry).isFalse();
+  }
+
+  @Test
+  void shouldAllowRetryingARetryableServerErrorWhenOptedInAndNoBytesEmittedYet() {
+    // given - error code 202 (TOO_MANY_SIMULTANEOUS_QUERIES) is one of the codes client-v2's
+    // ServerException.discoverIsRetryable classifies as retryable (v0.9.8 source, not assumed)
+    final ServerException retryableError =
+        new ServerException(202, "too many simultaneous queries", 500, "q1");
+    final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+    // when
+    final boolean canRetry = ClickHouseHttpTransport.canRetry(retryableError, optedIn, true, false);
+
+    // then
+    assertThat(canRetry).isTrue();
+  }
+
+  @Test
+  void shouldNotAllowRetryingANonRetryableServerErrorEvenWhenOptedIn() {
+    // given - error code 60 (TABLE_NOT_FOUND) is not in client-v2's ServerException.
+    // discoverIsRetryable list (v0.9.8 source, not assumed) - retrying would just fail identically
+    final ServerException nonRetryableError = new ServerException(60, "not found", 500, "q1");
+    final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+    // when
+    final boolean canRetry =
+        ClickHouseHttpTransport.canRetry(nonRetryableError, optedIn, true, false);
+
+    // then
+    assertThat(canRetry).isFalse();
+  }
+
+  @Test
+  void shouldNotAllowRetryingANonServerExceptionFailureEvenWhenOptedIn() {
+    // given - a connection-level failure after requestSent is not something isRetryable() can
+    // classify at all, so it must never be retried through the server-error opt-in path
+    final RuntimeException connectionLevelFailure = new RuntimeException("connection reset");
+    final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+    // when
+    final boolean canRetry =
+        ClickHouseHttpTransport.canRetry(connectionLevelFailure, optedIn, true, false);
+
+    // then
+    assertThat(canRetry).isFalse();
+  }
+
+  @Test
+  void shouldRetryARetryableServerErrorUpToThePolicyBudgetWhenOptedIn() {
+    // given - error code 202 (TOO_MANY_SIMULTANEOUS_QUERIES) is confirmed retryable (see the
+    // canRetry unit tests above); this fake always responds with it, so every attempt fails and
+    // the retry loop is expected to run out its whole budget (maxAttempts retries, 1 + maxAttempts
+    // total requests) rather than stop after the first attempt
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithClickHouseError(
+            202, "too many simultaneous queries", 500)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(),
+              Authentication.none(),
+              null,
+              null,
+              null,
+              new RetryPolicy(3, Duration.ofMillis(10)));
+      final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+      // when
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport.query(optedIn).aggregate().asByteArray().block(Duration.ofSeconds(5)));
+
+      // then - Reactor wraps the final failure as Exceptions.RetryExhaustedException once the
+      // whole retry budget is used up (as opposed to the filter simply declining to retry, which
+      // propagates the original error unwrapped - see the shouldNotRetry* tests below), with the
+      // actual last ServerException as its cause
+      assertThat(thrown).hasCauseInstanceOf(ServerException.class);
+      await()
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.totalRequestsReceived()).isEqualTo(4));
+    }
+  }
+
+  @Test
+  void shouldNotRetryARetryableServerErrorWhenNotOptedIn() {
+    // given - same retryable error code as above, but the query is built via the plain factory
+    // (serverErrorRetryEnabled()==false), proving the opt-in - not the mere presence of a
+    // retryable error code - is what gates this behavior
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithClickHouseError(
+            202, "too many simultaneous queries", 500)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(),
+              Authentication.none(),
+              null,
+              null,
+              null,
+              new RetryPolicy(3, Duration.ofMillis(10)));
+
+      // when
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport
+                      .query(ClickHouseQuery.of("SELECT 1"))
+                      .aggregate()
+                      .asByteArray()
+                      .block(Duration.ofSeconds(5)));
+
+      // then
+      assertThat(thrown).isInstanceOf(ServerException.class);
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.totalRequestsReceived()).isEqualTo(1));
+    }
+  }
+
+  @Test
+  void shouldNotRetryANonRetryableServerErrorEvenWhenOptedIn() {
+    // given - error code 60 (TABLE_NOT_FOUND) is not retryable per client-v2's own classification,
+    // so opting a query in must not cause it to be retried anyway
+    try (final var server =
+        ControlledClickHouseServer.startRespondingWithClickHouseError(60, "not found", 404)) {
+      final var transport =
+          new ClickHouseHttpTransport(
+              server.baseUrl(),
+              Authentication.none(),
+              null,
+              null,
+              null,
+              new RetryPolicy(3, Duration.ofMillis(10)));
+      final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+      // when
+      final Throwable thrown =
+          catchThrowable(
+              () ->
+                  transport.query(optedIn).aggregate().asByteArray().block(Duration.ofSeconds(5)));
+
+      // then
+      assertThat(thrown).isInstanceOf(ServerException.class);
+      await()
+          .during(Duration.ofMillis(200))
+          .atMost(Duration.ofSeconds(2))
+          .untilAsserted(() -> assertThat(server.totalRequestsReceived()).isEqualTo(1));
+    }
+  }
+
   private static DisposableServer startServerRespondingOnPort(final int port, final byte[] body) {
     return HttpServer.create()
         .port(port)

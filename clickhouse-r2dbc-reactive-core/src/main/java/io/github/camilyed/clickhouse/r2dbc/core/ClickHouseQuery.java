@@ -37,20 +37,28 @@ import org.jspecify.annotations.Nullable;
  * {@code max_execution_time}), sent as plain {@code <name>=<value>} request parameters — no {@code
  * param_} prefix, and no corresponding {@code {name:Type}} placeholder in the SQL text — see {@link
  * #withSettings(Map)}.
+ *
+ * <p>{@code serverErrorRetryEnabled} is {@code false} for every query unless a caller opts in via
+ * {@link #withServerErrorRetryEnabled()} — see that method's Javadoc for exactly what it changes
+ * and why this is a per-query opt-in rather than a connection-wide setting.
  */
 public record ClickHouseQuery(
-    String sql, String queryId, Map<String, String> parameters, Map<String, String> settings) {
+    String sql,
+    String queryId,
+    Map<String, String> parameters,
+    Map<String, String> settings,
+    boolean serverErrorRetryEnabled) {
 
   /** A query with a freshly generated {@code query_id}, no bound parameters, no settings. */
   public static ClickHouseQuery of(final String sql) {
-    return new ClickHouseQuery(sql, UUID.randomUUID().toString(), Map.of(), Map.of());
+    return new ClickHouseQuery(sql, UUID.randomUUID().toString(), Map.of(), Map.of(), false);
   }
 
   /**
    * A query correlated with a caller-supplied {@code query_id}, no bound parameters, no settings.
    */
   public static ClickHouseQuery of(final String sql, final String queryId) {
-    return new ClickHouseQuery(sql, queryId, Map.of(), Map.of());
+    return new ClickHouseQuery(sql, queryId, Map.of(), Map.of(), false);
   }
 
   /**
@@ -102,7 +110,8 @@ public record ClickHouseQuery(
   public ClickHouseQuery withParameters(final Map<String, Object> boundValues) {
     final Map<String, String> encoded = new LinkedHashMap<>();
     boundValues.forEach((name, value) -> encoded.put(name, encodeParameterValue(value)));
-    return new ClickHouseQuery(sql, queryId, Map.copyOf(encoded), settings);
+    return new ClickHouseQuery(
+        sql, queryId, Map.copyOf(encoded), settings, serverErrorRetryEnabled);
   }
 
   /**
@@ -114,7 +123,34 @@ public record ClickHouseQuery(
    * {@code {name:Type}} placeholder declared in {@code sql}.
    */
   public ClickHouseQuery withSettings(final Map<String, String> newSettings) {
-    return new ClickHouseQuery(sql, queryId, parameters, Map.copyOf(newSettings));
+    return new ClickHouseQuery(
+        sql, queryId, parameters, Map.copyOf(newSettings), serverErrorRetryEnabled);
+  }
+
+  /**
+   * This query with {@link #serverErrorRetryEnabled()} set to {@code true} — an explicit, per-query
+   * opt-in to retrying it after a ClickHouse server error that {@code
+   * ServerException.isRetryable()} classifies as retryable, on top of the transport's existing
+   * pre-send-only retry (see {@code RetryPolicy}'s Javadoc for that default behavior, unaffected by
+   * this flag).
+   *
+   * <p>Deliberately a per-query opt-in rather than a connection-wide setting: a single connection
+   * is routinely used for both reads and writes, and this transport has no reliable way to tell a
+   * {@code SELECT} from a literal-SQL {@code INSERT} by inspecting {@code sql} (CTEs,
+   * multi-statement text, and an {@code INSERT ... SELECT} would all defeat a naive check) — only
+   * the caller who wrote the query actually knows whether retrying it after a partial server-side
+   * attempt is safe. Call this only for queries that are safe to fully re-execute, i.e. read-only
+   * {@code SELECT}s; never for an {@code INSERT} or any other statement with a side effect, since a
+   * retryable-looking server error offers no guarantee the statement didn't already partially or
+   * fully apply server-side.
+   *
+   * <p>Even with this enabled, the transport still never retries once any response bytes have
+   * already been delivered downstream — this only widens <em>when</em> a retry may be attempted
+   * (also after the request was fully sent, not just before), never removes the "nothing was
+   * delivered yet" safety condition that makes a retry harmless to the caller.
+   */
+  public ClickHouseQuery withServerErrorRetryEnabled() {
+    return new ClickHouseQuery(sql, queryId, parameters, settings, true);
   }
 
   private static final DateTimeFormatter CLICKHOUSE_DATE_TIME_FORMAT =
