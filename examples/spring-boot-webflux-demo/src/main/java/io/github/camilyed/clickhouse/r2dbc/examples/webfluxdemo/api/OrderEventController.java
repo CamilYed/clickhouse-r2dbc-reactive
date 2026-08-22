@@ -6,6 +6,7 @@ import io.github.camilyed.clickhouse.r2dbc.examples.webfluxdemo.domain.OrderEven
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -53,11 +54,30 @@ class OrderEventController {
   }
 
   /**
-   * Streams every event, oldest first — the response body is written as it arrives from ClickHouse,
-   * not buffered into a single in-memory list first.
+   * Returns every event, oldest first, as a single {@code application/json} array. {@link
+   * OrderEventRepository#findAll()} itself streams from ClickHouse, but Spring WebFlux's default
+   * {@code application/json} writer collects a {@code Flux} into one array before writing anything
+   * to the response — so, unlike this method's previous Javadoc claimed, the HTTP response here is
+   * <em>not</em> proven to be written incrementally. Callers who need a response that is actually
+   * proven to stream at the HTTP layer, not just at the database layer, should use {@link
+   * #stream()} instead.
    */
   @GetMapping("/order-events")
   Flux<OrderEvent> all() {
+    return orderEvents.findAll();
+  }
+
+  /**
+   * Streams every event, oldest first, as newline-delimited JSON ({@code application/x-ndjson}) —
+   * unlike {@link #all()}, each event is written to the HTTP response as soon as it arrives from
+   * {@link OrderEventRepository#findAll()}, never buffered into one in-memory array first. This is
+   * proven, not just asserted: see {@code OrderEventStreamingControllerTest} (this module's tests),
+   * which asserts a real time gap between the first and second event arriving at the HTTP layer,
+   * using a source {@code Flux} whose element timing the test fully controls — something a real
+   * ClickHouse query's own (fast, unpredictable) timing cannot reliably prove.
+   */
+  @GetMapping(value = "/order-events/stream", produces = MediaType.APPLICATION_NDJSON_VALUE)
+  Flux<OrderEvent> stream() {
     return orderEvents.findAll();
   }
 
