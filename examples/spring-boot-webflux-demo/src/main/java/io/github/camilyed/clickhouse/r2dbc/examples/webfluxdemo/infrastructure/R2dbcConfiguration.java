@@ -74,50 +74,20 @@ class R2dbcConfiguration {
   }
 
   /**
-   * The unpooled {@link ConnectionFactory} this driver builds directly from {@code
-   * spring.r2dbc.url} — deliberately its own bean, not just a local variable inside {@link
-   * #connectionFactory}, so Spring can dispose it in its own right at shutdown (see that method's
-   * Javadoc for why {@link ConnectionPool} wrapping it isn't enough on its own).
-   *
-   * <p>{@code destroyMethod = "dispose"} names {@code ClickHouseConnectionFactory#dispose()} by
-   * string, resolved by reflection when the context closes, not by a compile-time reference: this
-   * module deliberately never imports a single class from the driver itself (see this class's own
-   * Javadoc and {@code build.gradle.kts}'s {@code runtimeOnly} dependency comment) — it's
-   * discovered purely through the R2DBC {@code ConnectionFactoryProvider} SPI. Naming the method
-   * this way keeps that true while still getting the driver's own cleanup called automatically; if
-   * that method didn't exist on whatever {@code ConnectionFactories.get(...)} actually returns,
-   * Spring logs a warning at shutdown rather than failing the whole context, so this stays safe
-   * even if the driver configured here ever changes.
-   */
-  @Bean(destroyMethod = "dispose")
-  ConnectionFactory baseConnectionFactory() {
-    final ConnectionFactoryOptions options = buildConnectionFactoryOptions();
-    rejectNestedPoolUrl(options);
-    return ConnectionFactories.get(options);
-  }
-
-  /**
    * The application's single {@link ConnectionFactory}, pooled via {@link ConnectionPool} unless
    * {@code spring.r2dbc.pool.enabled=false}.
-   *
-   * <p>{@link ConnectionPool} itself is already disposed automatically at shutdown — it implements
-   * {@code java.io.Closeable}, and Spring's default {@code @Bean} destroy-method inference calls
-   * {@code close()} on any bean that does. But that alone is not enough: confirmed directly against
-   * {@code ConnectionPool}'s own source, {@code ConnectionPool#disposeLater()} only tears down the
-   * pool's own {@code InstrumentedPool<Connection>} — it never calls {@code dispose()} on the
-   * {@link #baseConnectionFactory} it wraps, so the driver's own transport connection pool and
-   * decoder scheduler thread pool would leak silently on every context shutdown without that
-   * separate bean's explicit {@code destroyMethod}. Spring destroys a bean's dependencies only
-   * after the bean itself, so {@link #baseConnectionFactory}'s {@code dispose()} always runs after
-   * this pool has already closed every connection it handed out — never while one might still be in
-   * flight.
    */
   @Bean
   @Primary
-  ConnectionFactory connectionFactory(final ConnectionFactory baseConnectionFactory) {
+  ConnectionFactory connectionFactory() {
     final R2dbcProperties.Pool pool = properties.getPool();
     validatePoolConfiguration(pool);
-    logConfiguration(pool, baseConnectionFactory);
+
+    final ConnectionFactoryOptions options = buildConnectionFactoryOptions();
+    rejectNestedPoolUrl(options);
+
+    final ConnectionFactory baseConnectionFactory = ConnectionFactories.get(options);
+    logConfiguration(options, pool, baseConnectionFactory);
 
     if (!pool.isEnabled()) {
       LOG.info("R2DBC pool is disabled; using an unpooled ConnectionFactory");
@@ -222,7 +192,9 @@ class R2dbcConfiguration {
   }
 
   private void logConfiguration(
-      final R2dbcProperties.Pool pool, final ConnectionFactory baseConnectionFactory) {
+      final ConnectionFactoryOptions options,
+      final R2dbcProperties.Pool pool,
+      final ConnectionFactory baseConnectionFactory) {
     final String maxIdleTime = formatDuration(pool.getMaxIdleTime());
     final String maxLifeTime = formatDuration(pool.getMaxLifeTime());
     final String maxAcquireTime = formatDuration(pool.getMaxAcquireTime());
@@ -244,7 +216,7 @@ class R2dbcConfiguration {
           validationDepth   : {}
           acquireRetry      : {}
         """,
-        baseConnectionFactory.getMetadata().getName(),
+        options.getValue(ConnectionFactoryOptions.DRIVER),
         baseConnectionFactory.getClass().getName(),
         pool.isEnabled(),
         pool.getInitialSize(),

@@ -609,13 +609,9 @@ whether you configure it or not.
    `ConnectionPool` still needs to dispose the underlying `ClickHouseConnectionFactory` itself
    separately at shutdown (confirmed directly against `ConnectionPool`'s own source:
    `ConnectionPool.dispose()`/`disposeLater()` only tear down the pooled `Connection` handles it
-   manages, never the factory's own transport/scheduler underneath). The bundled demo
-   (`examples/spring-boot-webflux-demo`) shows the fix: expose the driver's raw, unpooled
-   `ConnectionFactory` as its own `@Bean(destroyMethod = "dispose")`, named by string rather than by
-   importing the driver's type, and have the pooled `@Primary` `ConnectionFactory` bean depend on it
-   — Spring then destroys the pool first (closing every connection it handed out) and only then
-   disposes the underlying factory, proven end to end by
-   `ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest` against a real server.
+   manages, never the factory's own transport/scheduler underneath). Wiring that fix into the bundled
+   demo is blocked for now on the demo's own dependency choice — see
+   [ROADMAP.md's Phase 8, item 10](ROADMAP.md#phase-8--post-020-hardening-021) for why.
 
 **Why this is the point of the whole project, not an implementation detail:** client-v2's `Client`
 is blocking — serving *N* logical concurrent queries needs *N* platform threads each blocked
