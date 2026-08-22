@@ -21,6 +21,8 @@ proposed to the ClickHouse team.
 - [Phase 6 (later) — Spring WebFlux interop demo](#phase-6-later--spring-webflux-interop-demo)
 - [Phase 7 — Operational control & R2DBC correctness (0.2.0)](#phase-7--operational-control--r2dbc-correctness-020)
 - [Phase 8 — Post-0.2.0 hardening (0.2.1+)](#phase-8--post-020-hardening-021)
+- [Phase 9 — Documentation & website redesign](#phase-9--documentation--website-redesign)
+- [Phase 10 — Cloud benchmark pipeline](#phase-10--cloud-benchmark-pipeline)
 - [Working with Claude / IntelliJ](#working-with-claude--intellij)
 
 ## Module map
@@ -1876,10 +1878,192 @@ regression at 1M rows) rather than acted on now:
   regression requiring JMH JSON), and converting a handful of the most actionable items above into
   real GitHub issues so contributors don't have to read the entire ROADMAP to find something to work
   on. Don't create dozens of speculative issues at once.
-- **A short "what's actually next" pointer doc** (e.g. `docs/PRODUCTION_READINESS.md`), separate from
-  this ever-growing historical ROADMAP — current released version, current-HEAD goals, P0/P1 gaps,
-  known limitations, links back into ROADMAP for history. Worth doing once this phase's items are
-  triaged (fixed / open), not before — writing it now would just duplicate this section.
+- **A short "what's actually next" pointer doc**, separate from this ever-growing historical
+  ROADMAP — superseded as a standalone idea by the much fuller plan in
+  [Phase 9](#phase-9--documentation--website-redesign): a dedicated `docs/project/production-readiness.md`
+  is one of that phase's own deliverables, not a separate item to track here.
+
+## Phase 9 — Documentation & website redesign
+
+**Not started.** Plan captured 2026-08-22 from a detailed information-architecture review the user
+provided, covering README/ROADMAP restructuring and a new GitHub Pages documentation website. This
+is deliberately scoped as a documentation/information-architecture task, not a code-refactor task —
+production Java code should not change as part of this phase, beyond a tiny path/link fix a docs
+build genuinely requires.
+
+### Problem
+
+`README.md` currently doubles as landing page, design manifesto, install guide, full configuration
+reference, Spring guide, performance report, known-limitations document, pooling tutorial,
+architecture doc, module reference, testing-strategy doc, and roadmap summary — one file with far
+too many jobs. `ROADMAP.md` is broader still: historical engineering notebook, ADR, implementation
+diary, completed-phase history, production-readiness review, current roadmap, backlog, and Claude
+handoff material all at once. The content is good; it just isn't sorted by what a reader is actually
+looking for when they open either file.
+
+### Target shape
+
+Three layers, each answering a different question:
+
+```text
+GitHub README        -> understand the project in 60-90 seconds, install, first query
+Documentation website -> the actual user manual (concepts, reference, operations, performance)
+engineering/ archive  -> deep investigation notes, old phases, design archaeology (not deleted)
+```
+
+`README.md` target: ~150-250 lines. It keeps project purpose, badges, install, one working
+R2DBC example, an honest status line, a high-level architecture sketch, and links out — not the full
+option reference, not the full pooling story, not the full performance report.
+
+A new `docs/` tree (`guide/`, `concepts/`, `reference/`, `operations/`, `performance/`,
+`architecture/`, `project/`, `internals/`, `images/`) holds everything that currently over-stuffs
+README/ROADMAP: `docs/reference/configuration.md` (full connection-options table, grouped by
+concern — endpoint, TLS, timeouts, retry, physical transport pool, advanced/programmatic — instead
+of one flat table), `docs/reference/known-limitations.md`, `docs/project/production-readiness.md`
+(✅/⚠️/❌/🧪 adoption-decision matrix), a split `docs/performance/` (`index.md`/`methodology.md`/
+`results.md`/`running-benchmarks.md`, replacing the single `docs/PERFORMANCE.md`), and moved copies
+of `docs/R2DBC_COMPATIBILITY.md`/`docs/CLIENT_V2_HTTP_REFERENCE.md`. Superseded/historical material
+(`docs/CURRENT_WORK.md`, `docs/REVIEW_*.md`, the current sprawling `ROADMAP.md` itself) moves to a
+new `engineering/` tree rather than being deleted — `engineering/roadmap-archive.md` keeps every
+phase already written here; the new root `ROADMAP.md` becomes a short (2-5 KB) "what's released /
+what's next / what's later / what's explicitly not planned" pointer, with completed work delegated
+to `CHANGELOG.md` and engineering reasoning delegated to `engineering/`.
+
+### One content decision worth calling out explicitly
+
+The plan recommends the docs stop presenting `io.r2dbc.pool`'s logical pool as co-equal with this
+driver's own physical Reactor Netty transport pool. The primary story becomes: one factory-owned
+physical transport pool, R2DBC `Connection` objects are cheap logical handles over it, most
+applications don't need `io.r2dbc.pool` at all. `io.r2dbc.pool` moves to
+`docs/operations/optional-r2dbc-pool.md` as an advanced/optional layer (validation, eviction,
+framework-integration reasons to reach for it) — **not removed, and its compatibility tests stay**;
+this is a documentation emphasis change, not a feature deprecation. The demo's default
+`application.yml` should reflect the recommended default (plain `ConnectionFactory` + driver's own
+transport pool), with `io.r2dbc.pool` wiring kept as an explicit opt-in profile/example rather than
+the default shape.
+
+### Website
+
+Recommended stack: **VitePress** (Markdown-source, static-HTML-then-SPA-navigation, strong
+code-block rendering, local search, GitHub Pages deployment, no content duplication since it renders
+the same `docs/` tree rather than being a second source of truth). Astro + Starlight noted as the
+fallback if the site later needs much more custom product UI than VitePress's theming supports.
+Deploys to `https://camilyed.github.io/clickhouse-r2dbc-reactive/` via a new
+`.github/workflows/docs.yml` (build-check on PRs, build-and-deploy on `main`); no custom domain
+purchase upfront. Visual direction: near-black/graphite background, ClickHouse-inspired yellow
+primary accent, cool cyan secondary accent, restrained gradients — technical/clean/fast/serious, not
+a copy of any specific existing site's exact layout. Homepage: hero + one-sentence pitch, "why it
+exists" before/after architecture comparison, six feature cards (non-blocking I/O, streaming
+results, bounded backpressure, cancellation propagation, R2DBC SPI, Spring WebFlux), one performance
+chart with explicit benchmark context next to it (not three unlabeled charts), and a
+production-readiness panel using the same ✅/⚠️ vocabulary as the dedicated doc. Benchmark charts on
+the site are generated artifacts (`docs/performance/generated/*.svg`) the site renders — the website
+itself never runs JMH.
+
+### Sequencing (small PRs, not one rewrite)
+
+1. **Information architecture** — archive old `ROADMAP.md` content, write the short new one, move
+   superseded review/current-work docs into `engineering/`, create the `docs/` skeleton, fix links.
+   No Java changes.
+2. **README rewrite** — short landing page; remove the full configuration table, full pooling
+   reference, full performance report; link out to `docs/`.
+3. **Split existing docs** into the new `docs/` tree (configuration, known limitations, pooling,
+   Spring, architecture, performance, production readiness) — move existing facts, don't
+   unnecessarily rewrite already-verified technical claims.
+4. **VitePress scaffold** — `package.json`, `docs/.vitepress/*`, `docs/index.md`, the GitHub Pages
+   workflow, dark/light theme, local search, navigation.
+5. **Homepage styling** — hero, architecture component, feature cards, performance preview,
+   production-readiness panel.
+
+Before touching content, the working session that picks this up should first return: the exact
+proposed file-move map, the content-ownership matrix (which doc owns which fact), the proposed
+README outline, the proposed new `ROADMAP.md` outline, and which pages are published vs.
+`engineering/`-archive-only — then implement in the small PRs above, not one enormous diff.
+
+## Phase 10 — Cloud benchmark pipeline
+
+**Not started.** Plan captured 2026-08-22, directly answering the blocker every entry in
+[Phase 8's deferred performance/benchmark section](#deferred--performancebenchmark-work-stays-out-of-scope-until-a-proper-benchmark-environment-exists)
+has been waiting on: a repeatable benchmark environment off the local MacBook M3 Pro (whose 6P+6E
+core split already produced the unresolved 1M-row inter-fork variance documented in
+`docs/PERFORMANCE.md`). Building this pipeline is CI/tooling infrastructure — a Python analysis
+script and a GitHub Actions workflow — not benchmark iteration itself, so it doesn't need an
+exception to the standing "performance work waits for a proper environment" rule; it's the
+prerequisite that rule has been naming all along. **Actual benchmark re-runs stay deferred until
+this pipeline exists and its results have been validated as stable** — building it doesn't
+retroactively unblock e.g. the response-compression-parity re-run on its own.
+
+### Non-negotiable constraint
+
+`ourDriver` and `client-v2` **must** run in the same job, on the same VM, against the same
+ClickHouse process, every time. Splitting them into separate CI jobs would compare two different
+machines under two different sets of momentary noise, not two drivers — the whole reason
+`PublicApiMatchedPoolThroughputBenchmark`/`docs/PERFORMANCE.md`'s existing fairness work exists.
+
+### Trust model for cloud numbers
+
+Don't trust an absolute cloud number on its own (`ourDriver = 9000 qps`) — a shared/noisy
+GitHub-hosted runner varies run to run. Trust the **`ourDriver / client-v2` ratio**, repeated across
+several runs: a ratio that stays close (e.g. 1.07-1.09 across five runs) is a strong signal even if
+the absolute numbers swing; a ratio that itself swings wildly (0.91, 1.15, 1.02, 1.20, 0.94) means
+the runner is too noisy for this comparison and it's time to escalate to a dedicated VM, not to trust
+the number anyway.
+
+### Stage 1 — GitHub Actions only (start here)
+
+New `.github/workflows/benchmark.yml`, triggered by `workflow_dispatch` (optionally also a weekly/
+nightly `schedule`), on one standard GitHub-hosted Ubuntu runner — the repo is public, so no custom
+runner infrastructure is needed to start. Two profiles: a **fast** sanity-check (1 fork, short
+warmup, "did it run / no catastrophic regression", not for public performance claims) that can run
+more often, and a **trusted** benchmark (3-5 forks, 5 warmup iterations, `-prof gc`,
+`workflow_dispatch`/pre-release only) starting with exactly
+`PublicApiMatchedPoolThroughputBenchmark` at `poolSize=8`, `concurrency=8/32/128` — the same
+benchmark and parameters the existing local results already use, so cloud and local numbers are
+comparable in shape even if not in absolute value.
+
+Preserve JMH's own JSON output (`build/results/jmh/results.json`) as the source of truth rather than
+parsing stdout, alongside `metadata.json` (commit SHA, branch, JDK version, OS/arch, ClickHouse
+image version, `client-v2` version, driver version, fork/warmup/pool-size counts) and the raw
+stdout. A new `scripts/benchmarks/analyze.py` parses the JMH JSON and produces `summary.md` (a
+readable commit/environment header plus a queries-per-second/percentile/allocation table per
+concurrency tier) and simple throughput/latency/allocation charts (PNG/SVG) — three charts to start,
+not a dozen. The whole result directory uploads as a GitHub Actions artifact
+(`actions/upload-artifact`); raw JSON is **not** auto-committed to `main`.
+
+Both implementations get an explicit prewarm before measurement (DNS/network init, physical pool
+open, `SELECT 1`, one representative point query) so cold-start cost (classloading, first TCP
+connect, pool/decoder init) doesn't pollute the first real measurement for either side. ClickHouse
+runs a pinned image tag, never `latest`; both clients hit the identical process with identical SQL,
+parameter binding, dataset, pool size, compression setting, timeouts, database, and result mapping —
+no comparison relying on either library's differing defaults.
+
+### Stage 2 — ephemeral dedicated-vCPU VM (only if Stage 1 proves too noisy)
+
+Not a standing server. Create a VM (e.g. Hetzner Cloud, dedicated vCPU rather than shared — shared
+means noisy-neighbor variance, defeating the point), run the benchmark, destroy it — cleanup in an
+`always()` step so a failed run can never leave a paid-for VM running. Only build this once Stage 1's
+paired ratio has actually shown itself to be too unstable to trust; not before.
+
+### Stage 3 — optional, later
+
+A static GitHub Pages benchmark dashboard (`.../benchmarks/`, latest result plus a `history/` of
+past dated JSON snapshots, no React needed — HTML/CSS/JSON plus the same Python generator) once
+Stage 1/2 results are stable enough to be worth publishing continuously. Regression-detection
+thresholds (e.g. throughput regression > 10%, allocation/query > 15%, p99 > 15%, computed primarily
+against the `ourDriver/clientV2` ratio and against several prior runs, not one point) only once
+several stable runs exist to calibrate against — don't start with 2-3% thresholds, cloud benchmark
+noise will make that a constant false-alarm generator. [Bencher](https://bencher.dev) noted as an
+optional later layer for historical tracking/PR comparisons if the homegrown
+JSON-artifact-plus-summary approach stops being enough — not needed for the first version.
+
+### Explicitly out of scope for the first PR
+
+No Hetzner VM, no Bencher, no GitHub Pages dashboard, no production driver code changes, no
+regression-gate thresholds, and no moving/renaming the existing diagnostic benchmarks in
+`clickhouse-r2dbc-reactive-benchmarks` — the new pipeline is an orchestration/reporting layer on top
+of them, not a replacement. First PR is exactly: `benchmark.yml` + `analyze.py` + artifact upload +
+`summary.md`, run and verified working before being documented as such. See item 30 of the source
+planning document for the full Claude task prompt this phase should start from when picked up.
 
 ## Working with Claude / IntelliJ
 
