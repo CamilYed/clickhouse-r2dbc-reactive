@@ -20,10 +20,10 @@ import reactor.core.publisher.Mono;
 
 /**
  * Proves, rather than just asserts in prose, that closing the Spring context actually disposes the
- * driver's own {@code ClickHouseConnectionFactory} — not just the {@code io.r2dbc.pool}
- * {@code ConnectionPool} wrapping it — see {@code R2dbcConfiguration#connectionFactory}'s Javadoc
- * for the full reasoning ({@code ConnectionPool#disposeLater()}, confirmed directly against its own
- * source, never calls {@code dispose()} on the factory it wraps).
+ * driver's own {@code ClickHouseConnectionFactory} — not just the {@code io.r2dbc.pool} {@code
+ * ConnectionPool} wrapping it — see {@code R2dbcConfiguration#connectionFactory}'s Javadoc for the
+ * full reasoning ({@code ConnectionPool#disposeLater()}, confirmed directly against its own source,
+ * never calls {@code dispose()} on the factory it wraps).
  *
  * <p>Deliberately never imports a single class from the driver itself, matching every other test in
  * this module (see {@code R2dbcConfiguration}'s and {@code build.gradle.kts}'s Javadoc/comments on

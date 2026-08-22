@@ -109,8 +109,8 @@ class R2dbcConfiguration {
    * decoder scheduler thread pool would leak silently on every context shutdown without that
    * separate bean's explicit {@code destroyMethod}. Spring destroys a bean's dependencies only
    * after the bean itself, so {@link #baseConnectionFactory}'s {@code dispose()} always runs after
-   * this pool has already closed every connection it handed out — never while one might still be
-   * in flight.
+   * this pool has already closed every connection it handed out — never while one might still be in
+   * flight.
    */
   @Bean
   @Primary
