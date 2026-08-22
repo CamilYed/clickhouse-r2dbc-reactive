@@ -10,7 +10,29 @@ and commit it to `main` first — the workflow looks for a `## ` heading contain
 the version it was given and fails the release if it can't find one. See
 [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release) for the full release checklist.
 
-## [Unreleased] — 0.2.1
+## [Unreleased] — 0.2.2
+
+### Fixed
+
+- **The bundled demo now disposes the driver's `ClickHouseConnectionFactory` at Spring shutdown**,
+  resolving the known gap noted below under `0.2.1`. `R2dbcConfiguration` now registers the raw
+  factory as its own `baseConnectionFactory()` bean with `@Bean(destroyMethod = "dispose")`, and
+  the pooled `connectionFactory(ConnectionFactory baseConnectionFactory)` bean takes it as a
+  method parameter — Spring destroys a bean's dependents before the bean itself, so the outer
+  `io.r2dbc.pool` `ConnectionPool` always finishes closing every pooled connection first. Proven,
+  not just asserted, by a new real-ClickHouse test,
+  `ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest`: run a query through the raw factory,
+  close the Spring context, then confirm the same query now fails. Required bumping the demo's
+  `runtimeOnly` dependency from `0.2.0` to `0.2.1`, since `ClickHouseConnectionFactory.dispose()`
+  didn't exist on the previously-pinned release — an earlier attempt at this exact fix failed
+  against a real build for that reason (see [ROADMAP.md's Phase 8, item
+  10](ROADMAP.md#phase-8--post-020-hardening-021) for the full account of both attempts).
+- **The demo's `Enum8`/`Enum16` `status` column workaround is gone.** Now that the demo depends on
+  `0.2.1` (which decodes `Enum8`/`Enum16` as a plain `String`, see below), `DatabaseClientOrder
+  EventRepository` reads it via `row.get("status", String.class)` directly instead of the previous
+  `Object.class`/`toString()` indirection.
+
+## [0.2.1] — 2026-08-22
 
 ### Added
 
@@ -74,10 +96,12 @@ the version it was given and fails the release if it can't find one. See
   `OrderEventStreamingControllerTest` that controls source-element timing directly rather than relying
   on a real query's own fast, unpredictable timing. See [ROADMAP.md's Phase 8, item
   9](ROADMAP.md#phase-8--post-020-hardening-021).
+
 ### Known gap, not yet fixed
 
-- **The bundled demo does not dispose the driver's `ClickHouseConnectionFactory` at Spring shutdown**
-  — confirmed directly against `io.r2dbc.pool`'s own `ConnectionPool` source that its
+- **The bundled demo does not dispose the driver's `ClickHouseConnectionFactory` at Spring
+  shutdown.** Fixed in `0.2.2` (demo-only change, see that section above) — confirmed directly
+  against `io.r2dbc.pool`'s own `ConnectionPool` source that its
   `disposeLater()` never touches the delegate factory it wraps, so the driver's transport connection
   pool and decoder scheduler thread pool leak silently on every context shutdown. A fix was attempted
   (`@Bean(destroyMethod = "dispose")` on the driver's raw `ConnectionFactory`) and reverted after a
@@ -95,9 +119,9 @@ the version it was given and fails the release if it can't find one. See
   ask for `Object.class` and call `toString()` on the result to read the value without depending on
   the internal type. See [ROADMAP.md's Phase 8, item
   1](ROADMAP.md#phase-8--post-020-hardening-021) and the "`Enum8`/`Enum16` resolved" note under
-  [Phase 2](ROADMAP.md#phase-2--core-protocol--testkit-contract-tests). (The bundled demo still uses
-  the old workaround on purpose — it pins the last published release, which doesn't contain this fix
-  yet.)
+  [Phase 2](ROADMAP.md#phase-2--core-protocol--testkit-contract-tests). (The bundled demo used the
+  old workaround while still pinned to `0.2.0`; removed once it was bumped to `0.2.1` — see the
+  `0.2.2` section above.)
 - **Cancelling a query via `Flux.next()`-style single-element consumption no longer forfeits
   connection-pool reuse.** `RowBinaryDecoder`'s disposal hook (added in `0.2.0` to fix a real
   resource-cleanup gap on downstream cancellation) called `FluxInputStreamBridge#close()`
