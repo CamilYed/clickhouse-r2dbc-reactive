@@ -37,6 +37,15 @@ import reactor.core.publisher.Mono;
  * methods this test relies on do not exist on the previously-pinned {@code 0.2.0} release (see this
  * module's {@code build.gradle.kts}), which is exactly why an earlier attempt at this same proof
  * failed with a real {@code BeanDefinitionValidationException} at context-startup time.
+ *
+ * <p>Sets {@code spring.r2dbc.*} as JVM system properties rather than {@link
+ * SpringApplicationBuilder#properties(String...)} — confirmed the hard way that {@code
+ * properties(String...)} registers them as Boot's lowest-priority {@code defaultProperties} source,
+ * which this module's own {@code application.yml} (declaring {@code spring.r2dbc.url:
+ * ${SPRING_R2DBC_URL:}}, resolving to blank when that env var is unset) always outranks, so the
+ * factory bean still saw an unconfigured URL. System properties sit well above config-data
+ * property sources in Boot's own precedence order, so they reliably win; cleared in a {@code
+ * finally} block once the context this test needs them for has finished starting.
  */
 class ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest {
 
@@ -64,14 +73,20 @@ class ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest {
   }
 
   private static ConfigurableApplicationContext startApplicationContext() {
-    return new SpringApplicationBuilder(DemoApplication.class)
-        .web(WebApplicationType.NONE)
-        .properties(
-            "spring.r2dbc.url="
-                + CLICK_HOUSE.getHttpUrl().replaceFirst("^http://", "r2dbc:clickhouse://"),
-            "spring.r2dbc.username=" + CLICK_HOUSE.getUsername(),
-            "spring.r2dbc.password=" + CLICK_HOUSE.getPassword())
-        .run();
+    System.setProperty(
+        "spring.r2dbc.url",
+        CLICK_HOUSE.getHttpUrl().replaceFirst("^http://", "r2dbc:clickhouse://"));
+    System.setProperty("spring.r2dbc.username", CLICK_HOUSE.getUsername());
+    System.setProperty("spring.r2dbc.password", CLICK_HOUSE.getPassword());
+    try {
+      return new SpringApplicationBuilder(DemoApplication.class)
+          .web(WebApplicationType.NONE)
+          .run();
+    } finally {
+      System.clearProperty("spring.r2dbc.url");
+      System.clearProperty("spring.r2dbc.username");
+      System.clearProperty("spring.r2dbc.password");
+    }
   }
 
   private static void runTrivialQuery(final ConnectionFactory connectionFactory) {
