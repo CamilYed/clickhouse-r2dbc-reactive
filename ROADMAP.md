@@ -1707,12 +1707,41 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
     published-release-vs-current-`main` gap item 11 below already names — this item was accidentally
     attempted before that one, not after.
 
-    **Not yet done**, and not really doable in isolation: either (a) `0.2.1` gets published and the
-    demo's pinned version bumped to it, or (b) item 11's current-`main` demo lane is built first, and
-    this fix + its shutdown test land only on that lane (which can actually compile against
-    `ClickHouseConnectionFactory.dispose()` today via `project(...)`), not on the published-release
-    lane. `R2dbcConfiguration.java` was reverted to its pre-attempt shape; no test file for this was
-    kept, since none of the ones written could actually pass against the pinned dependency.
+    **Done (2026-08-22), re-applied after `0.2.1` was published to Maven Central.** Once `0.2.1`
+    was live and `build.gradle.kts`'s `runtimeOnly` bump landed
+    (`clickhouse-r2dbc-reactive-connector:0.2.1`), the exact fix described above became applicable
+    as written: `R2dbcConfiguration` now declares `baseConnectionFactory()` as its own
+    `@Bean(destroyMethod = "dispose")`, and `connectionFactory(ConnectionFactory
+    baseConnectionFactory)` takes it as a method parameter rather than a local variable — which also
+    means Spring destroys the pool bean before this one, since Spring destroys a bean's dependents
+    before the bean itself. `ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest` (new, real
+    ClickHouse via Testcontainers) proves it end to end: run a trivial query through the raw
+    `baseConnectionFactory` bean, close the Spring context, then assert the same query now fails —
+    proving the driver's own transport pool was actually torn down, not just the outer
+    `io.r2dbc.pool` wrapper.
+
+    **The underlying fix (the two-bean split + `destroyMethod = "dispose"`) is confirmed correct
+    against a real build.** The user's first real `./gradlew` run against this test showed the test
+    method body itself completed cleanly — the query-through-raw-factory assertion before close,
+    and the query-fails-after-close assertion after it, both passed with no assertion failure
+    reported — so `context.close()` genuinely and synchronously disposed the driver's
+    `ConnectionFactory` in time for the very next query attempt to observably fail, not a race.
+    What actually failed was a **test-harness interaction**, not the fix: the failure's entire
+    stack trace was inside Spring's own `EventPublishingTestExecutionListener`/`DefaultContextCache`
+    machinery (`IllegalStateException: LifecycleProcessor not initialized`), thrown after the test
+    method returned, while the framework tried to publish an `AfterTestExecutionEvent` against the
+    `@SpringBootTest`-managed, cached context this test had already manually `.close()`-d.
+    `AbstractApplicationContext.restart()` (Spring Framework 7/Boot 4.1's newer context-cache
+    restart support) isn't the same operation as a fresh `refresh()` and can't resurrect a context
+    whose `close()` already tore down its `LifecycleProcessor`.
+
+    Fixed by no longer using `@SpringBootTest`'s shared, cached context for this specific test: it
+    now builds its own standalone context via `SpringApplicationBuilder(DemoApplication.class)
+    .web(WebApplicationType.NONE).properties(...).run()`, entirely outside the TestContext
+    framework's cache, so closing it mid-test triggers no framework interaction at all —
+    `.web(...)`/`.properties(String...)` verified directly against Spring Boot's own
+    `SpringApplicationBuilder` source (fetched from GitHub, not assumed) before use. Re-handed back
+    for a second real `./gradlew` run to confirm this specific fix.
 11. **Add a current-`main` demo integration lane, alongside the existing published-release lane.**
     The demo intentionally depends on
     `io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0` from Maven Central — good as a real

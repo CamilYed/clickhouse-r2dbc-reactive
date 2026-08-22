@@ -44,16 +44,12 @@ import reactor.core.publisher.Mono;
  * conversion above already existed; simplified to a plain {@code count()} once actually tested
  * against a real server.
  *
- * <p>{@code status} ({@code Enum8}) still needs the {@code Object.class}/{@code toString()}
- * workaround here, even though {@code core.ListDecodingRowBinaryReader} was fixed to decode {@code
- * Enum8}/{@code Enum16} as a plain {@link String} directly (see ROADMAP.md's Phase 8 item 1, and
- * {@link OrderStatus}'s own Javadoc) — <b>this module deliberately depends on the last published
- * Maven Central release, not the current in-repo driver</b> (see this build's {@code
- * build.gradle.kts}), so it only picks up that fix once a release containing it is published and
- * this dependency is bumped. Asking for {@code Row.get(name, String.class)} against the
- * currently-pinned release throws {@link ClassCastException} — confirmed the hard way (a green
- * core-module unit test and a red demo integration test at the same time, both correct for what
- * each module actually runs).
+ * <p>{@code status} ({@code Enum8}) is read as a plain {@link String} directly — {@code
+ * core.ListDecodingRowBinaryReader} decodes {@code Enum8}/{@code Enum16} as {@link String} (see
+ * ROADMAP.md's Phase 8 item 1, and {@link OrderStatus}'s own Javadoc). This module depends on the
+ * published Maven Central release (see this build's {@code build.gradle.kts}), currently {@code
+ * 0.2.1}, which contains that fix; the earlier {@code Object.class}/{@code toString()} workaround
+ * was needed only while this module was still pinned to {@code 0.2.0}.
  */
 @Repository
 class DatabaseClientOrderEventRepository implements OrderEventRepository {
@@ -134,7 +130,7 @@ class DatabaseClientOrderEventRepository implements OrderEventRepository {
         (List<String>) (List<?>) row.get("tags", List.class),
         row.get("amount", BigDecimal.class),
         Optional.ofNullable(row.get("discount", BigDecimal.class)),
-        OrderStatus.valueOf(row.get("status", Object.class).toString()),
+        OrderStatus.valueOf(row.get("status", String.class)),
         row.get("client_ip", InetAddress.class).getHostAddress(),
         row.get("occurred_at", ZonedDateTime.class).toInstant());
   }

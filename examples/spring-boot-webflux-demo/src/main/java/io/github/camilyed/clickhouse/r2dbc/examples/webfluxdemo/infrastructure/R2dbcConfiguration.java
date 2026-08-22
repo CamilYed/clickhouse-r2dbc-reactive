@@ -74,20 +74,50 @@ class R2dbcConfiguration {
   }
 
   /**
+   * The driver's own {@link ConnectionFactory}, wrapped by {@link #connectionFactory} into a pooled
+   * {@link ConnectionPool} unless {@code spring.r2dbc.pool.enabled=false}.
+   *
+   * <p>Registered as its own bean, rather than only as a local variable inside {@link
+   * #connectionFactory}, specifically so Spring can dispose it independently: {@link
+   * ConnectionPool#disposeLater()} tears down the pool it owns (every pooled {@code Connection},
+   * its {@code reactor.pool.InstrumentedPool}) but never calls anything on the delegate factory it
+   * was built from — confirmed by reading {@code io.r2dbc.pool.ConnectionPool}'s own source, not
+   * assumed. This driver's {@code ClickHouseConnectionFactory} owns real resources beyond that
+   * (Reactor Netty's {@code ConnectionProvider}, the decoder's {@code RowDecodingScheduler}) via
+   * its own {@code dispose()}, which nothing else in this bean graph would ever call. {@code
+   * destroyMethod = "dispose"} is an explicit, non-inferred name: Spring enforces it eagerly at
+   * bean-creation time (throws {@code BeanDefinitionValidationException} if the method doesn't
+   * exist on the bean's actual runtime type — verified against Spring Framework's own {@code
+   * DisposableBeanAdapter} source), so this only works because {@code
+   * ConnectionFactories.get(options)} against a {@code r2dbc:clickhouse://...} URL returns a {@code
+   * ClickHouseConnectionFactory} directly (verified: {@code
+   * ClickHouseConnectionFactoryProvider.create()} returns it with zero wrapping), and because this
+   * module now depends on driver {@code 0.2.1}, which is where {@code dispose()}/{@code
+   * isDisposed()} were added.
+   *
+   * <p>Bean-destruction ordering makes the two-bean split safe: Spring destroys a bean's dependents
+   * before the bean itself, and {@link #connectionFactory} takes this bean as a method parameter,
+   * so the pool always finishes closing every pooled connection before this factory is disposed
+   * underneath it.
+   */
+  @Bean(destroyMethod = "dispose")
+  ConnectionFactory baseConnectionFactory() {
+    final ConnectionFactoryOptions options = buildConnectionFactoryOptions();
+    rejectNestedPoolUrl(options);
+    return ConnectionFactories.get(options);
+  }
+
+  /**
    * The application's single {@link ConnectionFactory}, pooled via {@link ConnectionPool} unless
-   * {@code spring.r2dbc.pool.enabled=false}.
+   * {@code spring.r2dbc.pool.enabled=false}. Disposal of the underlying driver resources happens on
+   * {@link #baseConnectionFactory}, not here — see that bean's own Javadoc for why.
    */
   @Bean
   @Primary
-  ConnectionFactory connectionFactory() {
+  ConnectionFactory connectionFactory(final ConnectionFactory baseConnectionFactory) {
     final R2dbcProperties.Pool pool = properties.getPool();
     validatePoolConfiguration(pool);
-
-    final ConnectionFactoryOptions options = buildConnectionFactoryOptions();
-    rejectNestedPoolUrl(options);
-
-    final ConnectionFactory baseConnectionFactory = ConnectionFactories.get(options);
-    logConfiguration(options, pool, baseConnectionFactory);
+    logConfiguration(pool, baseConnectionFactory);
 
     if (!pool.isEnabled()) {
       LOG.info("R2DBC pool is disabled; using an unpooled ConnectionFactory");
@@ -192,9 +222,7 @@ class R2dbcConfiguration {
   }
 
   private void logConfiguration(
-      final ConnectionFactoryOptions options,
-      final R2dbcProperties.Pool pool,
-      final ConnectionFactory baseConnectionFactory) {
+      final R2dbcProperties.Pool pool, final ConnectionFactory baseConnectionFactory) {
     final String maxIdleTime = formatDuration(pool.getMaxIdleTime());
     final String maxLifeTime = formatDuration(pool.getMaxLifeTime());
     final String maxAcquireTime = formatDuration(pool.getMaxAcquireTime());
@@ -202,7 +230,6 @@ class R2dbcConfiguration {
         """
 
         R2DBC configuration
-          driver            : {}
           connectionFactory : {}
 
         R2DBC pool
@@ -216,7 +243,6 @@ class R2dbcConfiguration {
           validationDepth   : {}
           acquireRetry      : {}
         """,
-        options.getValue(ConnectionFactoryOptions.DRIVER),
         baseConnectionFactory.getClass().getName(),
         pool.isEnabled(),
         pool.getInitialSize(),

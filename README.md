@@ -83,7 +83,7 @@ a driver where those properties are explicit, tested, and owned by a single, wel
 
 ### Status
 
-Functional, `0.2.0` published to Maven Central. The full R2DBC SPI surface exists and is exercised
+Functional, `0.2.1` published to Maven Central. The full R2DBC SPI surface exists and is exercised
 against a real ClickHouse server (Testcontainers): connection lifecycle,
 `SELECT`/`INSERT`/parameterized statements, batches, row/column metadata, `getRowsUpdated()`, and
 R2DBC exception mapping for ClickHouse server errors. **The driver has not been run against a
@@ -102,11 +102,13 @@ to depend on today", kept up to date as things are found and fixed — treat thi
 of it, not the other way around.
 
 Since `0.1.0`, [ROADMAP.md's Phase 7](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
-(`0.2.0`, published) has added configurable transport pool options, a real statement-timeout
-implementation, correct multi-`Result` `Statement.add()` batching, a driver observability SPI, and
-an R2DBC SPI Technology Compatibility Kit lane run against a real server (see
+(`0.2.0`) added configurable transport pool options, a real statement-timeout implementation,
+correct multi-`Result` `Statement.add()` batching, a driver observability SPI, and an R2DBC SPI
+Technology Compatibility Kit lane run against a real server (see
 [Connection pooling](#connection-pooling) and [docs/R2DBC_COMPATIBILITY.md](docs/R2DBC_COMPATIBILITY.md)
-below) — see [CHANGELOG.md](CHANGELOG.md) for the full, release-by-release list.
+below); `0.2.1` added explicit `ConnectionFactory` disposal, a `responseTimeout` R2DBC option,
+correct parameter-binding wire encoding for temporal types and `List`/`Array`, and an opt-in
+server-error retry mode — see [CHANGELOG.md](CHANGELOG.md) for the full, release-by-release list.
 
 Still expect breaking changes at this stage — the SPI surface and options above are exercised by
 an automated test suite, not yet by a production workload.
@@ -128,7 +130,7 @@ version.
 
 ```kotlin
 dependencies {
-    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0")
+    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.1")
 }
 ```
 
@@ -609,9 +611,14 @@ whether you configure it or not.
    `ConnectionPool` still needs to dispose the underlying `ClickHouseConnectionFactory` itself
    separately at shutdown (confirmed directly against `ConnectionPool`'s own source:
    `ConnectionPool.dispose()`/`disposeLater()` only tear down the pooled `Connection` handles it
-   manages, never the factory's own transport/scheduler underneath). Wiring that fix into the bundled
-   demo is blocked for now on the demo's own dependency choice — see
-   [ROADMAP.md's Phase 8, item 10](ROADMAP.md#phase-8--post-020-hardening-021) for why.
+   manages, never the factory's own transport/scheduler underneath). The bundled demo now proves
+   this exact fix, real-server, not just in prose: register the raw factory as its own bean with
+   `@Bean(destroyMethod = "dispose")`, let the outer `ConnectionPool` bean depend on it as a method
+   parameter (so Spring destroys the pool first, then this factory), and a real integration test
+   (`ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest`) asserts a query against the raw
+   factory fails once `applicationContext.close()` returns — see
+   [ROADMAP.md's Phase 8, item 10](ROADMAP.md#phase-8--post-020-hardening-021) for the full
+   write-up, including why an earlier attempt at this same fix failed against a real build.
 
 **Why this is the point of the whole project, not an implementation detail:** client-v2's `Client`
 is blocking — serving *N* logical concurrent queries needs *N* platform threads each blocked
