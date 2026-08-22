@@ -607,8 +607,11 @@ whether you configure it or not.
    `dispose()` contract; `isDisposed()` reports `true` only once both are actually torn down. Nothing
    calls this automatically — a Spring Boot app wrapping the factory in `io.r2dbc.pool`'s
    `ConnectionPool` still needs to dispose the underlying `ClickHouseConnectionFactory` itself
-   separately at shutdown (`ConnectionPool.dispose()` only tears down the pooled `Connection`
-   handles it manages, not the factory's own transport/scheduler underneath).
+   separately at shutdown (confirmed directly against `ConnectionPool`'s own source:
+   `ConnectionPool.dispose()`/`disposeLater()` only tear down the pooled `Connection` handles it
+   manages, never the factory's own transport/scheduler underneath). Wiring that fix into the bundled
+   demo is blocked for now on the demo's own dependency choice — see
+   [ROADMAP.md's Phase 8, item 10](ROADMAP.md#phase-8--post-020-hardening-021) for why.
 
 **Why this is the point of the whole project, not an implementation detail:** client-v2's `Client`
 is blocking — serving *N* logical concurrent queries needs *N* platform threads each blocked

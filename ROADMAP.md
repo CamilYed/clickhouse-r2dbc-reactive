@@ -1681,6 +1681,38 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
     handles, not the factory underneath. Add a demo-level shutdown test proving that when the Spring
     context closes, the underlying transport/decoder-scheduler are actually disposed too, not just
     the outer pool — currently nothing in the demo calls `factory.dispose()` at all.
+
+    **Attempted (2026-08-22), reverted after the user's real build run — genuinely blocked, not just
+    unverified.** Confirmed the exact gap directly against `io.r2dbc.pool`'s own `ConnectionPool`
+    source (fetched from GitHub, not assumed): `ConnectionPool` does implement `java.io.Closeable`,
+    so Spring's default `@Bean` destroy-method inference already calls `close()`/`disposeLater()` on
+    it automatically — but `disposeLater()` only tears down the pool's own
+    `InstrumentedPool<Connection>`, never the delegate `ConnectionFactory` it wraps, so the driver's
+    own transport connection pool and decoder scheduler thread pool leak silently on every context
+    shutdown regardless. That part of the analysis holds.
+
+    The attempted fix — splitting the driver's raw `ConnectionFactory` into its own
+    `@Bean(destroyMethod = "dispose")` in `R2dbcConfiguration`, string-named so the demo still never
+    imports the driver's type — does not actually work today, and the user's real build proved it:
+    `BeanDefinitionValidationException: Could not find a destroy method named 'dispose' on bean with
+    name 'baseConnectionFactory'`, thrown eagerly at bean-creation time (Spring's explicit,
+    non-inferred `destroyMethod` enforces the method exists; it does **not** just warn at shutdown as
+    an earlier version of this note incorrectly claimed). Root cause, confirmed by re-reading
+    `build.gradle.kts`: the demo's `runtimeOnly` dependency deliberately pins the **published**
+    `io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0` — and `ClickHouseConnectionFactory
+    .dispose()` was added afterward, as part of the still-unreleased `0.2.1` work this whole
+    changelog section is under. The demo's classpath at test/runtime genuinely does not contain a
+    `dispose()` method to call; there is no reflection trick or defensive coding that fixes this,
+    since the method does not exist in the jar the demo actually depends on. This is the same
+    published-release-vs-current-`main` gap item 11 below already names — this item was accidentally
+    attempted before that one, not after.
+
+    **Not yet done**, and not really doable in isolation: either (a) `0.2.1` gets published and the
+    demo's pinned version bumped to it, or (b) item 11's current-`main` demo lane is built first, and
+    this fix + its shutdown test land only on that lane (which can actually compile against
+    `ClickHouseConnectionFactory.dispose()` today via `project(...)`), not on the published-release
+    lane. `R2dbcConfiguration.java` was reverted to its pre-attempt shape; no test file for this was
+    kept, since none of the ones written could actually pass against the pinned dependency.
 11. **Add a current-`main` demo integration lane, alongside the existing published-release lane.**
     The demo intentionally depends on
     `io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0` from Maven Central — good as a real
