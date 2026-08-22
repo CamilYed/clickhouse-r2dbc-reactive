@@ -1718,9 +1718,30 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
     ClickHouse via Testcontainers) proves it end to end: run a trivial query through the raw
     `baseConnectionFactory` bean, close the Spring context, then assert the same query now fails —
     proving the driver's own transport pool was actually torn down, not just the outer
-    `io.r2dbc.pool` wrapper. Written against `0.2.1`; not yet confirmed by a real `./gradlew` run in
-    this sandbox (no JDK/Docker here — see this repo's own `CLAUDE.md` for why), handed back for
-    that.
+    `io.r2dbc.pool` wrapper.
+
+    **The underlying fix (the two-bean split + `destroyMethod = "dispose"`) is confirmed correct
+    against a real build.** The user's first real `./gradlew` run against this test showed the test
+    method body itself completed cleanly — the query-through-raw-factory assertion before close,
+    and the query-fails-after-close assertion after it, both passed with no assertion failure
+    reported — so `context.close()` genuinely and synchronously disposed the driver's
+    `ConnectionFactory` in time for the very next query attempt to observably fail, not a race.
+    What actually failed was a **test-harness interaction**, not the fix: the failure's entire
+    stack trace was inside Spring's own `EventPublishingTestExecutionListener`/`DefaultContextCache`
+    machinery (`IllegalStateException: LifecycleProcessor not initialized`), thrown after the test
+    method returned, while the framework tried to publish an `AfterTestExecutionEvent` against the
+    `@SpringBootTest`-managed, cached context this test had already manually `.close()`-d.
+    `AbstractApplicationContext.restart()` (Spring Framework 7/Boot 4.1's newer context-cache
+    restart support) isn't the same operation as a fresh `refresh()` and can't resurrect a context
+    whose `close()` already tore down its `LifecycleProcessor`.
+
+    Fixed by no longer using `@SpringBootTest`'s shared, cached context for this specific test: it
+    now builds its own standalone context via `SpringApplicationBuilder(DemoApplication.class)
+    .web(WebApplicationType.NONE).properties(...).run()`, entirely outside the TestContext
+    framework's cache, so closing it mid-test triggers no framework interaction at all —
+    `.web(...)`/`.properties(String...)` verified directly against Spring Boot's own
+    `SpringApplicationBuilder` source (fetched from GitHub, not assumed) before use. Re-handed back
+    for a second real `./gradlew` run to confirm this specific fix.
 11. **Add a current-`main` demo integration lane, alongside the existing published-release lane.**
     The demo intentionally depends on
     `io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0` from Maven Central — good as a real

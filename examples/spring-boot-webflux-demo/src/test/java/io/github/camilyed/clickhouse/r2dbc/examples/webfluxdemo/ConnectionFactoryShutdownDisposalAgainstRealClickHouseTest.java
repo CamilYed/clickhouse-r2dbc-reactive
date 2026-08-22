@@ -8,13 +8,9 @@ import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactory;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.clickhouse.ClickHouseContainer;
 import reactor.core.publisher.Mono;
 
@@ -26,12 +22,22 @@ import reactor.core.publisher.Mono;
  * work: {@code ConnectionPool#disposeLater()} only tears down the pool it owns and never calls
  * anything on the delegate factory it was built from.
  *
+ * <p>Deliberately builds its own standalone {@link ConfigurableApplicationContext} via {@link
+ * SpringApplicationBuilder} instead of using {@code @SpringBootTest} — confirmed the hard way that
+ * {@code @SpringBootTest}'s shared, cached context does not tolerate a test closing it manually:
+ * Spring's {@code EventPublishingTestExecutionListener} still tries to publish an {@code
+ * AfterTestExecutionEvent} against it afterward, which goes through {@code
+ * DefaultContextCache.restartContextIfNecessary} and throws {@code IllegalStateException:
+ * LifecycleProcessor not initialized}, since {@code close()} already tore down the context's
+ * lifecycle processor and {@code restart()} isn't the same operation as a fresh {@code refresh()}.
+ * A context this test builds and owns itself, entirely outside the TestContext framework's cache,
+ * has no such interaction — closing it mid-test is exactly what it's for.
+ *
  * <p>Runs against driver {@code 0.2.1} specifically — the {@code dispose()}/{@code isDisposed()}
  * methods this test relies on do not exist on the previously-pinned {@code 0.2.0} release (see this
  * module's {@code build.gradle.kts}), which is exactly why an earlier attempt at this same proof
  * failed with a real {@code BeanDefinitionValidationException} at context-startup time.
  */
-@SpringBootTest
 class ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest {
 
   private static final ClickHouseContainer CLICK_HOUSE =
@@ -41,33 +47,31 @@ class ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest {
     CLICK_HOUSE.start();
   }
 
-  @DynamicPropertySource
-  static void clickHouseProperties(final DynamicPropertyRegistry registry) {
-    registry.add(
-        "spring.r2dbc.url",
-        () -> CLICK_HOUSE.getHttpUrl().replaceFirst("^http://", "r2dbc:clickhouse://"));
-    registry.add("spring.r2dbc.username", CLICK_HOUSE::getUsername);
-    registry.add("spring.r2dbc.password", CLICK_HOUSE::getPassword);
-  }
-
-  @Autowired private ConfigurableApplicationContext applicationContext;
-
-  @Autowired
-  @Qualifier("baseConnectionFactory")
-  private ConnectionFactory baseConnectionFactory;
-
   @Test
-  @DirtiesContext
   void shouldDisposeTheDriversOwnConnectionFactoryWhenTheSpringContextCloses() {
     // given
+    final ConfigurableApplicationContext context = startApplicationContext();
+    final ConnectionFactory baseConnectionFactory =
+        context.getBean("baseConnectionFactory", ConnectionFactory.class);
     assertThatCode(() -> runTrivialQuery(baseConnectionFactory)).doesNotThrowAnyException();
 
     // when
-    applicationContext.close();
+    context.close();
 
     // then
     final Throwable thrown = catchThrowable(() -> runTrivialQuery(baseConnectionFactory));
     assertThat(thrown).isNotNull();
+  }
+
+  private static ConfigurableApplicationContext startApplicationContext() {
+    return new SpringApplicationBuilder(DemoApplication.class)
+        .web(WebApplicationType.NONE)
+        .properties(
+            "spring.r2dbc.url="
+                + CLICK_HOUSE.getHttpUrl().replaceFirst("^http://", "r2dbc:clickhouse://"),
+            "spring.r2dbc.username=" + CLICK_HOUSE.getUsername(),
+            "spring.r2dbc.password=" + CLICK_HOUSE.getPassword())
+        .run();
   }
 
   private static void runTrivialQuery(final ConnectionFactory connectionFactory) {
