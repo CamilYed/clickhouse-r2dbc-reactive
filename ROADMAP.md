@@ -1829,6 +1829,18 @@ regression at 1M rows) rather than acted on now:
   `ResponseCompressionAgainstRealClickHouseTest` — a 100,000-row `system.numbers` query, comfortably
   spanning multiple LZ4 blocks, decoded both with and without compression. What's still deferred is
   only the benchmark re-run itself — see the entry directly above.
+- **Mid-stream server failure under compression, not yet independently characterized.**
+  `MidStreamQueryFailureAgainstRealClickHouseTest` deliberately runs with
+  `ResponseCompression.NONE` (see that class's own Javadoc) because it was written to characterize
+  ClickHouse's *uncompressed* body writer specifically. A real run with compression left at its
+  default (2026-08-22) instead produced zero decoded rows and a hard failure for the same scenario
+  (`max_block_size = 1000`, `throwIf` at row 50000) — consistent with the compressed HTTP writer
+  buffering far more coarsely than the uncompressed one, so nothing crosses its flush threshold
+  before the query fails and the connection tears down with no complete block ever sent. Real,
+  but not yet independently confirmed (no ClickHouse source/docs cross-check the way the
+  uncompressed narrative got) or turned into its own regression test — worth a dedicated follow-up:
+  pin down the actual flush trigger (buffer size vs. explicit flush call) and decide whether this
+  is worth documenting as an additional Known limitation for compression's default-on behavior.
 - **The richer streaming-analytics demo** (event generator, large NDJSON scan with visible
   time-to-first-row, slow-consumer/backpressure demonstration, 128-logical-queries-over-8-physical-
   connections, cancellation + `KILL QUERY`, live metrics) — valuable for showing *why* this driver

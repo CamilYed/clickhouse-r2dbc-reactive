@@ -5,9 +5,12 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
+import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
+import io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,6 +52,19 @@ import reactor.core.publisher.Flux;
  * below), which this driver has no way to enforce or detect on its own. See README's Known
  * limitations section for the caller-facing writeup of this finding.
  *
+ * <p><b>Deliberately runs with {@link ResponseCompression#NONE}</b>, overriding this driver's own
+ * {@code responseCompression=true} default (see {@code TransportOptions#defaults()}) — this class
+ * exists specifically to characterize the exact raw-byte corruption shape described above (trailing
+ * plain-text error misdecoded as further {@code UInt64} values), which is a property of
+ * ClickHouse's <em>uncompressed</em> HTTP body writer. A real run with compression left on its
+ * default showed the server's compressed-response writer buffers far more coarsely (nothing crosses
+ * a threshold small enough for {@code max_block_size = 1000} to cross before {@code throwIf}
+ * fires), so the whole response — including the row-binary header — is simply never flushed before
+ * the connection tears down, and this test would instead be characterizing "how early can a
+ * mid-stream failure discard an entire unflushed compression buffer", a real but different and
+ * not-yet-independently-verified question — left for a dedicated follow-up (see ROADMAP.md) rather
+ * than folded into this already carefully-verified narrative.
+ *
  * <p>{@link #shouldSurfaceACleanServerExceptionWhenWaitEndOfQueryIsEnabled} answers the roadmap
  * item's other open question directly: {@code wait_end_of_query=1} — ClickHouse's own opt-in
  * "buffer the whole response server-side, then send a single clean header-based error if one
@@ -69,7 +85,11 @@ class MidStreamQueryFailureAgainstRealClickHouseTest extends BaseClickHouseInteg
     if (transport == null) {
       transport =
           new ClickHouseHttpTransport(
-              clickHouseHttpUrl(), clickHouseUsername(), clickHousePassword());
+              clickHouseHttpUrl(),
+              TransportOptions.defaults()
+                  .withAuthentication(
+                      Authentication.basic(clickHouseUsername(), clickHousePassword()))
+                  .withResponseCompression(ResponseCompression.NONE));
     }
     return transport;
   }
