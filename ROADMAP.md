@@ -1681,6 +1681,29 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
     handles, not the factory underneath. Add a demo-level shutdown test proving that when the Spring
     context closes, the underlying transport/decoder-scheduler are actually disposed too, not just
     the outer pool — currently nothing in the demo calls `factory.dispose()` at all.
+
+    **Done (2026-08-22), pending the user's local build for compile/test verification.** Confirmed
+    the exact gap directly against `io.r2dbc.pool`'s own `ConnectionPool` source (fetched from
+    GitHub, not assumed): `ConnectionPool` does implement `java.io.Closeable`, so Spring's default
+    `@Bean` destroy-method inference already called `close()`/`disposeLater()` on it automatically —
+    but `disposeLater()` only tears down the pool's own `InstrumentedPool<Connection>`, never the
+    delegate `ConnectionFactory` it wraps, so the driver's own transport connection pool and decoder
+    scheduler thread pool leaked silently on every context shutdown regardless. Fixed in
+    `R2dbcConfiguration` by splitting the driver's raw, unpooled `ConnectionFactory` into its own
+    bean (`baseConnectionFactory`, `@Bean(destroyMethod = "dispose")`) that the pooled `@Primary`
+    `connectionFactory` bean depends on as a method parameter, rather than only ever existing as a
+    local variable wrapped inside the pool bean — Spring destroys a bean's dependents before the
+    bean itself, so the pool always finishes closing every connection it handed out before the
+    driver's own `dispose()` runs. `destroyMethod` is a plain string, resolved by reflection at
+    shutdown, not a compile-time type reference — this demo module still never imports a single
+    class from the driver itself (see `build.gradle.kts`'s `runtimeOnly` dependency comment). New
+    test `ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest` proves this against a real
+    ClickHouse server by effect, not by inspecting driver-internal state: it runs a trivial query
+    successfully, closes the Spring context, then proves the same query against the same
+    `ConnectionFactory` reference now fails — meaningful only because the real ClickHouse container
+    keeps running independently of the Spring context, so the only thing that changed is the
+    driver's own transport pool being released. README's "Shutting it down" note and Connection
+    pooling section updated to describe the fix.
 11. **Add a current-`main` demo integration lane, alongside the existing published-release lane.**
     The demo intentionally depends on
     `io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.0` from Maven Central — good as a real

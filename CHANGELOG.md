@@ -74,6 +74,15 @@ the version it was given and fails the release if it can't find one. See
   `OrderEventStreamingControllerTest` that controls source-element timing directly rather than relying
   on a real query's own fast, unpredictable timing. See [ROADMAP.md's Phase 8, item
   9](ROADMAP.md#phase-8--post-020-hardening-021).
+- **The bundled demo now actually disposes the driver's `ClickHouseConnectionFactory` at Spring
+  shutdown**, not just the `io.r2dbc.pool` `ConnectionPool` wrapping it. Confirmed directly against
+  `ConnectionPool`'s own source that `disposeLater()` never touches the delegate factory it wraps, so
+  the driver's transport connection pool and decoder scheduler thread pool previously leaked silently
+  on every context shutdown. Fixed by giving the driver's raw `ConnectionFactory` its own
+  `@Bean(destroyMethod = "dispose")` in `R2dbcConfiguration`, named by string so the demo still never
+  imports a class from the driver itself. Proven against a real server by a new
+  `ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest`. See [ROADMAP.md's Phase 8, item
+  10](ROADMAP.md#phase-8--post-020-hardening-021).
 
 ### Fixed
 
