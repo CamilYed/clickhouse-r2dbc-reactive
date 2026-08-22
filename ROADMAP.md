@@ -1787,18 +1787,17 @@ are real findings, not dismissed — they're staged here alongside the existing 
 scheduler experiment, mixed heavy-workload benchmarks, and the `StreamingScanBenchmark` chunk-handoff
 regression at 1M rows) rather than acted on now:
 
-- **Benchmark response-compression parity** — the review's single most emphasized finding. client-v2
-  defaults to LZ4 server-response compression (`COMPRESS_SERVER_RESPONSE` defaults to `true`,
-  confirmed in the pinned `0.9.8` source); this driver's Reactor Netty transport doesn't implement
-  response decompression and doesn't send `compress=1`; the comparative JMH benchmark clients don't
-  visibly disable client-v2's default either. On a local loopback benchmark this can bias the
-  comparison in either direction depending on whether CPU (compression cost) or bandwidth (transfer
-  cost) dominates locally — the direction isn't obvious without measuring. Before treating the
-  current large-result transport/scan numbers as a controlled comparison: verify the effective
-  compression setting on both sides with a real probe (not just builder defaults), rerun with both
-  sides at compression OFF, and label older large-result benchmark write-ups as unmatched-compression
-  until re-run. Do not implement response compression in the production driver just to make the
-  benchmark look fair — controlled comparison first, feature decision after.
+- **Benchmark response-compression parity** — the review's single most emphasized finding, and the
+  reason the *production feature* below existed as a separate, deliberately-sequenced-after item.
+  That sequencing was overridden by explicit user direction on 2026-08-22 ("let's go with this
+  compression, preserve v2's behavior, do it properly") — the driver feature is now implemented (see
+  the "Response LZ4 compression as a driver feature" entry below, now done, and `CHANGELOG.md`'s
+  `0.2.2` entry). What's still deferred here, unchanged, is the *benchmark re-run itself*: the
+  existing large-result transport/scan numbers in `docs/PERFORMANCE.md`/README were captured before
+  this driver sent `compress=1` at all (client-v2's default was ON, this driver's was effectively
+  OFF, an unmatched comparison), and re-measuring both sides at matched compression settings (ON/ON
+  and OFF/OFF) still needs the real (cloud) benchmark environment this whole section waits for. Until
+  then, treat the existing large-result numbers as unmatched-compression and unconfirmed.
 - **Benchmark-harness resource-lifecycle bug**: `OurDriverPointQueryClient` (and potentially other
   benchmark helpers) stores only the logical `Connection` it creates via
   `ClickHouseConnectionFactory.from(options)`, not the factory itself — `close()` closes the
@@ -1818,12 +1817,30 @@ regression at 1M rows) rather than acted on now:
   because there's no baseline-comparison strategy yet — this is the natural next step once there's a
   real environment to run it against, but no performance-gate thresholds until multiple paired runs
   establish actual variance.
-- **Response LZ4 compression as a driver feature.** Sequenced deliberately after benchmark fairness,
-  not before: measure OFF/OFF first, then design `responseCompression = NONE | LZ4` with streaming
-  decompression, bounded memory, preserved backpressure, no full-response aggregation, and the same
-  fragmented-frame/cancellation/leak-detection test coverage every other transport feature gets — then
-  benchmark local-loopback and a more realistic remote/higher-latency network, both OFF/OFF and
-  ON/ON.
+- **Response LZ4 compression as a driver feature — done (2026-08-22), per explicit user direction
+  overriding the original "measure first" sequencing above.** `core.ResponseCompression` (`NONE`/
+  `LZ4`, default `LZ4`) threads through `TransportOptions`/`ClickHouseHttpTransport` (sends
+  `compress=1`) and `RowBinaryDecoder` (wraps the response body in the new
+  `core.ClickHouseLz4InputStream` before decoding, when compressed) — no new Reactor operators or
+  schedulers, reusing `FluxInputStreamBridge`/`RowDecodingScheduler` unchanged, so streaming,
+  bounded memory, backpressure, and cancellation semantics are inherited rather than reimplemented.
+  New `responseCompression` R2DBC connection option (default `true`, opt out with
+  `responseCompression=false`). Proven against a real server (not just hand-built fixtures) by
+  `ResponseCompressionAgainstRealClickHouseTest` — a 100,000-row `system.numbers` query, comfortably
+  spanning multiple LZ4 blocks, decoded both with and without compression. What's still deferred is
+  only the benchmark re-run itself — see the entry directly above.
+- **Mid-stream server failure under compression, not yet independently characterized.**
+  `MidStreamQueryFailureAgainstRealClickHouseTest` deliberately runs with
+  `ResponseCompression.NONE` (see that class's own Javadoc) because it was written to characterize
+  ClickHouse's *uncompressed* body writer specifically. A real run with compression left at its
+  default (2026-08-22) instead produced zero decoded rows and a hard failure for the same scenario
+  (`max_block_size = 1000`, `throwIf` at row 50000) — consistent with the compressed HTTP writer
+  buffering far more coarsely than the uncompressed one, so nothing crosses its flush threshold
+  before the query fails and the connection tears down with no complete block ever sent. Real,
+  but not yet independently confirmed (no ClickHouse source/docs cross-check the way the
+  uncompressed narrative got) or turned into its own regression test — worth a dedicated follow-up:
+  pin down the actual flush trigger (buffer size vs. explicit flush call) and decide whether this
+  is worth documenting as an additional Known limitation for compression's default-on behavior.
 - **The richer streaming-analytics demo** (event generator, large NDJSON scan with visible
   time-to-first-row, slow-consumer/backpressure demonstration, 128-logical-queries-over-8-physical-
   connections, cancellation + `KILL QUERY`, live metrics) — valuable for showing *why* this driver

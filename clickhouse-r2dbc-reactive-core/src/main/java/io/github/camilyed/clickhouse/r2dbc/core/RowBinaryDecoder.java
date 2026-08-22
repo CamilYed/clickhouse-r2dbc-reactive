@@ -6,6 +6,7 @@ import com.clickhouse.client.api.internal.ServerSettings;
 import com.clickhouse.client.api.metadata.TableSchema;
 import com.clickhouse.client.api.query.QuerySettings;
 import com.clickhouse.data.ClickHouseColumn;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.List;
 import reactor.core.publisher.Flux;
@@ -75,10 +76,17 @@ public final class RowBinaryDecoder {
    * backed by a live Reactor Netty response the way the shipped connector's production path does —
    * that path goes through {@link #decode}, not this method, specifically to get {@link
    * RowDecodingScheduler}'s off-event-loop guarantee.
+   *
+   * <p>{@code compression} says whether {@code source}'s bytes are still ClickHouse's own LZ4 block
+   * framing (see {@link ClickHouseLz4InputStream}) or already plain — see {@link
+   * ResponseCompression}'s Javadoc.
    */
-  public static Flux<DecodedRow> decodeRows(final Flux<ByteBuffer> source) {
+  public static Flux<DecodedRow> decodeRows(
+      final Flux<ByteBuffer> source, final ResponseCompression compression) {
     return Flux.generate(
-        () -> newReader(source), RowBinaryDecoder::emitNextRow, RowBinaryDecoder::closeReader);
+        () -> newReader(source, compression),
+        RowBinaryDecoder::emitNextRow,
+        RowBinaryDecoder::closeReader);
   }
 
   /**
@@ -98,11 +106,17 @@ public final class RowBinaryDecoder {
    * already arrived asynchronously — is the event-loop thread that delivered them, not the thread
    * that originally subscribed. See {@link RowDecodingScheduler}'s Javadoc for who owns {@code
    * scheduler} and disposes it.
+   *
+   * <p>{@code compression} says whether {@code source}'s bytes are still ClickHouse's own LZ4 block
+   * framing (see {@link ClickHouseLz4InputStream}) or already plain — see {@link
+   * ResponseCompression}'s Javadoc.
    */
   public static Mono<DecodedResult> decode(
-      final Flux<ByteBuffer> source, final RowDecodingScheduler scheduler) {
+      final Flux<ByteBuffer> source,
+      final RowDecodingScheduler scheduler,
+      final ResponseCompression compression) {
     final Scheduler reactorScheduler = scheduler.asReactorScheduler();
-    return Mono.fromCallable(() -> newReader(source))
+    return Mono.fromCallable(() -> newReader(source, compression))
         .subscribeOn(reactorScheduler)
         .map(
             reader ->
@@ -130,9 +144,11 @@ public final class RowBinaryDecoder {
     return new ColumnDescriptor(column.getColumnName(), column.getOriginalTypeName());
   }
 
-  private static ListDecodingRowBinaryReader newReader(final Flux<ByteBuffer> source) {
+  private static ListDecodingRowBinaryReader newReader(
+      final Flux<ByteBuffer> source, final ResponseCompression compression) {
+    final InputStream body = FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND);
     return new ListDecodingRowBinaryReader(
-        FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND),
+        compression == ResponseCompression.LZ4 ? new ClickHouseLz4InputStream(body) : body,
         new QuerySettings()
             .setUseTimeZone("UTC")
             // Matches ClickHouseHttpTransport#JSON_AS_STRING_QUERY_PARAM, sent unconditionally on

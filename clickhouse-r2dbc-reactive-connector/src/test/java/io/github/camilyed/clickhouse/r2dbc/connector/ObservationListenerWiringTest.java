@@ -17,6 +17,14 @@ import reactor.core.publisher.Mono;
  * Proves {@link ClickHouseConnectionFactoryProvider#OBSERVATION_LISTENER} is actually wired end to
  * end — built from {@link ConnectionFactoryOptions} through to a real query running against a
  * {@link ControlledClickHouseServer} — not just accepted and ignored.
+ *
+ * <p>Every factory built here explicitly sets {@link
+ * ClickHouseConnectionFactoryProvider#RESPONSE_COMPRESSION} to {@code false}, overriding this
+ * driver's own {@code responseCompression=true} default (see {@code TransportOptions#defaults()}):
+ * {@link ControlledClickHouseServer} always sends its configured response bytes verbatim,
+ * regardless of whether a request asked for {@code compress=1} — it has no ClickHouse-style LZ4
+ * encoder of its own — so decoding its response as compressed would fail. This class's own concern
+ * (observation-listener wiring) is orthogonal to compression either way.
  */
 class ObservationListenerWiringTest {
 
@@ -34,6 +42,7 @@ class ObservationListenerWiringTest {
               .option(ConnectionFactoryOptions.HOST, "localhost")
               .option(ConnectionFactoryOptions.PORT, server.port())
               .option(ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER, listener)
+              .option(ClickHouseConnectionFactoryProvider.RESPONSE_COMPRESSION, false)
               .build();
       final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
 
@@ -70,6 +79,7 @@ class ObservationListenerWiringTest {
               .option(ConnectionFactoryOptions.HOST, "localhost")
               .option(ConnectionFactoryOptions.PORT, server.port())
               .option(ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER, listener)
+              .option(ClickHouseConnectionFactoryProvider.RESPONSE_COMPRESSION, false)
               .build();
       final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
 
@@ -97,6 +107,7 @@ class ObservationListenerWiringTest {
           ConnectionFactoryOptions.builder()
               .option(ConnectionFactoryOptions.HOST, "localhost")
               .option(ConnectionFactoryOptions.PORT, server.port())
+              .option(ClickHouseConnectionFactoryProvider.RESPONSE_COMPRESSION, false)
               .build();
       final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
 

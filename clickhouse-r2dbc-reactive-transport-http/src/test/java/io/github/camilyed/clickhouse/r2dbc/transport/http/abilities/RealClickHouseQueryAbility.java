@@ -46,7 +46,8 @@ public interface RealClickHouseQueryAbility {
     final Flux<ByteBuffer> body =
         transport().query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
     final DecodedResult decoded =
-        RowBinaryDecoder.decode(body, DECODING_SCHEDULER).block(Duration.ofSeconds(10));
+        RowBinaryDecoder.decode(body, DECODING_SCHEDULER, transport().responseCompression())
+            .block(Duration.ofSeconds(10));
     final List<String> columnNames =
         decoded.columns().stream().map(ColumnDescriptor::name).toList();
     return decoded

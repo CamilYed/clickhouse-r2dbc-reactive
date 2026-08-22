@@ -60,6 +60,18 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
   public static final Option<Duration> RESPONSE_TIMEOUT = Option.valueOf("responseTimeout");
 
   /**
+   * Whether ClickHouse should compress response bodies with its own custom LZ4 block framing (sent
+   * as the {@code compress=1} query parameter — not standard HTTP {@code Content-Encoding}), e.g.
+   * {@code responseCompression=false} to turn it off. <b>Defaults to {@code true}</b>, matching
+   * client-v2's own default of {@code COMPRESS_SERVER_RESPONSE=true} — a caller migrating from
+   * client-v2, or comparing throughput against it, gets the same on-the-wire behavior with no extra
+   * configuration. Applied to every query run over a {@link ClickHouseConnection} this factory
+   * produces. See {@code io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression}'s Javadoc
+   * for the wire format this turns on.
+   */
+  public static final Option<Boolean> RESPONSE_COMPRESSION = Option.valueOf("responseCompression");
+
+  /**
    * A trusted TLS certificate for {@code ssl=true} connections, as a classpath resource path or a
    * filesystem path to a PEM-encoded certificate (or chain) — see {@link
    * ClickHouseConnectionFactory#from} for exactly how the value is resolved. Named and shaped after

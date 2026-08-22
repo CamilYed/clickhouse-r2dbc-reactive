@@ -5,6 +5,7 @@ import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
@@ -144,7 +145,9 @@ public class BoundedPoolConcurrencyBenchmark {
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body, decodingScheduler).flatMapMany(DecodedResult::rows).next();
+    return RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)
+        .flatMapMany(DecodedResult::rows)
+        .next();
   }
 
   /**

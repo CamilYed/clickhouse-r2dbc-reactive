@@ -12,6 +12,24 @@ the version it was given and fails the release if it can't find one. See
 
 ## [Unreleased] — 0.2.2
 
+### Added
+
+- **HTTP response compression, on by default** — this driver now sends `compress=1` and decodes
+  ClickHouse's own custom LZ4 block framing (distinct from standard HTTP `Content-Encoding`),
+  matching client-v2's own default of `COMPRESS_SERVER_RESPONSE=true`. New `core.ResponseCompression`
+  (`NONE`/`LZ4`) threads the setting through `TransportOptions`/`ClickHouseHttpTransport` (which
+  query parameter to send) and `RowBinaryDecoder` (whether to unwrap the response body through the
+  new `core.ClickHouseLz4InputStream` before decoding) — zero new Reactor operators or schedulers,
+  the existing `FluxInputStreamBridge`/`RowDecodingScheduler` machinery handles it unchanged. New
+  R2DBC connection option `responseCompression` (default `true`), e.g.
+  `r2dbc:clickhouse://host?responseCompression=false` to opt out. `ClickHouseCityHash`/`LZ4Factory`
+  (already transitive via `client-v2`, no new dependency) verify each block's checksum and
+  decompress it; wire format verified byte-for-byte against client-v2 0.9.8's own
+  `ClickHouseLZ4InputStream`/`ClickHouseLZ4OutputStream`. Proven against a real server, not just
+  hand-built fixtures, by `ResponseCompressionAgainstRealClickHouseTest` (100,000-row multi-block
+  response, both compressed and explicitly disabled) — closes the compression-parity gap noted in
+  [ROADMAP.md's Phase 8, item 12](ROADMAP.md#phase-8--post-020-hardening-021).
+
 ### Fixed
 
 - **The bundled demo now disposes the driver's `ClickHouseConnectionFactory` at Spring shutdown**,

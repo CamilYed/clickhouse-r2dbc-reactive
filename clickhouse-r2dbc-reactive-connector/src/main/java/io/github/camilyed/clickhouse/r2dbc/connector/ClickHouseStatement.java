@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -208,9 +209,12 @@ final class ClickHouseStatement implements Statement {
     }
     final QueryObservation observation =
         QueryObservation.start(observationListener, query.queryId(), OperationKind.QUERY, sql);
+    final ResponseCompression compression = transport.responseCompression();
     return transport
         .queryWithSummary(query)
-        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler, observation))
+        .flatMap(
+            response ->
+                ClickHouseResult.decode(response, decodingScheduler, observation, compression))
         .doOnError(observation::failed)
         .doOnCancel(observation::cancelled);
   }

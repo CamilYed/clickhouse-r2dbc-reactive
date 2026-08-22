@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Objects;
@@ -36,7 +37,8 @@ public record TransportOptions(
     @Nullable Duration pendingAcquireTimeout,
     @Nullable Duration maxIdleTime,
     @Nullable Duration maxLifeTime,
-    @Nullable String database) {
+    @Nullable String database,
+    ResponseCompression responseCompression) {
 
   public TransportOptions {
     requirePositive(maxConnections, "maxConnections");
@@ -46,7 +48,13 @@ public record TransportOptions(
     requireNonNegative(maxLifeTime, "maxLifeTime");
   }
 
-  /** Every option at its "use Reactor Netty's own default" value. */
+  /**
+   * Every option at its "use Reactor Netty's own default" value — except {@code
+   * responseCompression}, which defaults to {@link ResponseCompression#LZ4}, not {@link
+   * ResponseCompression#NONE}: this driver's default matches client-v2's own default of {@code
+   * COMPRESS_SERVER_RESPONSE=true}, so a caller migrating from client-v2 gets the same on-the-wire
+   * behavior without opting in explicitly. See {@link ResponseCompression}'s Javadoc.
+   */
   public static TransportOptions defaults() {
     return new TransportOptions(
         Authentication.none(),
@@ -59,7 +67,8 @@ public record TransportOptions(
         null,
         null,
         null,
-        null);
+        null,
+        ResponseCompression.LZ4);
   }
 
   public TransportOptions withAuthentication(final Authentication authentication) {
@@ -74,7 +83,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withResponseTimeout(final @Nullable Duration responseTimeout) {
@@ -89,7 +99,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withConnectTimeout(final @Nullable Duration connectTimeout) {
@@ -104,7 +115,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withTrustedCertificatePem(final byte @Nullable [] trustedCertificatePem) {
@@ -119,7 +131,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withRetryPolicy(final RetryPolicy retryPolicy) {
@@ -134,7 +147,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withMaxConnections(final @Nullable Integer maxConnections) {
@@ -149,7 +163,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withPendingAcquireMaxCount(
@@ -165,7 +180,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withPendingAcquireTimeout(
@@ -181,7 +197,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withMaxIdleTime(final @Nullable Duration maxIdleTime) {
@@ -196,7 +213,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   public TransportOptions withMaxLifeTime(final @Nullable Duration maxLifeTime) {
@@ -211,7 +229,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   /**
@@ -232,7 +251,33 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
+  }
+
+  /**
+   * Whether ClickHouse should compress the response body with its own custom LZ4 block framing
+   * ({@link ResponseCompression#LZ4}, sent as the {@code compress=1} query parameter — see {@link
+   * ClickHouseHttpTransport}) or send it uncompressed ({@link ResponseCompression#NONE}). {@link
+   * ResponseCompression#LZ4} is this transport's default (see {@link #defaults()}) — pass {@link
+   * ResponseCompression#NONE} to turn it off, e.g. to compare against an uncompressed baseline.
+   * Wired from the R2DBC-facing {@code responseCompression} connection option by {@code
+   * ClickHouseConnectionFactory.from}.
+   */
+  public TransportOptions withResponseCompression(final ResponseCompression responseCompression) {
+    return new TransportOptions(
+        authentication,
+        responseTimeout,
+        connectTimeout,
+        trustedCertificatePem,
+        retryPolicy,
+        maxConnections,
+        pendingAcquireMaxCount,
+        pendingAcquireTimeout,
+        maxIdleTime,
+        maxLifeTime,
+        database,
+        responseCompression);
   }
 
   // The generated record equals/hashCode/toString compare trustedCertificatePem by array
@@ -257,7 +302,8 @@ public record TransportOptions(
             Duration otherPendingAcquireTimeout,
             Duration otherMaxIdleTime,
             Duration otherMaxLifeTime,
-            String otherDatabase))) {
+            String otherDatabase,
+            ResponseCompression otherResponseCompression))) {
       return false;
     }
     return Objects.equals(authentication, otherAuthentication)
@@ -270,7 +316,8 @@ public record TransportOptions(
         && Objects.equals(pendingAcquireTimeout, otherPendingAcquireTimeout)
         && Objects.equals(maxIdleTime, otherMaxIdleTime)
         && Objects.equals(maxLifeTime, otherMaxLifeTime)
-        && Objects.equals(database, otherDatabase);
+        && Objects.equals(database, otherDatabase)
+        && responseCompression == otherResponseCompression;
   }
 
   @Override
@@ -286,7 +333,8 @@ public record TransportOptions(
         pendingAcquireTimeout,
         maxIdleTime,
         maxLifeTime,
-        database);
+        database,
+        responseCompression);
   }
 
   @Override
@@ -314,6 +362,8 @@ public record TransportOptions(
         + maxLifeTime
         + ", database="
         + database
+        + ", responseCompression="
+        + responseCompression
         + ']';
   }
 

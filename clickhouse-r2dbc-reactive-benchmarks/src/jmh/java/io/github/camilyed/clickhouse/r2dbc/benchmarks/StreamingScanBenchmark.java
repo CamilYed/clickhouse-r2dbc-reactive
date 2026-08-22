@@ -5,6 +5,7 @@ import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -141,7 +142,7 @@ public class StreamingScanBenchmark {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(SELECT_ALL_SQL)).asByteArray().map(ByteBuffer::wrap);
     final long rowCount =
-        RowBinaryDecoder.decode(body, decodingScheduler)
+        RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)
             .flatMapMany(DecodedResult::rows)
             .doOnNext(
                 row -> {
