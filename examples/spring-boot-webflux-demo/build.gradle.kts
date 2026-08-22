@@ -54,6 +54,11 @@ dependencies {
     // (org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient) into its
     // own module, no longer pulled in transitively - must be declared explicitly.
     testImplementation("org.springframework.boot:spring-boot-webtestclient")
+    // Same Boot 4 slimming as above: reactor-test (StepVerifier) is no longer pulled in
+    // transitively by spring-boot-starter-test either - needed by
+    // OrderEventStreamingControllerTest to assert on response timing. Version managed by the
+    // spring-boot-dependencies BOM above.
+    testImplementation("io.projectreactor:reactor-test")
     // Deliberately plain Testcontainers JUnit5 + @DynamicPropertySource, not Spring Boot's
     // @ServiceConnection: Spring Boot's built-in R2DBC service-connection detection only knows a
     // fixed list of well-known drivers (postgres, mysql, mariadb, mssql, oracle...), which doesn't

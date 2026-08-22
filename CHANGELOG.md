@@ -58,6 +58,22 @@ the version it was given and fails the release if it can't find one. See
   numeric conversion matrix deliberately does not extend to `List` elements. See
   [ROADMAP.md's Phase 8, item 6](ROADMAP.md#phase-8--post-020-hardening-021) for the full matrix and
   the reasoning behind each type's encoding.
+- **Opt-in, per-query retry after a retryable ClickHouse server error** —
+  `ClickHouseQuery.withServerErrorRetryEnabled()`. By default a query is only ever retried for a
+  failure that happens *before* the request was fully sent (unchanged); this widens retry eligibility,
+  for callers who explicitly opt in, to also cover a server error `ServerException.isRetryable()`
+  classifies as retryable, as long as no response bytes have been delivered downstream yet. Deliberately
+  a per-query opt-in rather than a connection-wide setting or SQL-text sniffing — a single connection is
+  routinely used for both reads and writes, and there is no reliable way to tell a `SELECT` from a
+  literal-SQL `INSERT` by inspecting the SQL text alone (CTEs, multi-statement text, `INSERT ... SELECT`
+  would all defeat a naive check). Not yet reachable through the R2DBC `Statement` API — that's a
+  tracked follow-up, not part of this change. See [ROADMAP.md's Phase 8, item
+  7](ROADMAP.md#phase-8--post-020-hardening-021) for the full design.
+- **`GET /order-events/stream`** in the bundled demo, producing `application/x-ndjson` — each event is
+  written to the HTTP response as soon as it arrives, proven (not just asserted) by a new
+  `OrderEventStreamingControllerTest` that controls source-element timing directly rather than relying
+  on a real query's own fast, unpredictable timing. See [ROADMAP.md's Phase 8, item
+  9](ROADMAP.md#phase-8--post-020-hardening-021).
 
 ### Fixed
 
@@ -91,6 +107,26 @@ the version it was given and fails the release if it can't find one. See
   ClickHouse's own lexer accepts (`--`, `#!`, `# `, `//`, and `/* */` block comments, which — verified
   against ClickHouse's docs, not assumed — nest, unlike standard SQL's). See [ROADMAP.md's Phase 8,
   item 3](ROADMAP.md#phase-8--post-020-hardening-021).
+- **The demo's `OrderEventController#all()` Javadoc no longer claims the HTTP response streams.** It
+  didn't — with no streaming media type, Spring WebFlux's default `application/json` writer collects
+  the whole `Flux` into one array before writing anything, even though the underlying ClickHouse query
+  itself streams correctly. The Javadoc now says so plainly and points callers who need a response
+  actually proven to stream at the HTTP layer to the new `GET /order-events/stream` endpoint above. See
+  [ROADMAP.md's Phase 8, item 9](ROADMAP.md#phase-8--post-020-hardening-021).
+
+### Also confirmed, not yet redesigned
+
+- **Long analytical `SELECT`s can exceed a reverse proxy's/load balancer's HTTP request-line length
+  limit** before they exceed ClickHouse's own generous `http_max_uri_size` (1 MiB default) — this
+  transport sends the whole SQL text via `?query=<url-encoded-sql>`, never a request body. Confirmed
+  with a new hermetic test (`ClickHouseHttpTransportLongQueryUriTest`) against a plain Reactor Netty
+  server left at its default 4096-byte `maxInitialLineLength`, the same default most Netty-based
+  proxies use: the query fails loudly (a connection-level error), not silently truncated or hung —
+  a real, understood problem, not a driver defect, and not unique to this project's use of Reactor. A
+  POST-body redesign is deliberately scoped as separate, not-yet-started follow-up work; also noted:
+  bound parameter values currently ride the same query string as the SQL text, so binding parameters
+  instead of inlining literals does not currently sidestep this. See [ROADMAP.md's Phase 8, item
+  8](ROADMAP.md#phase-8--post-020-hardening-021).
 
 ## [0.2.0] — 2026-08-20 (Phase 7: operational control & R2DBC correctness)
 

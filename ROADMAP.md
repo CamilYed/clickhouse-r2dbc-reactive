@@ -1655,6 +1655,25 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    response and proves nothing about streaming. This matters more than most items here: end-to-end
    streaming is a core reason this driver exists, and the demo currently doesn't actually demonstrate
    it at the HTTP boundary.
+
+   **Done (2026-08-22), pending the user's local build for compile/test verification.**
+   `OrderEventController#all()`'s Javadoc was rewritten to stop claiming the HTTP response streams
+   (it doesn't — Spring WebFlux's default `application/json` writer buffers the whole `Flux` first)
+   and now points to a new `GET /order-events/stream` endpoint
+   (`produces = MediaType.APPLICATION_NDJSON_VALUE`) for callers who actually need HTTP-layer
+   streaming. The new endpoint is proven, not just asserted: `OrderEventStreamingControllerTest`
+   binds the controller directly (`WebTestClient.bindToController`, no `ApplicationContext`, no real
+   ClickHouse — a real query's own timing is fast and unpredictable, so it can't reliably prove
+   incremental delivery either way) to a new `InMemoryOrderEventRepository` test fake whose
+   `findAll()` stream the test fully controls via `Flux#delayElements`, then asserts via
+   `StepVerifier#expectNoEvent(Duration)` that the second of two events does not arrive within the
+   whole delay window after the first one does — a buffered response would deliver both together,
+   immediately, once the source completed, and would fail this assertion. A second, real-ClickHouse
+   test (`OrderEventControllerAgainstRealClickHouseTest#shouldServeTheSameEventsThroughTheNdjsonStreamingEndpoint`)
+   only confirms the endpoint serves the same data with the right content type; it deliberately does
+   not attempt to prove streaming timing against a real query. New test-support files:
+   `api.fakes.InMemoryOrderEventRepository` and `api.builders.OrderEventTestBuilder` (a Test Data
+   Builder for the domain `OrderEvent` record — no such builder existed before this).
 10. **Prove Spring shutdown actually disposes factory-owned resources.** `0.2.1`'s new
     `ClickHouseConnectionFactory.dispose()`/`isDisposed()` (see [Connection
     pooling](README.md#connection-pooling)'s "Shutting it down" note) is not called automatically by

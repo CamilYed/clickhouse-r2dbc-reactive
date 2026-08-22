@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
+import org.springframework.http.MediaType;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -152,6 +153,29 @@ class OrderEventControllerAgainstRealClickHouseTest {
                 assertThat(totals)
                     .extracting(CategoryTotal::category)
                     .containsExactlyInAnyOrder("electronics", "books"));
+  }
+
+  @Test
+  void shouldServeTheSameEventsThroughTheNdjsonStreamingEndpoint() {
+    // given - the streaming endpoint's incremental-delivery guarantee is proven separately, with
+    // controlled timing, by OrderEventStreamingControllerTest; this only confirms it serves the
+    // same data as /order-events, with the expected content type, against a real ClickHouse query
+    postOrderEvent(aCreateOrderEventRequest().withCategory("garden").withAmount("25.00"));
+
+    // when / then
+    webTestClient
+        .get()
+        .uri("/order-events/stream")
+        .accept(MediaType.APPLICATION_NDJSON)
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectHeader()
+        .contentTypeCompatibleWith(MediaType.APPLICATION_NDJSON)
+        .expectBodyList(OrderEvent.class)
+        .value(
+            events ->
+                assertThat(events).extracting(OrderEvent::category).containsExactly("garden"));
   }
 
   private void postOrderEvent(final CreateOrderEventRequestTestBuilder request) {
