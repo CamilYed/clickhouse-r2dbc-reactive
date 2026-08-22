@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.transport.http;
 
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelOption;
@@ -66,6 +67,7 @@ public final class ClickHouseHttpTransport {
   private final Authentication authentication;
   private final RetryPolicy retryPolicy;
   private final @Nullable String database;
+  private final ResponseCompression responseCompression;
 
   public ClickHouseHttpTransport(final String baseUrl) {
     this(baseUrl, TransportOptions.defaults());
@@ -261,6 +263,19 @@ public final class ClickHouseHttpTransport {
     this.authentication = options.authentication();
     this.retryPolicy = options.retryPolicy();
     this.database = options.database();
+    this.responseCompression = options.responseCompression();
+  }
+
+  /**
+   * Whether this transport asks ClickHouse to compress response bodies with its own custom LZ4
+   * block framing (sent as {@code compress=1}, see {@link #queryWithSummary}) — {@link
+   * TransportOptions#defaults()}'s default of {@link ResponseCompression#LZ4} unless overridden.
+   * Read by {@code core.RowBinaryDecoder}'s caller so the decode side knows whether to unwrap the
+   * same framing before decoding — see {@link ResponseCompression}'s Javadoc for why one value
+   * threads both directions.
+   */
+  public ResponseCompression responseCompression() {
+    return responseCompression;
   }
 
   /**
@@ -447,6 +462,7 @@ public final class ClickHouseHttpTransport {
                     + encode(query.sql())
                     + parameterQueryString(query)
                     + settingsQueryString(query)
+                    + compressionQueryString()
                     + JSON_AS_STRING_QUERY_PARAM)
             .response(
                 (httpResponse, content) ->
@@ -572,7 +588,8 @@ public final class ClickHouseHttpTransport {
                 "/?query="
                     + encode(query.sql())
                     + parameterQueryString(query)
-                    + settingsQueryString(query))
+                    + settingsQueryString(query)
+                    + compressionQueryString())
             .send(requestBody)
             .response(
                 (httpResponse, content) ->
@@ -630,6 +647,19 @@ public final class ClickHouseHttpTransport {
             (name, value) ->
                 queryString.append('&').append(name).append('=').append(encode(value)));
     return queryString.toString();
+  }
+
+  /**
+   * {@code &compress=1} when {@link #responseCompression} is {@link ResponseCompression#LZ4},
+   * otherwise empty — matches client-v2's own {@code HttpAPIClientHelper.addRequestParams} behavior
+   * in its non-standard-HTTP-compression mode (verified against client-v2 0.9.8's real source, not
+   * assumed): a plain ClickHouse query parameter, not a standard HTTP {@code Accept-Encoding}
+   * header, is what actually turns on ClickHouse's own custom LZ4 response framing (see {@code
+   * core.ClickHouseLz4InputStream}'s Javadoc for the wire format this then requires the decode side
+   * to unwrap).
+   */
+  private String compressionQueryString() {
+    return responseCompression == ResponseCompression.LZ4 ? "&compress=1" : "";
   }
 
   private static Publisher<ByteBuf> receiveOrFail(

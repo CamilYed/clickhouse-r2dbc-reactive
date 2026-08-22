@@ -34,7 +34,9 @@ class RowBinaryDecoderTest {
         Flux.just(ByteBuffer.wrap(RowBinaryFixtures.selectOneRowBinaryWithNamesAndTypes()));
 
     // when
-    final DecodedRow row = RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
+    final DecodedRow row =
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE)
+            .blockFirst(Duration.ofSeconds(5));
 
     // then
     assertThat(row.valueAt(0)).isEqualTo((short) 1);
@@ -48,7 +50,9 @@ class RowBinaryDecoderTest {
         Flux.just(ByteBuffer.wrap(RowBinaryFixtures.arrayOfInt32RowBinaryWithNamesAndTypes()));
 
     // when
-    final DecodedRow row = RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
+    final DecodedRow row =
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE)
+            .blockFirst(Duration.ofSeconds(5));
 
     // then
     assertThat((List<Integer>) row.valueAt(0)).containsExactly(10, 20, 30);
@@ -61,7 +65,9 @@ class RowBinaryDecoderTest {
         Flux.just(ByteBuffer.wrap(RowBinaryFixtures.enum8SingleValueRowBinaryWithNamesAndTypes()));
 
     // when
-    final DecodedRow row = RowBinaryDecoder.decodeRows(source).blockFirst(Duration.ofSeconds(5));
+    final DecodedRow row =
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE)
+            .blockFirst(Duration.ofSeconds(5));
 
     // then
     assertThat(row.valueAt(0)).isInstanceOf(String.class).isEqualTo("b");
@@ -75,7 +81,8 @@ class RowBinaryDecoderTest {
 
     // when
     final DecodedResult result =
-        RowBinaryDecoder.decode(source, decodingScheduler).block(Duration.ofSeconds(5));
+        RowBinaryDecoder.decode(source, decodingScheduler, ResponseCompression.NONE)
+            .block(Duration.ofSeconds(5));
 
     // then
     assertThat(result.columns()).containsExactly(new ColumnDescriptor("1", "UInt8"));
@@ -93,7 +100,8 @@ class RowBinaryDecoderTest {
 
     // when
     final DecodedResult result =
-        RowBinaryDecoder.decode(source, decodingScheduler).block(Duration.ofSeconds(5));
+        RowBinaryDecoder.decode(source, decodingScheduler, ResponseCompression.NONE)
+            .block(Duration.ofSeconds(5));
     final String rowThreadName =
         result
             .rows()
@@ -127,7 +135,8 @@ class RowBinaryDecoderTest {
 
     // when
     final DecodedResult result =
-        RowBinaryDecoder.decode(source, decodingScheduler).block(Duration.ofSeconds(5));
+        RowBinaryDecoder.decode(source, decodingScheduler, ResponseCompression.NONE)
+            .block(Duration.ofSeconds(5));
     StepVerifier.create(result.rows(), 1)
         .expectNextCount(1)
         .thenCancel()
@@ -153,7 +162,7 @@ class RowBinaryDecoderTest {
             .doOnCancel(() -> sourceCancelled.set(true));
 
     // when
-    StepVerifier.create(RowBinaryDecoder.decodeRows(source), 1)
+    StepVerifier.create(RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE), 1)
         .expectNextCount(1)
         .thenCancel()
         .verify(Duration.ofSeconds(5));
@@ -181,7 +190,7 @@ class RowBinaryDecoderTest {
 
     try {
       // when
-      StepVerifier.create(RowBinaryDecoder.decodeRows(source), 1)
+      StepVerifier.create(RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE), 1)
           .expectNextCount(1)
           .thenCancel()
           .verify(Duration.ofSeconds(5));

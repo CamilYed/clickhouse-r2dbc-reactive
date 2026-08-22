@@ -6,6 +6,7 @@ import com.clickhouse.client.api.internal.ServerSettings;
 import com.clickhouse.client.api.query.QuerySettings;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.FluxInputStreamBridge;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.io.ByteArrayInputStream;
@@ -104,7 +105,10 @@ public class DecoderOnlyBenchmark {
   @Benchmark
   public void ourDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body = Flux.just(ByteBuffer.wrap(capturedResponseBytes));
-    final long rowCount = RowBinaryDecoder.decodeRows(body).count().block(Duration.ofSeconds(60));
+    final long rowCount =
+        RowBinaryDecoder.decodeRows(body, ResponseCompression.NONE)
+            .count()
+            .block(Duration.ofSeconds(60));
     blackhole.consume(rowCount);
   }
 

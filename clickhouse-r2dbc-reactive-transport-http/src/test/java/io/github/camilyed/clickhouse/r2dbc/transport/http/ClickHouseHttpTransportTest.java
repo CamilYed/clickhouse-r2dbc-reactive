@@ -7,6 +7,7 @@ import static org.awaitility.Awaitility.await;
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.abilities.NettyLeakDetectionAbility;
@@ -441,7 +442,10 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
 
       final Throwable thrown =
           catchThrowable(
-              () -> RowBinaryDecoder.decodeRows(body).collectList().block(Duration.ofSeconds(5)));
+              () ->
+                  RowBinaryDecoder.decodeRows(body, ResponseCompression.NONE)
+                      .collectList()
+                      .block(Duration.ofSeconds(5)));
 
       // then
       assertThat(thrown).isNotNull();
@@ -469,7 +473,8 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
 
       // when
       final DecodedResult result =
-          RowBinaryDecoder.decode(body, scheduler).block(Duration.ofSeconds(5));
+          RowBinaryDecoder.decode(body, scheduler, ResponseCompression.NONE)
+              .block(Duration.ofSeconds(5));
       StepVerifier.create(result.rows(), 1)
           .expectNextCount(1)
           .thenCancel()
@@ -740,6 +745,52 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
 
       // then
       assertThat(server.receivedUri()).contains("output_format_binary_write_json_as_string=1");
+    }
+  }
+
+  @Test
+  void shouldAskForCompressedResponsesByDefault() {
+    // given - TransportOptions.defaults()' responseCompression is LZ4, matching client-v2's own
+    // default of COMPRESS_SERVER_RESPONSE=true; the single-arg constructor used here routes
+    // through that default, same as every other "no explicit TransportOptions" test in this class.
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl());
+
+      transport
+          .query(ClickHouseQuery.of("SELECT 1"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedUri()).contains("compress=1");
+    }
+  }
+
+  @Test
+  void shouldNotAskForCompressedResponsesWhenExplicitlyDisabled() {
+    // given
+    final byte[] configuredBody = ClickHouseWireFixtures.selectOneRowBinaryWithNamesAndTypes();
+    final TransportOptions options =
+        TransportOptions.defaults().withResponseCompression(ResponseCompression.NONE);
+
+    // when
+    try (final var server =
+        ControlledClickHouseServer.startRespondingToSelectOneWith(configuredBody)) {
+      final var transport = new ClickHouseHttpTransport(server.baseUrl(), options);
+
+      transport
+          .query(ClickHouseQuery.of("SELECT 1"))
+          .aggregate()
+          .asByteArray()
+          .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(server.receivedUri()).doesNotContain("compress=1");
     }
   }
 

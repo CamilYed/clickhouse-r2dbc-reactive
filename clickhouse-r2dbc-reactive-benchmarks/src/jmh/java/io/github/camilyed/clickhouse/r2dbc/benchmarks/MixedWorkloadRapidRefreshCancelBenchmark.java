@@ -5,6 +5,7 @@ import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
@@ -258,7 +259,7 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
   private Mono<Boolean> ourDriverHeavyQuery(final String sql) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body, decodingScheduler)
+    return RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)
         .flatMapMany(DecodedResult::rows)
         .then(Mono.just(Boolean.TRUE));
   }

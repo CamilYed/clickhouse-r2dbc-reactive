@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -93,6 +94,11 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * value (e.g. a negative duration, a non-positive connection count) fails fast right here, at
    * factory creation, never silently falling back to a default.
    *
+   * <p>{@link ClickHouseConnectionFactoryProvider#RESPONSE_COMPRESSION} configures {@link
+   * TransportOptions#responseCompression()} — defaults to {@code true} ({@link
+   * ResponseCompression#LZ4}) when not set, matching client-v2's own default; see that option's
+   * Javadoc.
+   *
    * <p>There is deliberately no {@code statementTimeout} option here: that needs to apply per
    * statement, not per factory — see {@code ClickHouseConnection.setStatementTimeout}.
    */
@@ -152,6 +158,13 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
     final Duration transportMaxLifeTime =
         durationOption(options, ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_LIFE_TIME);
 
+    final Boolean responseCompressionEnabled =
+        booleanOption(options, ClickHouseConnectionFactoryProvider.RESPONSE_COMPRESSION);
+    final ResponseCompression responseCompression =
+        Boolean.FALSE.equals(responseCompressionEnabled)
+            ? ResponseCompression.NONE
+            : ResponseCompression.LZ4;
+
     final TransportOptions transportOptions =
         TransportOptions.defaults()
             .withAuthentication(authentication)
@@ -164,7 +177,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
             .withPendingAcquireTimeout(transportPendingAcquireTimeout)
             .withMaxIdleTime(transportMaxIdleTime)
             .withMaxLifeTime(transportMaxLifeTime)
-            .withDatabase(database);
+            .withDatabase(database)
+            .withResponseCompression(responseCompression);
 
     final DriverObservationListener observationListener =
         observationListenerOption(
@@ -231,6 +245,22 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
       return Duration.parse(text);
     }
     throw new IllegalArgumentException(option.name() + " must be a duration, got: " + raw);
+  }
+
+  // See intOption's comment above - same reasoning, for Boolean-typed options.
+  private static @Nullable Boolean booleanOption(
+      final ConnectionFactoryOptions options, final Option<?> option) {
+    final Object raw = options.getValue(option);
+    if (raw == null) {
+      return null;
+    }
+    if (raw instanceof final Boolean value) {
+      return value;
+    }
+    if (raw instanceof final String text) {
+      return Boolean.valueOf(text);
+    }
+    throw new IllegalArgumentException(option.name() + " must be a boolean, got: " + raw);
   }
 
   private static byte[] resolveTrustedCertificatePem(final String sslRootCert) {

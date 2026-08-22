@@ -108,7 +108,9 @@ Technology Compatibility Kit lane run against a real server (see
 [Connection pooling](#connection-pooling) and [docs/R2DBC_COMPATIBILITY.md](docs/R2DBC_COMPATIBILITY.md)
 below); `0.2.1` added explicit `ConnectionFactory` disposal, a `responseTimeout` R2DBC option,
 correct parameter-binding wire encoding for temporal types and `List`/`Array`, and an opt-in
-server-error retry mode — see [CHANGELOG.md](CHANGELOG.md) for the full, release-by-release list.
+server-error retry mode; `0.2.2` added response compression, on by default, matching client-v2's
+own default (`responseCompression` above) — see [CHANGELOG.md](CHANGELOG.md) for the full,
+release-by-release list.
 
 Still expect breaking changes at this stage — the SPI surface and options above are exercised by
 an automated test suite, not yet by a production workload.
@@ -202,6 +204,7 @@ Set through the R2DBC URL's query string or `ConnectionFactoryOptions.builder()`
 | `database` | connecting user's default | Database selected via `X-ClickHouse-Database` on every request, e.g. `r2dbc:clickhouse://host:8123/analytics` |
 | `connectTimeout` | none | How long to wait for the underlying TCP connection to establish, before any request is even sent — R2DBC's standard `ConnectionFactoryOptions.CONNECT_TIMEOUT` |
 | `responseTimeout` | none | How long to wait for response bytes once a request has been sent. See [`ClickHouseHttpTransport`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransport.java)'s Javadoc for why there's no implicit limit by default — ClickHouse is analytical, a legitimate query can run far longer than a typical OLTP request |
+| `responseCompression` | `true` | Ask ClickHouse to compress response bodies with its own custom LZ4 block framing (`compress=1`, not standard HTTP `Content-Encoding`) and transparently decompress them. Matches client-v2's own default (`COMPRESS_SERVER_RESPONSE=true`); set to `false` to send/receive uncompressed. See [`ResponseCompression`](clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ResponseCompression.java)'s Javadoc for the wire format |
 | `sslRootCert` | none (JVM default trust store) | Classpath resource or filesystem path to a PEM-encoded trusted certificate, for self-signed/internal-CA servers — only meaningful with `ssl=true` |
 | `retryMaxAttempts` | `3` | Retries for failures before any request bytes reached the server — see [`RetryPolicy`](clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java) for exactly what qualifies |
 | `retryDelay` | `50ms` | Fixed delay between retry attempts |

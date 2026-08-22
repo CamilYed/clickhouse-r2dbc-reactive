@@ -6,6 +6,7 @@ import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -80,7 +81,7 @@ public class TrivialQueryBenchmark {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(SELECT_1_SQL)).asByteArray().map(ByteBuffer::wrap);
     final DecodedRow row =
-        RowBinaryDecoder.decode(body, decodingScheduler)
+        RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)
             .flatMapMany(DecodedResult::rows)
             .blockFirst(Duration.ofSeconds(10));
     blackhole.consume(row);

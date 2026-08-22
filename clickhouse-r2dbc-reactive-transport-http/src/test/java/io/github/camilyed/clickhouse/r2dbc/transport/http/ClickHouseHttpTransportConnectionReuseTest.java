@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
 import java.net.SocketAddress;
@@ -115,12 +116,16 @@ class ClickHouseHttpTransportConnectionReuseTest {
   private static DecodedRow firstRowOf(final ClickHouseHttpTransport transport) {
     final Flux<ByteBuffer> body =
         transport.query(ClickHouseQuery.of("SELECT 1")).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decodeRows(body).next().block(Duration.ofSeconds(5));
+    return RowBinaryDecoder.decodeRows(body, ResponseCompression.NONE)
+        .next()
+        .block(Duration.ofSeconds(5));
   }
 
   private static List<DecodedRow> allRowsOf(final ClickHouseHttpTransport transport) {
     final Flux<ByteBuffer> body =
         transport.query(ClickHouseQuery.of("SELECT 1")).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decodeRows(body).collectList().block(Duration.ofSeconds(5));
+    return RowBinaryDecoder.decodeRows(body, ResponseCompression.NONE)
+        .collectList()
+        .block(Duration.ofSeconds(5));
   }
 }

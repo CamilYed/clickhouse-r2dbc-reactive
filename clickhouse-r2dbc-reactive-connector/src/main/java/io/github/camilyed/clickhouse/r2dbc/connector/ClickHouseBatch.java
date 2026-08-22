@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
@@ -78,9 +79,12 @@ final class ClickHouseBatch implements Batch {
     final ClickHouseQuery query = ClickHouseQuery.of(sql);
     final QueryObservation observation =
         QueryObservation.start(observationListener, query.queryId(), OperationKind.QUERY, sql);
+    final ResponseCompression compression = transport.responseCompression();
     return transport
         .queryWithSummary(query)
-        .flatMap(response -> ClickHouseResult.decode(response, decodingScheduler, observation))
+        .flatMap(
+            response ->
+                ClickHouseResult.decode(response, decodingScheduler, observation, compression))
         .doOnError(observation::failed)
         .doOnCancel(observation::cancelled)
         .onErrorMap(ClickHouseR2dbcException::wrap);
