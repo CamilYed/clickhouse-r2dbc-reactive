@@ -1,0 +1,164 @@
+name: Cloud benchmark pipeline
+
+# Phase 10 Stage 1 (see engineering/roadmap-archive.md's "Phase 10 - Cloud benchmark pipeline"):
+# a repeatable benchmark environment off the local MacBook M3 Pro, on one standard GitHub-hosted
+# runner - the repo is public, so no dedicated runner infrastructure is needed to start.
+#
+# Runs exactly PublicApiMatchedPoolThroughputBenchmark (poolSize=8, concurrency=8/32/128) - the
+# same benchmark and parameters docs/PERFORMANCE.md's local numbers already use, so cloud and
+# local results are comparable in shape even if not in absolute value. ourDriver and client-v2
+# always run in this one job, against this one ClickHouse container, on this one runner - never
+# split into separate jobs (see the roadmap section's non-negotiable constraint: splitting them
+# would compare two different machines under two different sets of noise, not two drivers).
+#
+# Trust model: don't trust an absolute number from a single noisy shared runner - trust the
+# ourDriver/client-v2 ratio, repeated across several runs (see scripts/benchmarks/analyze.py's
+# summary.md header and the roadmap section for the full rationale).
+#
+# Two profiles:
+#   fast    - 1 fork, 1 warmup iteration. A sanity check ("did it run, no catastrophic
+#             regression"), not a number to make a public performance claim from. Cheap enough to
+#             also run on a weekly schedule.
+#   trusted - 3 forks, 5 warmup iterations, -prof gc. workflow_dispatch only - deliberately never
+#             scheduled, so a noisy/slow run is something a human asked for, not unattended.
+#
+# Explicitly out of scope for this workflow (see the roadmap section's "Explicitly out of scope
+# for the first PR"): no dedicated VM, no Bencher, no GitHub Pages dashboard, no regression-gate
+# thresholds. Raw results.json is never committed to main - the whole result directory just
+# uploads as a GitHub Actions artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "fast (1 fork, sanity check) or trusted (3 forks, -prof gc)"
+        required: true
+        type: choice
+        options:
+          - fast
+          - trusted
+        default: fast
+  schedule:
+    # 05:00 UTC weekly (Monday) - fast profile only, see the schedule step below. Outside typical
+    # working hours for this project's contributors, same reasoning as nightly.yml's schedule.
+    - cron: "0 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Run benchmark (${{ github.event.inputs.profile || 'fast' }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install analyze.py dependencies
+        # Pinned version (not a floating latest) and --only-binary :all: (refuse to fall back to
+        # a source distribution, which could execute an arbitrary setup.py/build script during
+        # install) - both flagged by SonarCloud as security-sensitive on the unpinned/source-
+        # allowed form of this command.
+        run: pip install --only-binary :all: matplotlib==3.10.9
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Resolve profile
+        id: profile
+        # schedule events have no `inputs` context at all - only workflow_dispatch does. This is
+        # the one place that distinction is resolved, so every later step can just read
+        # steps.profile.outputs.name without re-checking github.event_name itself.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "name=fast" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set JMH parameters for profile
+        id: jmh-params
+        run: |
+          if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
+            echo "forks=3" >> "$GITHUB_OUTPUT"
+            echo "warmup-iterations=5" >> "$GITHUB_OUTPUT"
+            echo "profilers=gc" >> "$GITHUB_OUTPUT"
+          else
+            echo "forks=1" >> "$GITHUB_OUTPUT"
+            echo "warmup-iterations=1" >> "$GITHUB_OUTPUT"
+            echo "profilers=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run PublicApiMatchedPoolThroughputBenchmark
+        run: |
+          PROFILER_FLAG=""
+          if [ -n "${{ steps.jmh-params.outputs.profilers }}" ]; then
+            PROFILER_FLAG="-Pjmh.profilers=${{ steps.jmh-params.outputs.profilers }}"
+          fi
+          ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+            -Pjmh.includes=PublicApiMatchedPoolThroughputBenchmark \
+            -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
+            -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
+            $PROFILER_FLAG \
+            2>&1 | tee raw-stdout.log
+
+      - name: Write run metadata
+        run: |
+          DRIVER_VERSION="$(./gradlew -q :clickhouse-r2dbc-reactive-connector:properties | awk -F': ' '/^version:/{print $2}')"
+          CLIENT_V2_VERSION="$(grep -m1 'clickhouse-client-v2 = ' gradle/libs.versions.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          CLICKHOUSE_IMAGE="$(grep -m1 'CLICK_HOUSE_IMAGE =' clickhouse-r2dbc-reactive-benchmarks/src/main/java/io/github/camilyed/clickhouse/r2dbc/benchmarks/BenchmarkEnvironment.java | sed -E 's/.*"([^"]+)".*/\1/')"
+          cat > metadata.json <<EOF
+          {
+            "profile": "${{ steps.profile.outputs.name }}",
+            "commitSha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "driverVersion": "${DRIVER_VERSION}",
+            "clientV2Version": "${CLIENT_V2_VERSION}",
+            "jdkVersion": "$(java -version 2>&1 | head -n1)",
+            "osName": "$(uname -s)",
+            "osArch": "$(uname -m)",
+            "clickHouseImage": "${CLICKHOUSE_IMAGE}",
+            "forks": ${{ steps.jmh-params.outputs.forks }},
+            "warmupIterations": ${{ steps.jmh-params.outputs.warmup-iterations }},
+            "poolSize": 8
+          }
+          EOF
+          cat metadata.json
+
+      - name: Analyze results
+        run: |
+          python3 scripts/benchmarks/analyze.py \
+            --results-json clickhouse-r2dbc-reactive-benchmarks/build/results/jmh/results.json \
+            --stdout-log raw-stdout.log \
+            --metadata-json metadata.json \
+            --out-dir benchmark-results
+
+      - name: Assemble artifact directory
+        run: |
+          mkdir -p benchmark-results
+          cp clickhouse-r2dbc-reactive-benchmarks/build/results/jmh/results.json benchmark-results/results.json
+          cp raw-stdout.log benchmark-results/raw-stdout.log
+          cp metadata.json benchmark-results/metadata.json
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: benchmark-results-${{ steps.profile.outputs.name }}-${{ github.run_id }}
+          path: benchmark-results/
+          retention-days: 90

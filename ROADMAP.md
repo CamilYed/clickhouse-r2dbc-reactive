@@ -35,7 +35,11 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   restructuring is step 1 of it.
 - **[Phase 10 — Cloud benchmark pipeline](#phase-10--cloud-benchmark-pipeline)** — a GitHub
   Actions workflow that runs this driver and client-v2 in the same job/VM/ClickHouse process, so
-  benchmark work has a repeatable environment off the local MacBook. Planned 2026-08-22.
+  benchmark work has a repeatable environment off the local MacBook. Planned 2026-08-22. Stage 1
+  (`.github/workflows/benchmark.yml` + `scripts/benchmarks/analyze.py`) is built and its analysis
+  script is verified against synthetic fixtures, but **not yet run for real** — needs a
+  `workflow_dispatch` run against actual CI before the pipeline itself, or any number out of it,
+  is trusted. See Phase 10 below.
 
 ## Later (deferred, blocked on Phase 10)
 
@@ -102,16 +106,24 @@ Sequencing (small PRs, not one rewrite):
 
 ## Phase 10 — Cloud benchmark pipeline
 
-**Not started.** Plan captured 2026-08-22, directly answering the blocker every deferred
-performance item above has been waiting on: a repeatable benchmark environment off the local
-MacBook. Building the pipeline (a GitHub Actions workflow + a Python analysis script) is CI/tooling
-infrastructure, not benchmark iteration itself — it doesn't need an exception to the standing
-"performance work waits for a proper environment" rule, it's the prerequisite that rule has been
-naming all along. Actual benchmark re-runs stay deferred until this pipeline exists and its results
-are validated stable. Non-negotiable constraint: `ourDriver` and client-v2 run in the same job, on
-the same VM, against the same ClickHouse process, every time — never separate CI jobs, which would
-compare two machines under two different sets of noise, not two drivers. Full design (trust model
-for cloud numbers, staged rollout, JMH JSON as source of truth):
+**Stage 1 built, not yet run for real.** Plan captured 2026-08-22, directly answering the blocker
+every deferred performance item above has been waiting on: a repeatable benchmark environment off
+the local MacBook. `.github/workflows/benchmark.yml` (fast/trusted `workflow_dispatch` profiles,
+weekly fast sanity schedule) and `scripts/benchmarks/analyze.py` (JMH `results.json` + captured
+stdout latency logs + run metadata → `summary.md` + three charts) exist and are wired to
+`PublicApiMatchedPoolThroughputBenchmark`. `analyze.py`'s parsing/aggregation logic is verified
+against synthetic JMH-shaped fixtures (both profiles, plus a no-latency-data edge case) — it has
+**not** yet been run against a real CI pass, since building it didn't happen inside an environment
+with Docker/JDK 21 available to actually execute JMH. A `workflow_dispatch` run is the next step
+before trusting the pipeline itself, let alone any number it produces. Building the pipeline (a
+GitHub Actions workflow + a Python analysis script) is CI/tooling infrastructure, not benchmark
+iteration itself — it doesn't need an exception to the standing "performance work waits for a
+proper environment" rule, it's the prerequisite that rule has been naming all along. Actual
+benchmark re-runs stay deferred until this pipeline exists and its results are validated stable.
+Non-negotiable constraint: `ourDriver` and client-v2 run in the same job, on the same VM, against
+the same ClickHouse process, every time — never separate CI jobs, which would compare two machines
+under two different sets of noise, not two drivers. Full design (trust model for cloud numbers,
+staged rollout, JMH JSON as source of truth):
 [roadmap-archive.md's Phase 10](engineering/roadmap-archive.md#phase-10--cloud-benchmark-pipeline).
 
 ## Working with Claude / IntelliJ
