@@ -12,6 +12,7 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -48,19 +49,35 @@ class ClickHouseHttpTransportConnectionReuseTest {
         new ClickHouseHttpTransport("http://localhost:" + server.port());
 
     try {
-      // when
-      final DecodedRow first = firstRowOf(transport);
-      final DecodedRow second = firstRowOf(transport);
+      // when / then — releasing the first request's connection back to the pool after its early
+      // cancellation (via next()) is Reactor Netty's own asynchronous bookkeeping, happening on
+      // the event loop independently of when FluxInputStreamBridge#close() (see its Javadoc)
+      // observes end-of-stream on our side. Nothing on ClickHouseHttpTransport's public surface
+      // exposes an idle-connection-count or pool-release hook to poll for "the connection is back
+      // in the pool yet" before issuing the second query, so there is no condition to synchronize
+      // on directly. Awaitility retries the whole two-request sequence instead of widening a fixed
+      // sleep: it says out loud what's actually being waited for (reuse is eventually observed,
+      // once that race resolves), and a genuine regression still fails the test after the budget,
+      // since asking again wouldn't make a real defect start reusing the connection.
+      Awaitility.await()
+          .atMost(Duration.ofSeconds(5))
+          .pollInterval(Duration.ofMillis(20))
+          .untilAsserted(
+              () -> {
+                remoteAddressesSeen.clear();
 
-      // then
-      assertThat(first).isNotNull();
-      assertThat(second).isNotNull();
-      assertThat(remoteAddressesSeen)
-          .as(
-              "both requests should have come from the same client-side (ephemeral port) "
-                  + "address, i.e. the same reused TCP connection")
-          .hasSize(2)
-          .containsOnly(remoteAddressesSeen.get(0));
+                final DecodedRow first = firstRowOf(transport);
+                final DecodedRow second = firstRowOf(transport);
+
+                assertThat(first).isNotNull();
+                assertThat(second).isNotNull();
+                assertThat(remoteAddressesSeen)
+                    .as(
+                        "both requests should have come from the same client-side (ephemeral "
+                            + "port) address, i.e. the same reused TCP connection")
+                    .hasSize(2)
+                    .containsOnly(remoteAddressesSeen.get(0));
+              });
     } finally {
       server.disposeNow();
     }
