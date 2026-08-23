@@ -59,7 +59,7 @@ the version it was given and fails the release if it can't find one. See
   `ConnectionProvider`, previously never explicitly disposed — construction created a dedicated
   named pool with no way to release it short of GC/JVM exit) and `RowDecodingScheduler.dispose()`
   (already existed, but the factory that owns each scheduler instance had no lifecycle hook to call
-  it from). See README's [Connection pooling](README.md#connection-pooling) "Shutting it down" note.
+  it from). See [Connection pooling](docs/operations/connection-pooling.md) "Shutting it down" note.
 - **Netty `ByteBuf` leak-detection test lane**, completed as follow-up to the pilot deferred out of
   `0.2.0` (see that release's Deferred section below). Runs `transport-http` and `testkit` tests with
   `-Dio.netty.leakDetection.level=paranoid` and a custom `LeakRecordingResourceLeakDetector`, and now
@@ -83,7 +83,7 @@ the version it was given and fails the release if it can't find one. See
   real server: under default settings, a mid-stream failure's trailing error text can be misdecoded
   as spurious garbage rows mixed in with genuine ones before the stream terminates with an error** —
   a real data-integrity risk, now called out in README's
-  [Known limitations](README.md#known-limitations) with `wait_end_of_query=1` as the mitigation. See
+  [Known limitations](docs/reference/known-limitations.md) with `wait_end_of_query=1` as the mitigation. See
   [ROADMAP archive's Phase 8, item 5](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full analysis.
 - **Correct parameter-binding wire encoding for `LocalDateTime`/`Instant`/`OffsetDateTime`/
   `ZonedDateTime` and `List` (as ClickHouse `Array` literals)**, replacing the previous unqualified
@@ -194,7 +194,7 @@ for the full scoping and acceptance criteria this release was built against.
   `transportPendingAcquireTimeout`, `transportMaxIdleTime`, `transportMaxLifeTime`) — the physical
   Reactor Netty connection pool underneath `ClickHouseHttpTransport` is now configurable through
   `ConnectionFactoryOptions` and the R2DBC URL query string, not just a Java constructor call. See
-  README's [Connection pooling](README.md#connection-pooling) section.
+  [Connection pooling](docs/operations/connection-pooling.md) section.
 - **`Connection.setStatementTimeout(Duration)`**, backed by ClickHouse's `max_execution_time`
   server setting, inherited by every statement created from that connection afterward.
   `Duration.ZERO` explicitly means "no timeout."
@@ -244,7 +244,7 @@ for the full scoping and acceptance criteria this release was built against.
   linearly with row count, and each cross-thread hand-off has a real, measurable cost. Clear win at
   10k/100k-row scans; the 1M-row tier's result is not yet a settled single number — see
   [docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still) and
-  [README's Known limitations](README.md#known-limitations) for the honest, still-open measurement
+  [Known limitations](docs/reference/known-limitations.md) for the honest, still-open measurement
   question. `RowBinaryDecoder.RESPONSE_CHUNK_DEMAND` raised `4` → `16` alongside this fix, so more
   chunks can be outstanding for the coalescing loop to work with.
 

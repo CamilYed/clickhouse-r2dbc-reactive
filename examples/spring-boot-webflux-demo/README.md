@@ -40,7 +40,7 @@ boundary demonstrates, one layer up.
   driver list that doesn't include ClickHouse, and fails outright with `IllegalStateException:
   Cannot determine a BindMarkersFactory for ClickHouse` before a single query ever runs. See
   `R2dbcConfiguration`'s own Javadoc for the full write-up, and
-  [ROADMAP archive's Phase 6](../../engineering/roadmap-archive.md#phase-6-later--spring-webflux-interop-demo) for why this
+  [ROADMAP archive's Phase 6](../../engineering/roadmap-archive.md#phase-6--spring-webflux-interop-demo-2026-08-13-reworked-after-a-genuine-bindmarkersfactory-finding--pending-green-confirmation) for why this
   still doesn't make `.bind(...)`/`R2dbcEntityTemplate` actually usable against this driver
   (ClickHouse's `{name:Type}` parameter syntax needs the type inline in the SQL text, which
   `BindMarkersFactory` has no way to supply) — `DatabaseClientOrderEventRepository` therefore only
@@ -76,7 +76,8 @@ boundary demonstrates, one layer up.
   never call `.block()`/`.toFuture().get()`; the only `.block()` calls anywhere in this module are in
   `OrderEventsSchemaInitializer` (one-time DDL at startup, off the request path) and tests. This is
   deliberate, not incidental: the root project's benchmarks (`MatchedPoolThreadsConcurrencyBenchmark`,
-  see [README.md](../../README.md#connection-pooling)) show this driver **3-fork confirmed** ~7-9%
+  see [docs/operations/connection-pooling.md](../../docs/operations/connection-pooling.md)) show
+  this driver **3-fork confirmed** ~7-9%
   slower on mean/percentiles than client-v2 when called through blocking `@Threads(N)`-style calls
   regardless of connection pool size — sizing the pool does not fix this, only calling the driver
   reactively does. Keep any new endpoint on this module fully non-blocking end to end.
