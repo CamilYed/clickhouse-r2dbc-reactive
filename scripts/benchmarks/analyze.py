@@ -165,6 +165,7 @@ def build_report(
 ) -> str:
     lines = ["# Benchmark summary", ""]
     lines.append(f"- Benchmark: `PublicApiMatchedPoolThroughputBenchmark`")
+    lines.append(f"- Run date: {metadata.get('runDate', 'unknown')}")
     lines.append(f"- Profile: **{metadata.get('profile', 'unknown')}**")
     lines.append(f"- Commit: `{metadata.get('commitSha', 'unknown')}` ({metadata.get('branch', 'unknown')})")
     lines.append(
@@ -174,6 +175,10 @@ def build_report(
     lines.append(
         f"- JDK: {metadata.get('jdkVersion', 'unknown')}, OS/arch: "
         f"{metadata.get('osName', 'unknown')}/{metadata.get('osArch', 'unknown')}"
+    )
+    lines.append(
+        f"- Runner: {metadata.get('cpuModel', 'unknown')}, {metadata.get('cpuCores', 'unknown')} cores, "
+        f"{metadata.get('ramGb', 'unknown')} GB RAM"
     )
     lines.append(f"- ClickHouse image: `{metadata.get('clickHouseImage', 'unknown')}`")
     lines.append(
