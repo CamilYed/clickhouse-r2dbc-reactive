@@ -45,6 +45,7 @@ Portal sync to the search index shields.io reads from can lag behind publication
 
 ## Contents
 
+- [Architecture at a glance](#architecture-at-a-glance)
 - [Why](#why)
 - [Status](#status)
 - [Requirements](#requirements)
@@ -52,6 +53,23 @@ Portal sync to the search index shields.io reads from can lag behind publication
 - [Usage](#usage)
 - [Learn more](#learn-more)
 - [Project](#project)
+
+## Architecture at a glance
+
+```mermaid
+flowchart TD
+    RSPI[R2DBC SPI] --> CONN["connector<br/>R2DBC SPI adapter"]
+    CONN --> CORE["core<br/>query / settings / query_id<br/>owns the Transport port"]
+    CORE -. public decoder classes only .-> V2DEC[("client-v2<br/>RowBinary decoders")]
+    CORE --> PORT{{"Transport port<br/>(interface owned by core)"}}
+    PORT --> HTTP["transport-http<br/>Reactor Netty, non-blocking"]
+    HTTP --> CH[("ClickHouse<br/>HTTP interface")]
+```
+
+Only the dashed edge touches `client-v2`, and only for its public row-decoding classes —
+`client-v2`'s own HTTP client is confirmed blocking and is **never called anywhere in this
+project**; `transport-http` owns its own non-blocking Reactor Netty client, from the socket up.
+Full responsibility boundaries and reasoning: [docs/architecture/overview.md](docs/architecture/overview.md).
 
 ## Why
 
@@ -161,9 +179,32 @@ the bound value, this driver does not reinterpret or validate it. `String`, nume
 [`ClickHouseQuery.withParameters`](clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ClickHouseQuery.java)'s
 Javadoc for exactly how each parameter type is encoded.
 
-Using this with Spring Boot? See [docs/guide/spring-boot.md](docs/guide/spring-boot.md) — it's a
-few lines of `application.yml`, plus one thing Spring's own auto-configuration doesn't get right
-for this driver on its own (`DatabaseClient`).
+### Using DatabaseClient (Spring)
+
+Spring's own `DatabaseClient` works too, once wired past one auto-configuration gap Spring has for
+this driver (see the callout below):
+
+```java
+import org.springframework.r2dbc.core.DatabaseClient;
+
+Mono<Long> count =
+    databaseClient
+        .sql("SELECT count() AS total FROM users")
+        .map(row -> row.get("total", Long.class))
+        .one();
+
+Flux<String> names =
+    databaseClient.sql("SELECT name FROM users ORDER BY name").map(row -> row.get("name", String.class)).all();
+```
+
+> [!IMPORTANT]
+> Spring Boot's own auto-configuration cannot build a `DatabaseClient` bean for this driver on its
+> own — it fails with `IllegalStateException: Cannot determine a BindMarkersFactory for
+> ClickHouse`, because Spring's driver-detection list doesn't include ClickHouse. A plain
+> `ConnectionFactory`/`Connection` (the example above) is unaffected. See
+> [docs/guide/spring-boot.md](docs/guide/spring-boot.md) for the few lines of `application.yml`
+> needed, the `DatabaseClient` fix (copy `R2dbcConfiguration` from the reference demo), and why
+> `.bind(...)`/`R2dbcEntityTemplate` still don't work even with that fix.
 
 ## Learn more
 
