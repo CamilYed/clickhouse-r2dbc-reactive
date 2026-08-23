@@ -52,13 +52,13 @@ import reactor.core.publisher.Mono;
  * #poolSize}, so the queueing-theory identity {@code throughput ≈ concurrency / mean-latency}
  * applies directly), client-v2's reported score (≈889 ops/s) matches {@code 8 /
  * mean-per-query-latency-in-seconds} to within the expected noise band — not the wildly different
- * number {@code raw-invocations/sec} (≈0.22/sec, three orders of magnitude off) would have
- * produced if the annotation weren't applying its multiplication correctly. Separately, both
- * drivers' scores stay flat (roughly 800–890 ops/s) across {@code concurrency=8/32/128} in that
- * same run — exactly the signature of a benchmark correctly bottlenecked by the matched {@link
- * #poolSize}-connection pool rather than by logical concurrency, which is only a coherent
- * observation if the reported unit really is logical queries/sec throughout. No further
- * verification needed before trusting this class's {@code Score} column as reported.
+ * number {@code raw-invocations/sec} (≈0.22/sec, three orders of magnitude off) would have produced
+ * if the annotation weren't applying its multiplication correctly. Separately, both drivers' scores
+ * stay flat (roughly 800–890 ops/s) across {@code concurrency=8/32/128} in that same run — exactly
+ * the signature of a benchmark correctly bottlenecked by the matched {@link #poolSize}-connection
+ * pool rather than by logical concurrency, which is only a coherent observation if the reported
+ * unit really is logical queries/sec throughout. No further verification needed before trusting
+ * this class's {@code Score} column as reported.
  *
  * <h2>What the logged per-query latency means</h2>
  *
