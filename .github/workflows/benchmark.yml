@@ -123,22 +123,48 @@ jobs:
           DRIVER_VERSION="$(./gradlew -q :clickhouse-r2dbc-reactive-connector:properties | awk -F': ' '/^version:/{print $2}')"
           CLIENT_V2_VERSION="$(grep -m1 'clickhouse-client-v2 = ' gradle/libs.versions.toml | sed -E 's/.*"([^"]+)".*/\1/')"
           CLICKHOUSE_IMAGE="$(grep -m1 'CLICK_HOUSE_IMAGE =' clickhouse-r2dbc-reactive-benchmarks/src/main/java/io/github/camilyed/clickhouse/r2dbc/benchmarks/BenchmarkEnvironment.java | sed -E 's/.*"([^"]+)".*/\1/')"
-          cat > metadata.json <<EOF
-          {
-            "profile": "${{ steps.profile.outputs.name }}",
-            "commitSha": "${{ github.sha }}",
-            "branch": "${{ github.ref_name }}",
-            "driverVersion": "${DRIVER_VERSION}",
-            "clientV2Version": "${CLIENT_V2_VERSION}",
-            "jdkVersion": "$(java -version 2>&1 | head -n1)",
-            "osName": "$(uname -s)",
-            "osArch": "$(uname -m)",
-            "clickHouseImage": "${CLICKHOUSE_IMAGE}",
-            "forks": ${{ steps.jmh-params.outputs.forks }},
-            "warmupIterations": ${{ steps.jmh-params.outputs.warmup-iterations }},
-            "poolSize": 8
-          }
-          EOF
+          JDK_VERSION="$(java -version 2>&1 | head -n1)"
+          OS_NAME="$(uname -s)"
+          OS_ARCH="$(uname -m)"
+          # Built via python3's json module, not a shell heredoc - java -version's own output
+          # embeds literal double quotes (e.g. 'openjdk version "21.0.4" ...'), which broke a
+          # heredoc-interpolated JSON string outright (unescaped quotes mid-value). Every value
+          # here goes through json.dumps, so nothing shell-substituted can break the JSON grammar,
+          # regardless of what characters it happens to contain.
+          python3 -c '
+          import json, os, sys
+
+          json.dump(
+              {
+                  "profile": sys.argv[1],
+                  "commitSha": sys.argv[2],
+                  "branch": sys.argv[3],
+                  "driverVersion": sys.argv[4],
+                  "clientV2Version": sys.argv[5],
+                  "jdkVersion": sys.argv[6],
+                  "osName": sys.argv[7],
+                  "osArch": sys.argv[8],
+                  "clickHouseImage": sys.argv[9],
+                  "forks": int(sys.argv[10]),
+                  "warmupIterations": int(sys.argv[11]),
+                  "poolSize": 8,
+              },
+              sys.stdout,
+              indent=2,
+          )
+          ' \
+            "${{ steps.profile.outputs.name }}" \
+            "${{ github.sha }}" \
+            "${{ github.ref_name }}" \
+            "${DRIVER_VERSION}" \
+            "${CLIENT_V2_VERSION}" \
+            "${JDK_VERSION}" \
+            "${OS_NAME}" \
+            "${OS_ARCH}" \
+            "${CLICKHOUSE_IMAGE}" \
+            "${{ steps.jmh-params.outputs.forks }}" \
+            "${{ steps.jmh-params.outputs.warmup-iterations }}" \
+            > metadata.json
           cat metadata.json
 
       - name: Analyze results
