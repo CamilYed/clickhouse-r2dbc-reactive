@@ -34,11 +34,11 @@ import reactor.core.publisher.Mono;
  * maxConnections yourself?" section on why headroom this generous rarely bites in practice). A
  * default-vs-default comparison at that query speed would mostly just remeasure protocol-floor
  * noise, not pool behavior. {@link OurDriverPointQueryClient#OurDriverPointQueryClient(double)}/
- * {@link ClientV2PointQueryClient#ClientV2PointQueryClient(double)} both append {@code sleep(}{@link
- * #sleepSeconds}{@code )} to the query — a real, deterministic, server-side hold — long enough that
- * a {@code concurrency} value above the pool size actually forces queueing on the smaller side,
- * which is the whole point of comparing two <em>different</em> pool sizes rather than a matched
- * one.
+ * {@link ClientV2PointQueryClient#ClientV2PointQueryClient(double)} both append {@code
+ * sleep(}{@link #sleepSeconds}{@code )} to the query — a real, deterministic, server-side hold —
+ * long enough that a {@code concurrency} value above the pool size actually forces queueing on the
+ * smaller side, which is the whole point of comparing two <em>different</em> pool sizes rather than
+ * a matched one.
  *
  * <h2>What one JMH sample means</h2>
  *

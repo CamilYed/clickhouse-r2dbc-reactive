@@ -83,7 +83,9 @@ final class ClientV2PointQueryClient implements PointQueryClient {
   @Override
   public Mono<PointResult> query(final long id) {
     return Mono.fromFuture(
-        client.query(selectSql, Map.of("id", id)).thenApply(response -> mapSingleRow(id, response)));
+        client
+            .query(selectSql, Map.of("id", id))
+            .thenApply(response -> mapSingleRow(id, response)));
   }
 
   private PointResult mapSingleRow(final long id, final QueryResponse response) {
