@@ -1,9 +1,15 @@
 import { defineConfig } from "vitepress";
+import { withMermaid } from "vitepress-plugin-mermaid";
 
 // VitePress config for the clickhouse-r2dbc-reactive documentation site.
 // Renders the existing docs/ tree directly - no content duplication, this is
 // the same source of truth used by README.md's "Learn more" links.
-export default defineConfig({
+//
+// Wrapped in withMermaid(...): VitePress does not render ```mermaid fenced blocks natively - left
+// unwrapped, they render as a plain syntax-highlighted code block (the bug this fixed). Several
+// docs/ pages (architecture/overview.md, README.md's own diagram, the homepage's architecture
+// comparison) rely on the fenced block actually becoming a diagram.
+export default withMermaid(defineConfig({
   title: "clickhouse-r2dbc-reactive",
   description:
     "A non-blocking R2DBC driver for ClickHouse, built on Reactor Netty from the socket up.",
@@ -25,6 +31,20 @@ export default defineConfig({
   ignoreDeadLinks: [/\.\.\/\.\.\//],
 
   head: [["link", { rel: "icon", href: "/clickhouse-r2dbc-reactive/favicon.svg" }]],
+
+  // mermaid (pulled in by withMermaid below) depends on fastdom, a CommonJS-only package, and
+  // imports both its main entry and the "fastdom/extensions/fastdom-promised.js" subpath
+  // directly (see mermaid's util/fastdom.ts). vitepress-plugin-mermaid's own optimizeDeps.include
+  // list predates mermaid's current dependency tree and misses both, so Vite's dev-server
+  // dependency scanner never pre-bundles them and serves them unbundled, which fails with
+  // "does not provide an export named 'default'" (a plain CJS/ESM interop error, browser console
+  // only - docs:build is unaffected). Forcing both specifiers into optimizeDeps.include here
+  // fixes the dev server; withMermaid() appends its own list to this one rather than replacing it.
+  vite: {
+    optimizeDeps: {
+      include: ["fastdom", "fastdom/extensions/fastdom-promised.js"],
+    },
+  },
 
   themeConfig: {
     logo: "/favicon.svg",
@@ -119,4 +139,4 @@ export default defineConfig({
       level: [2, 3],
     },
   },
-});
+}));
