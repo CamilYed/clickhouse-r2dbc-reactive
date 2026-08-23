@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { withBase } from "vitepress";
 import throughputChart from "../../../images/2026-08-20-throughput.png";
 </script>
 
@@ -27,7 +28,7 @@ import throughputChart from "../../../images/2026-08-20-throughput.png";
     <p class="chr-caveat">
       Single MacBook Pro (M3 Pro), single JMH fork — a real number, not yet a statistically settled
       one. See
-      <a href="/performance/">the full performance page</a>
+      <a :href="withBase('/performance/')">the full performance page</a>
       for methodology, confidence caveats, and every other benchmark family.
     </p>
   </section>

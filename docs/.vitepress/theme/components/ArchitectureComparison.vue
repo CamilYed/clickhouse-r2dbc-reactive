@@ -1,4 +1,6 @@
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { withBase } from "vitepress";
+</script>
 
 <template>
   <section class="chr-section">
@@ -32,7 +34,7 @@
     </div>
 
     <p class="chr-more">
-      <a href="/architecture/overview">Full architecture direction &amp; verified evidence &#8594;</a>
+      <a :href="withBase('/architecture/overview')">Full architecture direction &amp; verified evidence &#8594;</a>
     </p>
   </section>
 </template>
