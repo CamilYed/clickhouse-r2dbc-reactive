@@ -449,4 +449,38 @@ class ClickHouseConnectionFactoryTest {
     // when / then
     assertThatCode(factory::dispose).doesNotThrowAnyException();
   }
+
+  @Test
+  void shouldSizeTheDecoderSchedulerToTheExplicitTransportMaxConnections() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, 5)
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then - the decoder must never be a smaller, hidden concurrency ceiling than the pool a
+    // caller explicitly asked for
+    assertThat(factory.decoderWorkerCount()).isEqualTo(5);
+  }
+
+  @Test
+  void shouldSizeTheDecoderSchedulerToReactorNettysOwnDefaultPoolFormulaWhenPoolSizeIsUnset() {
+    // given - same formula documented in docs/operations/connection-pooling.md's "Reactor Netty's
+    // own defaults" table: max(availableProcessors, 8) * 2, at least 16
+    final int expectedWorkerCount = Math.max(Runtime.getRuntime().availableProcessors(), 8) * 2;
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.decoderWorkerCount()).isEqualTo(expectedWorkerCount);
+  }
 }

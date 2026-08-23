@@ -42,9 +42,11 @@ public final class RowDecodingScheduler {
   private static final int DEFAULT_QUEUED_TASK_CAPACITY = 10_000;
 
   private final Scheduler scheduler;
+  private final int workerCount;
 
-  private RowDecodingScheduler(final Scheduler scheduler) {
+  private RowDecodingScheduler(final Scheduler scheduler, final int workerCount) {
     this.scheduler = scheduler;
+    this.workerCount = workerCount;
   }
 
   /**
@@ -54,6 +56,21 @@ public final class RowDecodingScheduler {
    */
   public static RowDecodingScheduler defaults() {
     return create(DEFAULT_WORKER_COUNT, DEFAULT_QUEUED_TASK_CAPACITY);
+  }
+
+  /**
+   * A scheduler sized to {@code workerCount} workers with this class's own default queued task
+   * capacity ({@link #DEFAULT_QUEUED_TASK_CAPACITY}) — the shape a caller that already knows the
+   * right worker count for its own situation (e.g. {@code
+   * io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactory} sizing this to its
+   * resolved connection-pool size) reaches for instead of repeating the queued-task-capacity
+   * default itself.
+   *
+   * @param workerCount the maximum number of backing threads this scheduler ever creates; must be
+   *     positive
+   */
+  public static RowDecodingScheduler withWorkerCount(final int workerCount) {
+    return create(workerCount, DEFAULT_QUEUED_TASK_CAPACITY);
   }
 
   /**
@@ -71,7 +88,18 @@ public final class RowDecodingScheduler {
           "queuedTaskCapacity must be positive, got: " + queuedTaskCapacity);
     }
     return new RowDecodingScheduler(
-        Schedulers.newBoundedElastic(workerCount, queuedTaskCapacity, THREAD_NAME_PREFIX));
+        Schedulers.newBoundedElastic(workerCount, queuedTaskCapacity, THREAD_NAME_PREFIX),
+        workerCount);
+  }
+
+  /**
+   * The maximum number of decode tasks this scheduler ever runs at once — what it was constructed
+   * with via {@link #create(int, int)}/{@link #withWorkerCount(int)}/{@link #defaults()}. A real
+   * capacity guarantee callers can check against their own concurrency ceiling (e.g. a connection
+   * pool size), not an implementation detail.
+   */
+  public int workerCount() {
+    return workerCount;
   }
 
   /**

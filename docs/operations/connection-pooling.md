@@ -72,6 +72,24 @@ gives you when nothing above is set:
 | `maxIdleTime` / `maxLifeTime` | unset (no eviction) | An idle or long-lived pooled connection is never proactively closed by the pool itself — it's held until the server closes it or the app shuts down |
 | Leasing strategy | `fifo` | Idle connections are handed out oldest-released-first |
 
+### The decode-worker pool tracks this pool's size, not the CPU core count
+
+Row decoding runs on a separate, dedicated worker pool (`RowDecodingScheduler`) — see
+[fully-reactive.md](../concepts/fully-reactive.md) for why this exists at all: client-v2's own
+RowBinary reader is a blocking call, so it needs somewhere to run that isn't the Reactor Netty
+event-loop thread that delivered the response. Until 2026-08-23 this pool defaulted to one worker
+per CPU core, entirely independent of `transportMaxConnections` — on a machine with fewer cores
+than physical connections (common on CI runners; a real, small-core-count GitHub Actions runner is
+what surfaced this), the decoder became a smaller, silent concurrency ceiling *underneath* the
+connection pool, regardless of how large `transportMaxConnections` was set. A query could acquire a
+physical connection immediately and still queue waiting for a free decode worker.
+
+Fixed: `ClickHouseConnectionFactory` now sizes `RowDecodingScheduler` to exactly the resolved
+connection pool size — the explicit `transportMaxConnections` value when set, or this same
+`max(availableProcessors, 8) * 2` formula (mirrored, not read back from Reactor Netty, which
+doesn't expose it) when left at the default above. The decoder can no longer be a smaller ceiling
+than the pool a caller explicitly configured, or than the pool's own documented default.
+
 ### Is it worth setting `maxConnections` yourself?
 
 Usually not, and that's the point of this project: because the pipeline is non-blocking end to

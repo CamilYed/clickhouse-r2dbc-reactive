@@ -69,4 +69,50 @@ class RowDecodingSchedulerTest {
       scheduler.dispose();
     }
   }
+
+  @Test
+  void shouldReportTheWorkerCountItWasExplicitlyCreatedWith() {
+    // given
+    final RowDecodingScheduler scheduler = RowDecodingScheduler.create(6, 100);
+
+    try {
+      // when / then
+      assertThat(scheduler.workerCount()).isEqualTo(6);
+    } finally {
+      scheduler.dispose();
+    }
+  }
+
+  @Test
+  void shouldReportAvailableProcessorsAsTheDefaultWorkerCount() {
+    // given
+    final RowDecodingScheduler scheduler = RowDecodingScheduler.defaults();
+
+    try {
+      // when / then
+      assertThat(scheduler.workerCount()).isEqualTo(Runtime.getRuntime().availableProcessors());
+    } finally {
+      scheduler.dispose();
+    }
+  }
+
+  @Test
+  void shouldCreateASchedulerSizedToAnExplicitWorkerCountWithTheDefaultQueuedTaskCapacity() {
+    // given
+    final RowDecodingScheduler scheduler = RowDecodingScheduler.withWorkerCount(12);
+
+    try {
+      // when / then
+      assertThat(scheduler.workerCount()).isEqualTo(12);
+    } finally {
+      scheduler.dispose();
+    }
+  }
+
+  @Test
+  void shouldRejectANonPositiveWorkerCountViaWithWorkerCount() {
+    // when / then
+    assertThatThrownBy(() -> RowDecodingScheduler.withWorkerCount(0))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
 }
