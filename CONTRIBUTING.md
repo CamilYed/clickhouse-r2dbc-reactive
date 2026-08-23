@@ -72,7 +72,7 @@ lands.
 builds, signs, and publishes all four modules to Maven Central via the Central Portal, then — once
 the deployment is confirmed `PUBLISHED` — creates a Git tag and a GitHub Release, so the Central
 Portal version, the tag, and the Release always point at the same commit
-([ROADMAP.md Phase 7 item 13](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)).
+([ROADMAP archive Phase 7 item 13](engineering/roadmap-archive.md#phase-7--operational-control--r2dbc-correctness-020)).
 
 1. On `main`, rename [CHANGELOG.md](CHANGELOG.md)'s `## [Unreleased] — X.Y.Z (...)` heading to
    `## [X.Y.Z] — YYYY-MM-DD` and commit it — the release workflow reads this file for GitHub

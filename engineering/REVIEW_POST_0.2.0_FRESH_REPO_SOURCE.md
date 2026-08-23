@@ -1,7 +1,7 @@
 # Fresh repository review for Claude — `clickhouse-r2dbc-reactive`
 
 > External review, adopted as the source for
-> [ROADMAP.md's Phase 8](../ROADMAP.md#phase-8--post-020-hardening-021). Every concrete technical
+> [ROADMAP.md's Phase 8](roadmap-archive.md#phase-8--post-020-hardening-021). Every concrete technical
 > claim below that Phase 8 turned into a roadmap item was re-verified against actual current source
 > before being copied in — this file is kept in full as the original external text; ROADMAP.md is
 > the working, triaged, up-to-date version of the same findings. Items this review flagged as

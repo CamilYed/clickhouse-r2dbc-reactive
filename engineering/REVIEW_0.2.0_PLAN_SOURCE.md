@@ -4,7 +4,7 @@
 **Stan przeglądu:** 2026-08-14
 **Proponowany następny release:** `0.2.0 — Operational Control & R2DBC Correctness`
 
-> Zewnętrzny przegląd kodu `0.1.0`, przyjęty jako źródło Phase 7 w [ROADMAP.md](../ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020).
+> Zewnętrzny przegląd kodu `0.1.0`, przyjęty jako źródło Phase 7 w [ROADMAP.md](roadmap-archive.md#phase-7--operational-control--r2dbc-correctness-020).
 > Każde konkretne twierdzenie techniczne poniżej (stan `ClickHouseResult`/`ClickHouseRow`/
 > `setStatementTimeout`/`Statement.add()`) zostało zweryfikowane względem rzeczywistego kodu przed
 > przepisaniem do ROADMAP.md — ten plik jest zachowany w całości jako oryginalne źródło, ROADMAP.md

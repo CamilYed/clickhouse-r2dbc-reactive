@@ -40,7 +40,7 @@ boundary demonstrates, one layer up.
   driver list that doesn't include ClickHouse, and fails outright with `IllegalStateException:
   Cannot determine a BindMarkersFactory for ClickHouse` before a single query ever runs. See
   `R2dbcConfiguration`'s own Javadoc for the full write-up, and
-  [ROADMAP.md's Phase 6](../../ROADMAP.md#phase-6-later--spring-webflux-interop-demo) for why this
+  [ROADMAP archive's Phase 6](../../engineering/roadmap-archive.md#phase-6-later--spring-webflux-interop-demo) for why this
   still doesn't make `.bind(...)`/`R2dbcEntityTemplate` actually usable against this driver
   (ClickHouse's `{name:Type}` parameter syntax needs the type inline in the SQL text, which
   `BindMarkersFactory` has no way to supply) — `DatabaseClientOrderEventRepository` therefore only
