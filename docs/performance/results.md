@@ -155,40 +155,100 @@ scheduler hop from the section above becomes pure overhead with nothing to hide 
 [index.md's "How to use this driver well"](index.md#how-to-use-this-driver-well): this is exactly
 the calling style not to use.
 
-## Non-blocking, matched pool: the actual point of this project
+## Non-blocking, matched pool: numbers below are retracted pending re-run
+
+> [!WARNING]
+> **The `BoundedPoolConcurrencyBenchmark` numbers in this section (3.5–4.1x latency, ~4x
+> throughput) were measured against a client-v2 benchmark-harness bug, not a fair comparison —
+> treat them as retracted until this class is re-run with the fix.** client-v2's async client
+> defaults `ClientConfigProperties.ASYNC_OPERATIONS` to `false`; without `.useAsyncRequests(true)`
+> on the `Client.Builder` used here, `Client#query(...)` runs synchronously on the calling thread
+> and returns an already-completed future — every client-v2 query in this benchmark's
+> `Flux.flatMap(..., concurrency)` therefore ran on one sequential worker, not the matched
+> 8-connection pool the table below claims. Confirmed by the math: client-v2's own numbers here
+> show flat throughput and latency scaling almost exactly linearly with concurrency (8→32→128
+> tracks 4x→4x) — the textbook signature of a single-server queue, not an 8-way pool. See
+> ["Cloud-verified matched pool" below](#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23)
+> for the same scenario re-run with the bug fixed — a materially different, honest result. This
+> section is kept for the record, not as a current claim.
 
 <p align="center">
-  <img src="../images/2026-08-20-bounded-pool-concurrency.png" width="720" alt="BoundedPoolConcurrencyBenchmark burst latency by concurrency level, this driver vs client-v2">
+  <img src="../images/2026-08-20-bounded-pool-concurrency.png" width="720" alt="BoundedPoolConcurrencyBenchmark burst latency by concurrency level, this driver vs client-v2 (retracted — see warning above)">
 </p>
 
 | Concurrency (pool=8, both sides) | this driver (mean) | client-v2 (mean) | verdict |
 | --- | --- | --- | --- |
-| 8 | 2700 µs | 9324 µs | **this driver 71.0% faster (3.5x)** |
-| 32 | 10,008 µs | 37,086 µs | **this driver 73.0% faster (3.7x)** |
-| 128 | 36,723 µs | 148,890 µs | **this driver 75.3% faster (4.1x)** |
-
-Same 8-connection budget on both sides, but driven the way this driver is actually meant to be
-called: `Flux.flatMap(..., concurrency)`, no thread blocked per in-flight query. The win doesn't
-just hold, it widens as concurrency increases — client-v2 needs a blocked thread (or its own
-internal executor) per logical query fighting over the same 8 connections; this driver just queues
-inside Reactor Netty with nothing paying rent while it waits.
+| 8 | 2700 µs | 9324 µs | ~~this driver 71.0% faster (3.5x)~~ retracted |
+| 32 | 10,008 µs | 37,086 µs | ~~this driver 73.0% faster (3.7x)~~ retracted |
+| 128 | 36,723 µs | 148,890 µs | ~~this driver 75.3% faster (4.1x)~~ retracted |
 
 <p align="center">
-  <img src="../images/2026-08-20-throughput.png" width="720" alt="Real point-query throughput through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2">
+  <img src="../images/2026-08-20-throughput.png" width="720" alt="Real point-query throughput through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2 (retracted — see warning above)">
 </p>
 
 | Concurrency (pool=8, both sides) | this driver (ops/s) | client-v2 (ops/s) | verdict |
 | --- | --- | --- | --- |
-| 8 | 3516 | 900 | **3.9x throughput** |
-| 32 | 3615 | 900 | **4.0x throughput** |
-| 128 | 3541 | 893 | **4.0x throughput** |
+| 8 | 3516 | 900 | ~~3.9x throughput~~ retracted |
+| 32 | 3615 | 900 | ~~4.0x throughput~~ retracted |
+| 128 | 3541 | 893 | ~~4.0x throughput~~ retracted |
 
-The same story, measured as real throughput through the public R2DBC SPI (not the internal
-transport API) against client-v2's public async API: a flat, consistent ~4x more queries per
-second at every concurrency level, on identical hardware and an identical physical connection
-budget. Client-v2's own throughput doesn't move at all between 8 and 128 concurrent queries — it's
-already saturated at 8 concurrent requests against an 8-connection pool, exactly what a
-one-thread(or task)-per-query model predicts.
+`BoundedPoolConcurrencyBenchmark` itself now has `.useAsyncRequests(true)` fixed (same fix as
+`PublicApiMatchedPoolThroughputBenchmark` below) — this table just hasn't been re-run yet. Until it
+is, don't cite the numbers above.
+
+## Cloud-verified matched pool, real async on both sides (2026-08-23)
+
+The fair version of the scenario above, run twice independently on the Phase 10 cloud pipeline
+(`PublicApiMatchedPoolThroughputBenchmark`, `trusted` profile — 3 forks, 5 warmup iterations,
+`-prof gc`, GitHub Actions `ubuntu-latest`, one shared ClickHouse container for the whole job — see
+[the roadmap's Phase 10](../../ROADMAP.md#phase-10--cloud-benchmark-pipeline)) after fixing the same
+`useAsyncRequests(true)` bug the warning above describes. Per this pipeline's own trust model
+(don't trust one absolute number from a shared runner — trust the ratio, repeated across runs):
+the two runs agree closely, so this is a real signal, not noise.
+
+| Concurrency (pool=8, both sides) | ourDriver/client-v2 throughput ratio, run 1 | run 2 |
+| --- | --- | --- |
+| 8 | 0.95 | 0.93 |
+| 32 | 0.93 | 0.91 |
+| 128 | 0.95 | 0.95 |
+
+**client-v2 is ahead on throughput by roughly 5–9%, consistently across both runs and all three
+concurrency levels** — the opposite of the retracted claim above.
+
+<p align="center">
+  <img src="../images/2026-08-23-cloud-matched-pool-throughput.png" width="720" alt="Cloud-verified real point-query throughput, matched 8-connection pool, this driver vs client-v2, run 2">
+</p>
+
+| Concurrency | ourDriver p99 (run 2) | client-v2 p99 (run 2) | verdict |
+| --- | --- | --- | --- |
+| 8 | 22,675 µs | 21,597 µs | client-v2 ~5% lower |
+| 32 | 22,561 µs | 19,379 µs | client-v2 ~16% lower |
+| 128 | 40,849 µs | 34,481 µs | client-v2 ~18% lower |
+
+**client-v2 also has lower per-query latency at every percentile (p50 through p99) and every
+concurrency level, in both runs** — this matches, and reinforces, the not-yet-root-caused
+["Blocking calls"](#blocking-calls-confirms-its-the-calling-style-not-the-pool) finding above and
+[`MatchedPoolThreadsConcurrencyBenchmark`'s open regression](#open-follow-ups) — this is now two
+independent benchmarks pointing at the same unresolved latency gap, not one.
+
+<p align="center">
+  <img src="../images/2026-08-23-cloud-matched-pool-latency-p99.png" width="720" alt="Cloud-verified p99 per-query latency, matched 8-connection pool, this driver vs client-v2, run 2">
+</p>
+
+| Concurrency | ourDriver B/op (run 2) | client-v2 B/op (run 2) | verdict |
+| --- | --- | --- | --- |
+| 8 | 23,866 | 63,891 | **this driver allocates 2.7x less** |
+| 32 | 23,913 | 66,915 | **this driver allocates 2.8x less** |
+| 128 | 23,923 | 69,243 | **this driver allocates 2.9x less** |
+
+**This driver's advantage that does hold up, consistently, in both runs, at every concurrency
+level: allocation per query.** ourDriver's allocation is flat regardless of concurrency; client-v2's
+grows as concurrency rises. This is the one part of the original "matched pool" story that survives
+the fix intact.
+
+<p align="center">
+  <img src="../images/2026-08-23-cloud-matched-pool-allocation.png" width="720" alt="Cloud-verified allocation per query, matched 8-connection pool, this driver vs client-v2, run 2">
+</p>
 
 ## Rapid-refresh cancellation: incomplete this run
 
@@ -223,9 +283,17 @@ cancellation behavior under this workload.
   plausibly change the verdict.
 - **Re-run `MixedWorkloadRapidRefreshCancelBenchmark` to completion** — this run has no `ourDriver`
   data to compare against client-v2's.
-- **`-prof gc` on `MatchedPoolThreadsConcurrencyBenchmark`** to root-cause the blocking-caller
-  regression (confirmed to exist, not yet explained beyond "blocking forfeits this driver's
-  advantage").
+- **Root-cause the latency gap** — now confirmed by two independent benchmarks, not one:
+  `MatchedPoolThreadsConcurrencyBenchmark`'s blocking-caller regression, and the cloud-verified
+  `PublicApiMatchedPoolThroughputBenchmark` result above (real async on both sides, still client-v2
+  ahead on p50–p99 at every concurrency level). `RowDecodingScheduler`'s cross-thread hand-off is
+  the leading suspect (see the streaming-scan root cause above for the same mechanism at a
+  different scale) — `-prof gc` plus `async-profiler`/JFR on `PublicApiMatchedPoolThroughputBenchmark`
+  is the next concrete step, not another blind re-run.
+- **Re-run `BoundedPoolConcurrencyBenchmark`** now that it has `.useAsyncRequests(true)` fixed —
+  see the retraction warning above. Its numbers should land in the same shape as the cloud-verified
+  `PublicApiMatchedPoolThroughputBenchmark` result, since both now exercise the same fair
+  matched-pool scenario; if they don't agree, that's itself worth explaining.
 - **Build `MixedWorkloadRapidRefreshPileUpBenchmark`**, the no-cancellation counterpart to the
   rapid-refresh scenario above (old and new queries both run to completion) — a named, not-yet-built
   companion benchmark.

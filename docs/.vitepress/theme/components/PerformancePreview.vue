@@ -1,33 +1,34 @@
 <script setup lang="ts">
 import { withBase } from "vitepress";
-import throughputChart from "../../../images/2026-08-20-throughput.png";
+import allocationChart from "../../../images/2026-08-23-cloud-matched-pool-allocation.png";
 </script>
 
 <template>
   <section class="chr-section">
     <h2 class="chr-heading">Performance</h2>
     <p class="chr-lede">
-      Real point-query throughput through the public R2DBC SPI, an 8-connection pool matched on
-      both sides, this driver vs. client-v2's own public async API — measured on the same
-      hardware, JVM, and physical connection budget.
+      Allocation per query through the public R2DBC SPI, an 8-connection pool matched on both
+      sides, this driver vs. client-v2's own public async API — cloud-verified on GitHub Actions,
+      two independent runs.
     </p>
 
     <div class="chr-chart-card">
       <img
-        :src="throughputChart"
+        :src="allocationChart"
         width="720"
-        alt="Real point-query throughput through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2"
+        alt="Allocation per query through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2"
       />
       <div class="chr-chart-caption">
-        <strong>~4x more queries/second</strong> at every concurrency level tested (8, 32, 128) —
-        client-v2 saturates at 8 concurrent requests against its 8-connection pool; this driver
-        keeps scaling.
+        <strong>2.7&ndash;2.9x less allocation per query</strong>, and the gap widens as concurrency
+        rises — the win that holds up under a fair, cloud-verified comparison. Throughput and
+        latency currently favor client-v2 in this same scenario; see the full page for the honest
+        breakdown, including a retracted earlier claim.
       </div>
     </div>
 
     <p class="chr-caveat">
-      Single MacBook Pro (M3 Pro), single JMH fork — a real number, not yet a statistically settled
-      one. See
+      GitHub Actions `ubuntu-latest`, JMH `trusted` profile (3 forks, 5 warmup iterations),
+      confirmed stable across two independent runs. See
       <a :href="withBase('/performance/')">the full performance page</a>
       for methodology, confidence caveats, and every other benchmark family.
     </p>
