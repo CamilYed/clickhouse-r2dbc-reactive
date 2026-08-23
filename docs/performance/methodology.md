@@ -27,8 +27,25 @@ order. See [index.md](index.md) for the confidence warning and environment this 
 | --- | --- |
 | `ConcurrencyBenchmark` | `@Threads(8)`: eight platform threads, each blocking on its own call, both drivers left at their own default (unmatched) connection pool. A same-thread-count, different-pool-budget comparison. |
 | `MatchedPoolThreadsConcurrencyBenchmark` | Identical to the above, except both sides get the same explicit 8-connection pool. Isolates whether a `ConcurrencyBenchmark` gap comes from pool mismatch or from the blocking calling style itself. |
-| `BoundedPoolConcurrencyBenchmark` | The scenario this driver is actually built for: a deliberately small, **matched** 8-connection pool, driven **non-blocking** — `Flux.flatMap(..., concurrency)` on this driver's side, `CompletableFuture`-returning async calls on client-v2's — at 8/32/128 logical concurrent queries. No thread is blocked per in-flight query on either side; only the physical pool budget is shared. |
+| `BoundedPoolConcurrencyBenchmark` | The scenario this driver is actually built for: a deliberately small, **matched** 8-connection pool, driven **non-blocking** — `Flux.flatMap(..., concurrency)` on this driver's side, `CompletableFuture`-returning async calls on client-v2's — at 8/32/128 logical concurrent queries. No JMH calling thread is blocked per in-flight query on either side; the physical pool budget is shared, and each side's own execution model differs (see the note below). |
 | `PublicApiMatchedPoolThroughputBenchmark` | The same idea, through the public R2DBC SPI end to end (not `ClickHouseHttpTransport` directly), reporting real **throughput** (queries/sec) and a separate `HdrHistogram`-based per-query latency log, at the same matched 8-connection pool and 8/32/128 concurrency levels. This is the headline "how many real queries per second" number. |
+
+Both sides expose asynchronous completion to the benchmark harness — neither one makes the JMH
+calling thread block on a query — but their execution models underneath are not the same, and this
+difference is what the concurrency benchmarks above are actually measuring, not a benchmark bug:
+
+- **this driver** dispatches the HTTP request through Reactor Netty's non-blocking event-loop I/O —
+  no platform thread is dedicated to or blocked by any single in-flight query, on either the caller
+  or transport side.
+- **client-v2**, with `.useAsyncRequests(true)` enabled (required for a fair comparison — see
+  `BoundedPoolConcurrencyBenchmark`'s own Javadoc for why), runs its normal *blocking* HTTP call on
+  a thread from its own internal cached-thread-pool executor. The caller isn't blocked, but a real
+  platform thread from that executor is, for the duration of each query.
+
+Concretely: this driver needs zero platform threads per in-flight query; client-v2's async mode
+still needs one blocked executor thread per in-flight query, just not the JMH caller's thread. Item
+5's resource-model measurement (thread count, CPU, RSS) is the planned follow-up to quantify what
+that difference actually costs — see [results.md's Open follow-ups](results.md#open-follow-ups).
 
 ## Rapid-refresh cancellation — the "user hits refresh" scenario
 

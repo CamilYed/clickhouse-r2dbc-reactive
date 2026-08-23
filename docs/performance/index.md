@@ -90,8 +90,10 @@ for the full mechanism. 10k and 100k rows are a clear, repeatable win. At 1M row
 from tied with client-v2 to ~30% slower depending on JVM/OS conditions this investigation couldn't
 pin down (see [results.md's "Why the 1M number won't sit
 still"](results.md#why-the-1m-number-wont-sit-still)) — treat that tier as unresolved, not as a
-known gap of a fixed size. If your workload is dominated by very large single-result scans, the
-concurrency scenario above is still where this driver wins most decisively and predictably.
+known gap of a fixed size. The 10k/100k tiers above remain this driver's clearest, most repeatable
+wins today; the matched-pool concurrency scenario no longer belongs in that list — see the
+"Non-blocking, matched pool" rows above, where client-v2 is currently ahead on throughput and
+latency and this driver's advantage is allocation per query, not overall speed.
 
 **Don't call `RowBinaryDecoder.decodeRows` (the scheduler-free shortcut) against a live network
 source.** It's safe only when the source is already fully in memory — against a live Reactor Netty

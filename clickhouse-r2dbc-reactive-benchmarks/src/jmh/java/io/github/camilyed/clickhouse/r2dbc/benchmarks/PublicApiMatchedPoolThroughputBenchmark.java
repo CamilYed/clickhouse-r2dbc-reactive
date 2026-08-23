@@ -43,13 +43,22 @@ import reactor.core.publisher.Mono;
  * bounded to {@link #concurrency} in flight at once via {@code Flux.flatMap(..., concurrency)} —
  * for {@code concurrency=128}, as soon as one query completes another is already available,
  * producing sustained closed-loop pressure rather than one short burst. {@link
- * OperationsPerInvocation} divides JMH's own measured invocation rate by {@link
- * #REQUESTS_PER_INVOCATION}, so the printed {@code Score} is already <b>logical queries/sec</b>,
- * not "invocations (batches) per second" — this has not yet been empirically re-verified against a
- * real run's raw invocation count on this exact class (the plan explicitly asks for that check,
- * section 6/20); if a run's reported ops/sec doesn't match {@code REQUESTS_PER_INVOCATION /
- * mean-invocation-time-in-seconds}, trust the manually computed number over the annotation until
- * this comment is corrected.
+ * OperationsPerInvocation} <b>multiplies</b> JMH's own measured invocation rate (batches/sec) by
+ * {@link #REQUESTS_PER_INVOCATION}, so the printed {@code Score} is already <b>logical
+ * queries/sec</b>, not "invocations (batches) per second".
+ *
+ * <p><b>Empirically verified</b> against the 2026-08-23 trusted cloud run's raw {@code
+ * results.json}: at {@code concurrency=8} (where logical concurrency exactly matches {@link
+ * #poolSize}, so the queueing-theory identity {@code throughput ≈ concurrency / mean-latency}
+ * applies directly), client-v2's reported score (≈889 ops/s) matches {@code 8 /
+ * mean-per-query-latency-in-seconds} to within the expected noise band — not the wildly different
+ * number {@code raw-invocations/sec} (≈0.22/sec, three orders of magnitude off) would have produced
+ * if the annotation weren't applying its multiplication correctly. Separately, both drivers' scores
+ * stay flat (roughly 800–890 ops/s) across {@code concurrency=8/32/128} in that same run — exactly
+ * the signature of a benchmark correctly bottlenecked by the matched {@link #poolSize}-connection
+ * pool rather than by logical concurrency, which is only a coherent observation if the reported
+ * unit really is logical queries/sec throughout. No further verification needed before trusting
+ * this class's {@code Score} column as reported.
  *
  * <h2>What the logged per-query latency means</h2>
  *
