@@ -36,10 +36,11 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
 - **[Phase 10 — Cloud benchmark pipeline](#phase-10--cloud-benchmark-pipeline)** — a GitHub
   Actions workflow that runs this driver and client-v2 in the same job/VM/ClickHouse process, so
   benchmark work has a repeatable environment off the local MacBook. Planned 2026-08-22. Stage 1
-  (`.github/workflows/benchmark.yml` + `scripts/benchmarks/analyze.py`) is built and its analysis
-  script is verified against synthetic fixtures, but **not yet run for real** — needs a
-  `workflow_dispatch` run against actual CI before the pipeline itself, or any number out of it,
-  is trusted. See Phase 10 below.
+  (`.github/workflows/benchmark.yml` + `scripts/benchmarks/analyze.py`) is built and confirmed
+  working end to end: a real `workflow_dispatch` run (fast profile, run #4, 2026-08-23) went green,
+  producing `metadata.json`/`results.json`/`summary.md` + charts as a build artifact. The *fast*
+  profile's numbers are still a sanity check only, not something to make a public performance claim
+  from — see Phase 10 below for the *trusted* profile and next steps.
 
 ## Later (deferred, blocked on Phase 10)
 
@@ -106,9 +107,10 @@ Sequencing (small PRs, not one rewrite):
 
 ## Phase 10 — Cloud benchmark pipeline
 
-**Stage 1 built, not yet run for real.** Plan captured 2026-08-22, directly answering the blocker
-every deferred performance item above has been waiting on: a repeatable benchmark environment off
-the local MacBook. `.github/workflows/benchmark.yml` (fast/trusted `workflow_dispatch` profiles,
+**Stage 1 built and confirmed working (fast profile, run #4, 2026-08-23).** Plan captured
+2026-08-22, directly answering the blocker every deferred performance item above has been waiting
+on: a repeatable benchmark environment off the local MacBook. `.github/workflows/benchmark.yml`
+(fast/trusted `workflow_dispatch` profiles,
 weekly fast sanity schedule) and `scripts/benchmarks/analyze.py` (JMH `results.json` + captured
 stdout latency logs + run metadata → `summary.md` + three charts) exist and are wired to
 `PublicApiMatchedPoolThroughputBenchmark`. `analyze.py`'s parsing/aggregation logic is verified
