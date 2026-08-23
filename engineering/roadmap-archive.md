@@ -211,7 +211,7 @@ answer to "we can't skip anything" for the HTTP surface specifically.
 
 Goal: prove the hard properties with the smallest possible surface — `SELECT 1`, then a streamed
 multi-row result — against a real, non-blocking HTTP path, per the acceptance criteria already
-written into the [README](../README.md#suggested-first-validation-spike):
+written into the [README](../README.md#usage):
 
 - Request not sent before subscription.
 - No blocking network call anywhere on the query path.
@@ -279,7 +279,7 @@ the transport boundary before building on top of it catches problems earlier. `c
 streamed not aggregated, cancellation tears down the connection, delayed headers, delayed body,
 fragmented chunks, slow subscriber/backpressure, no response/timeout, connection reset mid-response,
 cancellation before/while-queued/during-receive, pool saturation, pending-acquire timeout — is the
-same one already named in [README's testing strategy](../README.md#testing-strategy); nothing new, just
+same one already named in [README's testing strategy](../docs/internals/testing-strategy.md); nothing new, just
 sequenced earlier for this one module.
 
 ### Decision: HTTP now, native TCP not now (revisit only after benchmarks)
@@ -514,7 +514,7 @@ still outstanding before this driver calls itself registrable/discoverable.
 ## Phase 4 — "Fully reactive" sign-off
 
 Before calling the driver "fully reactive", every property in
-[README.md's table](../README.md#what-fully-reactive-means-here) needs a test that demonstrates it,
+[README.md's table](../docs/concepts/fully-reactive.md) needs a test that demonstrates it,
 not just an API shape that implies it. Concretely, a checklist pass over:
 
 - Deferred execution, non-blocking I/O, stream-oriented consumption, backpressure-aware delivery,
@@ -528,7 +528,7 @@ This is the gate before spending time on Maven Central publishing polish or perf
 
 ### Sign-off (2026-08-13)
 
-Every property in [README.md's table](../README.md#what-fully-reactive-means-here) mapped to a named
+Every property in [README.md's table](../docs/concepts/fully-reactive.md) mapped to a named
 test that would fail if that property regressed — not just an API shape that implies it:
 
 | Property | Evidence |
@@ -1101,7 +1101,7 @@ reading the source, not the Javadoc's word for it.
 real transport admission-control boundary. `io.r2dbc.pool`'s `ConnectionPool` is not this driver's
 physical HTTP connection pool — `ClickHouseHttpTransport`'s Reactor Netty `ConnectionProvider` is,
 and it currently has no R2DBC-option-level contract at all (see [Connection
-pooling](../README.md#connection-pooling) in the README). A driver that's only "reactive" at the
+pooling](../docs/operations/connection-pooling.md) in the README). A driver that's only "reactive" at the
 `Publisher` type level but has an invisible, uncontrolled transport queue underneath is exactly the
 failure mode [Why](../README.md#why) names as this project's origin — closing that gap is more
 valuable to production users than any new ClickHouse type or a second transport.
@@ -1473,7 +1473,7 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    check entirely and surfaces instead as whatever exception client-v2's RowBinary reader eventually
    throws — but only after silently emitting the misdecoded garbage rows in between, which is the part
    worth calling out loudly rather than burying in a test comment. Written up caller-facing in
-   README's [Known limitations](../README.md#known-limitations) section, since this is a real
+   README's [Known limitations](../docs/reference/known-limitations.md) section, since this is a real
    data-integrity risk a caller needs to know about, not just an internal implementation detail.
    `wait_end_of_query=1` sidesteps the whole problem by having ClickHouse buffer the entire response
    server-side (up to its own `http_response_buffer_size`) before sending anything, so a failure is
@@ -1688,7 +1688,7 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
    Builder for the domain `OrderEvent` record — no such builder existed before this).
 10. **Prove Spring shutdown actually disposes factory-owned resources.** `0.2.1`'s new
     `ClickHouseConnectionFactory.dispose()`/`isDisposed()` (see [Connection
-    pooling](../README.md#connection-pooling)'s "Shutting it down" note) is not called automatically by
+    pooling](../docs/operations/connection-pooling.md)'s "Shutting it down" note) is not called automatically by
     anything — `io.r2dbc.pool`'s `ConnectionPool.dispose()` only tears down pooled `Connection`
     handles, not the factory underneath. Add a demo-level shutdown test proving that when the Spring
     context closes, the underlying transport/decoder-scheduler are actually disposed too, not just

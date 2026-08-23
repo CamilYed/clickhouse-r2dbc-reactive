@@ -327,7 +327,7 @@ it: it lets the source tick on its own schedule and buffers only the freshest va
 code combines a periodic/event-driven source with `switchMap`.
 
 **Cancellation is best-effort past the server boundary, not a hard guarantee.** See the main
-[README's Known limitations](../README.md#known-limitations) for the full detail — cancelling a
+[Known limitations](reference/known-limitations.md) for the full detail — cancelling a
 subscription always stops this driver from reading further and closes the connection, but the
 best-effort `KILL QUERY` sent to actually stop ClickHouse server-side can itself fail (privilege,
 connectivity) and is logged, not surfaced back to the caller.
