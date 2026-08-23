@@ -243,7 +243,7 @@ for the full scoping and acceptance criteria this release was built against.
   blocking hand-off per chunk. Found and root-caused via `StreamingScanBenchmark`: chunk count scales
   linearly with row count, and each cross-thread hand-off has a real, measurable cost. Clear win at
   10k/100k-row scans; the 1M-row tier's result is not yet a settled single number — see
-  [docs/PERFORMANCE.md](docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still) and
+  [performance results](docs/performance/results.md#why-the-1m-number-wont-sit-still) and
   [Known limitations](docs/reference/known-limitations.md) for the honest, still-open measurement
   question. `RowBinaryDecoder.RESPONSE_CHUNK_DEMAND` raised `4` → `16` alongside this fix, so more
   chunks can be outstanding for the coalescing loop to work with.
@@ -303,7 +303,7 @@ cancellation that tears down the connection and issues a best-effort `KILL QUERY
 `ssl=true` TLS support including a custom trust store (`sslRootCert`); a pre-send-only retry
 policy; a Spring Boot + WebFlux demo module
 ([`examples/spring-boot-webflux-demo`](examples/spring-boot-webflux-demo)); recorded performance
-benchmarks vs. baseline (see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+benchmarks vs. baseline (see [docs/performance/](docs/performance/index.md)).
 
 See [ROADMAP archive's Production readiness review](engineering/roadmap-archive.md#production-readiness-review) for the
 detailed, honestly-triaged list of what shipped fixed vs. documented-as-a-limitation for this

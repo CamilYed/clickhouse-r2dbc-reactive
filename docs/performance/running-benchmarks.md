@@ -1,7 +1,10 @@
-# clickhouse-r2dbc-reactive-benchmarks
+# Running the benchmarks yourself
 
-JMH benchmarks comparing this driver against `client-v2`, at multiple levels — what each class
-measures and the latest results: [docs/performance/](../docs/performance/index.md).
+The benchmark suite lives in `clickhouse-r2dbc-reactive-benchmarks` — JMH benchmarks comparing this
+driver against client-v2, at multiple levels (see [methodology.md](methodology.md) for what each
+class measures). This page mirrors that module's own
+[README](../../clickhouse-r2dbc-reactive-benchmarks/README.md); that file is the source of truth if
+the two ever drift.
 
 Not published, not part of `./gradlew build`/`check`. Requires Docker and JDK 21.
 
@@ -39,9 +42,9 @@ To run with a JMH profiler (e.g. the GC profiler for allocation numbers):
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
 ```
 
-To run multiple forks (needed before trusting a result — see docs/PERFORMANCE.md's confidence
-warning; the plain `jmh` task defaults to 1 fork/1 warmup iteration, a sanity check, not a
-trustworthy number):
+To run multiple forks (needed before trusting a result — see [index.md's confidence
+warning](index.md); the plain `jmh` task defaults to 1 fork/1 warmup iteration, a sanity check, not
+a trustworthy number):
 
 ```
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.forks=3 -Pjmh.warmupIterations=3
@@ -58,7 +61,8 @@ macOS to prevent the machine sleeping mid-run.
 
 ## Machine
 
-All numbers currently recorded in docs/PERFORMANCE.md were measured on a single MacBook Pro
+All numbers currently recorded in [results.md](results.md) were measured on a single MacBook Pro
 14-inch (Nov 2023, Apple M3 Pro, 36 GB RAM) — a shared consumer laptop, not an isolated
 benchmarking rig. Treat absolute numbers as specific to that machine; the driver-vs-driver
-comparisons (same hardware/JVM/data on both sides) are the portable part.
+comparisons (same hardware/JVM/data on both sides) are the portable part. A repeatable, off-laptop
+environment is planned — see [../../ROADMAP.md's Phase 10](../../ROADMAP.md#phase-10--cloud-benchmark-pipeline).

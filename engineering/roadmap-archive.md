@@ -19,7 +19,7 @@ proposed to the ClickHouse team.
 ## Contents
 
 - [Module map](#module-map)
-- [docs/CLIENT_V2_HTTP_REFERENCE.md](../docs/CLIENT_V2_HTTP_REFERENCE.md) — full HTTP wire-protocol audit (compression, auth, headers, errors, TLS, retries)
+- [docs/internals/client-v2-http-reference.md](../docs/internals/client-v2-http-reference.md) — full HTTP wire-protocol audit (compression, auth, headers, errors, TLS, retries)
 - [Phase 0 — client-v2 execution-path finding](#phase-0--client-v2-execution-path-finding)
 - [Phase 1 — Transport spike](#phase-1--transport-spike)
 - [Phase 2 — Core protocol + testkit contract tests](#phase-2--core-protocol--testkit-contract-tests)
@@ -27,8 +27,8 @@ proposed to the ClickHouse team.
 - [Phase 4 — "Fully reactive" sign-off](#phase-4--fully-reactive-sign-off)
 - [Production readiness review](#production-readiness-review)
 - [Non-functional requirements: logging, metrics, leaks](#non-functional-requirements-logging-metrics-leaks)
-- [Phase 5 (later) — Load and performance testing](../docs/PERFORMANCE.md)
-- [Phase 6 (later) — Spring WebFlux interop demo](#phase-6-later--spring-webflux-interop-demo)
+- [Phase 5 (later) — Load and performance testing](../docs/performance/index.md)
+- [Phase 6 (later) — Spring WebFlux interop demo](#phase-6--spring-webflux-interop-demo-2026-08-13-reworked-after-a-genuine-bindmarkersfactory-finding--pending-green-confirmation)
 - [Phase 7 — Operational control & R2DBC correctness (0.2.0)](#phase-7--operational-control--r2dbc-correctness-020)
 - [Phase 8 — Post-0.2.0 hardening (0.2.1+)](#phase-8--post-020-hardening-021)
 - [Phase 9 — Documentation & website redesign](#phase-9--documentation--website-redesign)
@@ -47,7 +47,7 @@ rest of this roadmap.
 | `transport-http` | `core` | The **adapter** that implements `core`'s `Transport` port over Reactor Netty. Owns the socket. Nothing here knows what a "row" is. | Yes |
 | `connector` | `core`, `transport-http` | The **adapter** that implements the R2DBC SPI (`ConnectionFactoryProvider`, `Connection`, `Statement`, `Result`, ...) on top of `core`. Thin — R2DBC-shape translation only, no protocol logic of its own. | Yes |
 | `testkit` | `core` | Shared test infrastructure, used by every other module's tests: (a) `ControlledClickHouseServer` + `ClickHouseWireFixtures` — a fake HTTP endpoint for deterministic wire-level scenarios; (b) `BaseClickHouseIntegrationTest` + an Ability-pattern DSL for real ClickHouse via Testcontainers (create data, clean up between tests). | Yes (it's a test-support *library*, other people writing ClickHouse R2DBC code could depend on it too — same reason JUnit/AssertJ/Testcontainers themselves are ordinary published artifacts) |
-| `benchmarks` (`clickhouse-r2dbc-reactive-benchmarks`, Phase 5, in progress) | `core`, `transport-http`, `connector`, `testkit`, client-v2 (as the comparison baseline) | JMH throughput/latency/allocation measurement, this driver vs client-v2, at multiple levels (raw transport, public R2DBC SPI) — see [docs/PERFORMANCE.md](../docs/PERFORMANCE.md) for the full design. Not published: it's measurement tooling, not a library. | No |
+| `benchmarks` (`clickhouse-r2dbc-reactive-benchmarks`, Phase 5, in progress) | `core`, `transport-http`, `connector`, `testkit`, client-v2 (as the comparison baseline) | JMH throughput/latency/allocation measurement, this driver vs client-v2, at multiple levels (raw transport, public R2DBC SPI) — see [docs/performance/index.md](../docs/performance/index.md) for the full design. Not published: it's measurement tooling, not a library. | No |
 | `examples/spring-boot-webflux-demo` | `connector` (runtime-only) | A runnable Spring Boot 4.1 + WebFlux app proving the driver works end to end through Spring's R2DBC integration (`DatabaseClient`, raw SQL only — `R2dbcEntityTemplate`/`.bind(...)` don't work against this driver yet, see Phase 6), mirroring [`spring-reactive-transaction-boundary`](https://github.com/CamilYed/spring-reactive-transaction-boundary)'s demo. Also proves, with a real test, that Spring's declarative transaction machinery fails clearly over this driver (see Phase 6). | No |
 
 **`integration-tests` module: scaffolded in Phase 1, deleted (2026-08-13).** It was meant to hold
@@ -200,7 +200,7 @@ gzip), authentication modes, every header/query-param it sets, error-response se
 `X-ClickHouse-Exception-Code` header is the real success/failure signal, not just HTTP status),
 the mid-stream-error caveat's actual mechanics (`wait_end_of_query`), TLS, pooling/timeouts, and
 retry classification — is written up in
-[docs/CLIENT_V2_HTTP_REFERENCE.md](../docs/CLIENT_V2_HTTP_REFERENCE.md), with file:line citations and
+[docs/internals/client-v2-http-reference.md](../docs/internals/client-v2-http-reference.md), with file:line citations and
 a mapping of what each concern means for Phase 1 through Phase 3. Read it before building anything
 in `transport-http`/`core` beyond the Phase 1 spike so nothing gets silently skipped — this is the
 answer to "we can't skip anything" for the HTTP surface specifically.
@@ -394,7 +394,7 @@ runtime type is `String`, not just that `toString()` matches, so it would fail a
 type ever leaked back through. **Caught the hard way, immediately after landing this fix:** the demo
 (`examples/spring-boot-webflux-demo`) deliberately depends on the last *published* Maven Central
 connector release, not this in-repo source (see its `build.gradle.kts`'s own comment and [Phase
-6](#phase-6-later--spring-webflux-interop-demo)) — an initial version of this change also switched
+6](#phase-6--spring-webflux-interop-demo-2026-08-13-reworked-after-a-genuine-bindmarkersfactory-finding--pending-green-confirmation)) — an initial version of this change also switched
 `DatabaseClientOrderEventRepository` to `Row.get("status", String.class)`, which passed the fast
 unit-test suite (that module doesn't touch the demo) but failed the demo's real-ClickHouse
 integration tests with a 500 (`ClassCastException`, since the *published* release still returns
@@ -913,7 +913,8 @@ gaps" discipline already applied to R2DBC semantics and the mid-stream-error que
 ## Phase 5 (later) — Load and performance testing
 
 > [!NOTE]
-> **Moved to [docs/PERFORMANCE.md](../docs/PERFORMANCE.md) (2026-08-14).** This section had grown to
+> **Moved to [docs/performance/](../docs/performance/index.md) (2026-08-14, further split into
+> index/methodology/results/running-benchmarks 2026-08-23 as part of Phase 9).** This section had grown to
 > ~950 lines (design, every benchmark run, the H0/H1/H2 optimization investigation, the ongoing
 > compact-row redesign) and made the rest of this roadmap hard to navigate. Content is unchanged,
 > only relocated — same headings, same section anchors, just prefixed with `docs/PERFORMANCE.md#`
@@ -1320,7 +1321,7 @@ block on earlier ones except where noted):
 - [x] A benchmark baseline is recorded (docs/PERFORMANCE.md) — re-confirmed for Phase 7: full-scan
       regression found, root-caused, and mostly addressed (chunk coalescing); 10k/100k results are
       solid, 1M rows is an open, honestly-documented measurement question rather than a blocker (see
-      [docs/PERFORMANCE.md](../docs/PERFORMANCE.md#why-the-1m-number-wont-sit-still)) — not a flaky PR
+      [docs/performance/results.md](../docs/performance/results.md#why-the-1m-number-wont-sit-still)) — not a flaky PR
       gate either way.
 
 ## Phase 8 — Post-0.2.0 hardening (0.2.1+)

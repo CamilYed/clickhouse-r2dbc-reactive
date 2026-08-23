@@ -15,7 +15,7 @@ the parts a caller is most likely to hit.
 > Testcontainers instances were tested and ruled out as the cause; the leading remaining suspects —
 > JVM JIT/compilation timing or OS-level thread scheduling differences across separate JVM launches
 > — need local profiling tools (`async-profiler`, JFR, `powermetrics`) this investigation didn't have
-> available. See [../PERFORMANCE.md](../PERFORMANCE.md#why-the-1m-number-wont-sit-still) for the
+> available. See [../performance/results.md](../performance/results.md#why-the-1m-number-wont-sit-still) for the
 > full breakdown. This is a benchmarking-methodology gap, not a known driver defect — but it means
 > the "1M rows" figures on that page should not be read as settled the way the 10k/100k ones are.
 
@@ -121,7 +121,7 @@ cancelled) still exists, just far less often than before this was implemented �
 > **Transactions, savepoints, generated keys, and `Blob`/`Clob` binding are deliberately
 > unsupported** — ClickHouse itself has no equivalent concept for any of them, so this driver fails
 > loudly (`UnsupportedOperationException`) rather than silently pretending otherwise. See
-> [../R2DBC_COMPATIBILITY.md](../R2DBC_COMPATIBILITY.md) for the full, written-up answer to
+> [r2dbc-compatibility.md](r2dbc-compatibility.md) for the full, written-up answer to
 > "where does this driver match the R2DBC SPI" — backed by
 > [`ClickHouseR2dbcSpiCompatibilityTest`](../../clickhouse-r2dbc-reactive-connector/src/test/java/io/github/camilyed/clickhouse/r2dbc/connector/ClickHouseR2dbcSpiCompatibilityTest.java)
 > actually running the official R2DBC SPI Technology Compatibility Kit against a real ClickHouse

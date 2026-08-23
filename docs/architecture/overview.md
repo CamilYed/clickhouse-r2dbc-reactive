@@ -18,7 +18,7 @@ Reactor Netty client, from the socket up, independent of `client-v2` entirely. F
 [../../engineering/roadmap-archive.md's Phase 0
 finding](../../engineering/roadmap-archive.md#phase-0--client-v2-execution-path-finding); a
 complete audit of what `client-v2` actually sends on the wire (compression, auth, headers, error
-semantics) is in [../CLIENT_V2_HTTP_REFERENCE.md](../CLIENT_V2_HTTP_REFERENCE.md) — useful
+semantics) is in [../internals/client-v2-http-reference.md](../internals/client-v2-http-reference.md) — useful
 background even though none of that code is reused, since `transport-http` has to solve the same
 wire-protocol problems independently.
 
