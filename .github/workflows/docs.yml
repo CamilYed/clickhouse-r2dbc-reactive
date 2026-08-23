@@ -25,11 +25,6 @@ on:
       - "package-lock.json"
       - ".github/workflows/docs.yml"
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -38,6 +33,13 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    # contents: read for checkout; pages: write for the configure-pages step below (auto-detects
+    # the Pages config, only actually reached on a push to main). Scoped to this job rather than
+    # the whole workflow so a PR run - which never deploys - doesn't hold write access it has no
+    # use for.
+    permissions:
+      contents: read
+      pages: write
     steps:
       - name: Checkout sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,7 +51,12 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        # --ignore-scripts: none of this project's dependencies need install-time lifecycle
+        # scripts to function (verified locally: esbuild/rollup resolve their platform binary via
+        # optionalDependencies, not a postinstall step, on every platform this workflow runs on) -
+        # disabling them closes off a supply-chain-attack vector (a compromised transitive
+        # dependency running arbitrary code at install time) for no loss of functionality.
+        run: npm ci --ignore-scripts
 
       - name: Build the docs site
         run: npm run docs:build
@@ -69,6 +76,12 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    # pages: write and id-token: write are exactly what actions/deploy-pages needs (id-token for
+    # the OIDC exchange that authenticates the deployment) - nothing else, and this job doesn't
+    # check out the repo so it needs no contents permission at all.
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
