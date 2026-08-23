@@ -192,11 +192,25 @@ def build_report(
         "repeated across several runs."
     )
     lines.append("")
+    lines.append(
+        "> **p50/p90/p95/p99 below are the mean of each measurement iteration's own HdrHistogram "
+        "percentile, not one percentile computed over all samples merged together.** JMH logs one "
+        "percentile set per iteration (see `logLatencySummary`); this script averages those "
+        "per-iteration values rather than merging the underlying histograms, so a genuine p99 "
+        "outlier confined to one iteration can be smoothed out here. The *direction* of a "
+        "comparison (which driver is faster) is unaffected, but treat the exact number as a "
+        "mean-of-iteration-p99, not a statistically precise global p99, until this is replaced with "
+        "a true merged-histogram calculation (tracked in ROADMAP.md)."
+    )
+    lines.append("")
 
     for concurrency in sorted(throughput):
         lines.append(f"## concurrency={concurrency}")
         lines.append("")
-        lines.append("| driver | throughput (ops/s) | error | p50 (us) | p90 (us) | p95 (us) | p99 (us) | B/op |")
+        lines.append(
+            "| driver | throughput (ops/s) | error | p50 (avg-of-iters, us) | p90 (avg-of-iters, us) "
+            "| p95 (avg-of-iters, us) | p99 (avg-of-iters, us) | B/op |"
+        )
         lines.append("|---|---|---|---|---|---|---|---|")
         tier = throughput[concurrency]
         tier_latency = latency.get(concurrency, {})

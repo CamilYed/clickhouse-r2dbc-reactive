@@ -35,22 +35,26 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   restructuring is step 1 of it.
 - **[Phase 10 — Cloud benchmark pipeline](#phase-10--cloud-benchmark-pipeline)** — a GitHub
   Actions workflow that runs this driver and client-v2 in the same job/VM/ClickHouse process, so
-  benchmark work has a repeatable environment off the local MacBook. Planned 2026-08-22. Stage 1
-  (`.github/workflows/benchmark.yml` + `scripts/benchmarks/analyze.py`) is built and confirmed
-  working end to end: a real `workflow_dispatch` run (fast profile, run #4, 2026-08-23) went green,
-  producing `metadata.json`/`results.json`/`summary.md` + charts as a build artifact. The *fast*
-  profile's numbers are still a sanity check only, not something to make a public performance claim
-  from — see Phase 10 below for the *trusted* profile and next steps.
+  benchmark work has a repeatable environment off the local MacBook. Planned 2026-08-22. **Done and
+  validated**: `.github/workflows/benchmark.yml` + `scripts/benchmarks/analyze.py` are built,
+  confirmed working end to end, and now also capture runner CPU/RAM specs and cache the ClickHouse
+  image across runs. The `trusted` profile's matched-pool result has been confirmed stable across
+  two independent runs (2026-08-23) — see [Phase 10](#phase-10--cloud-benchmark-pipeline) below and
+  [docs/performance/results.md's cloud-verified section](docs/performance/results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23).
+- **[Phase 11 — Benchmark methodology hardening](#phase-11--benchmark-methodology-hardening)** —
+  the cloud-verified result above changed the performance story (client-v2 now ahead on
+  throughput/latency, this driver ahead on allocation) substantially enough that the methodology
+  itself needs hardening before any further driver optimization. Planned 2026-08-23.
 
-## Later (deferred, blocked on Phase 10)
+## Later (deferred, blocked on Phase 11)
 
-Performance/benchmark work stays out of scope until Phase 10's pipeline exists and its results are
-validated stable — see
-[roadmap-archive.md's deferred section](engineering/roadmap-archive.md#deferred--performancebenchmark-work-stays-out-of-scope-until-a-proper-benchmark-environment-exists)
-for the full list: response-compression parity re-run, a benchmark-harness factory-disposal leak
-fix, a `MatchedPoolThreadsConcurrencyBenchmark` GC root-cause investigation, mixed heavy-workload
-rapid-refresh benchmarks, a `RowDecodingScheduler` worker-count tuning pass, and a JDK 21
-virtual-thread decoder-scheduler experiment.
+Further driver optimization work stays out of scope until [Phase 11](#phase-11--benchmark-methodology-hardening)'s
+resource-model measurement and root-cause profiling exist — see that phase for the current PR
+breakdown (PR2-PR5) and [roadmap-archive.md's deferred section](engineering/roadmap-archive.md#deferred--performancebenchmark-work-stays-out-of-scope-until-a-proper-benchmark-environment-exists)
+for older items not yet folded into it: a `RowDecodingScheduler` worker-count tuning pass and a JDK
+21 virtual-thread decoder-scheduler experiment. Response-compression parity and the
+`@OperationsPerInvocation(4096)` verification, both previously listed here, are resolved — see
+Phase 11's PR1.
 
 ## Explicitly not planned
 
@@ -127,6 +131,61 @@ the same ClickHouse process, every time — never separate CI jobs, which would 
 under two different sets of noise, not two drivers. Full design (trust model for cloud numbers,
 staged rollout, JMH JSON as source of truth):
 [roadmap-archive.md's Phase 10](engineering/roadmap-archive.md#phase-10--cloud-benchmark-pipeline).
+
+## Phase 11 — Benchmark methodology hardening
+
+**PR1 done, PR2-PR5 planned.** Triggered by the 2026-08-23 cloud-verified matched-pool result
+(client-v2 ahead ~5-9% on throughput and lower on p50-p99 latency, this driver ahead ~2.7-2.9x on
+allocation per query — replacing the earlier retracted "~4x" claim; see
+[results.md](docs/performance/results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23)).
+That result is a real trade-off, not a clean win either way, so before tuning the driver any
+further the benchmark methodology itself needs to be fully defensible first. Five PRs, in order —
+each one gated on the previous, no driver optimization before PR5:
+
+1. **PR1 — correctness/reporting only (done, docs/Javadoc, no behavior change).**
+   `methodology.md` corrected: client-v2's async mode is thread-based (blocking HTTP dispatched
+   onto a cached-thread-pool executor), not non-blocking — the earlier "no thread is blocked per
+   in-flight query on either side" line overstated it. `analyze.py`'s `summary.md` and
+   `results.md` now label p50-p99 honestly as "mean of iteration-level percentiles", not a merged
+   global percentile (see PR4 for the real fix). `PublicApiMatchedPoolThroughputBenchmark`'s
+   `@OperationsPerInvocation(4096)` Javadoc corrected — it had the mechanism backwards ("divides",
+   not "multiplies") and left an open self-flagged question; empirically verified against the
+   2026-08-23 trusted run's raw `results.json` instead (both drivers' throughput stays flat
+   ~800-890 ops/s across concurrency 8/32/128, the signature of a pool-bound benchmark, only
+   coherent if the reported unit really is logical queries/sec). `index.md`'s stale "the
+   concurrency scenario is still where this driver wins most decisively" line corrected to
+   reflect the current allocation-only advantage. Response-compression fairness reconfirmed
+   already symmetric (both sides default to LZ4) — not reopened, no fix needed.
+2. **PR2 — resource-model measurement (code, no driver optimization).** Add thread count / process
+   CPU / RSS / GC count-time capture to a trusted-run profiling mode (JFR or `/proc` metrics on the
+   Linux runner) — the open question is whether client-v2's throughput edge is bought with
+   materially more platform threads than this driver's bounded, non-blocking pipeline uses.
+   Separate `ourDriver`/`client-v2` JMH `@State` so a fork measuring one implementation doesn't
+   also initialize/prewarm the other — matters once thread/RSS counts are measured per-process, not
+   just for hygiene. Fix `OurDriverPointQueryClient`'s benchmark-only lifecycle leak (it retains
+   only the logical `Connection`, never disposes the owning `ClickHouseConnectionFactory`'s
+   transport pool/decoder scheduler).
+3. **PR3 — control experiments (code).** A client-v2 fixed-executor variant (vs. its default
+   aggressive cached thread pool) to isolate how much of its throughput edge is executor
+   aggressiveness rather than architecture. A pool-size sweep (4/8/16/32, manual profile, not the
+   default weekly run). A connection-per-operation benchmark (`factory.create()` → statement →
+   `connection.close()`, the shape Spring `DatabaseClient` actually uses) alongside the existing
+   one-`Connection` benchmark, not replacing it.
+4. **PR4 — root-cause the throughput/latency gap (profiling only, no driver changes).**
+   JFR/async-profiler (CPU, wall-clock, allocation) on `PublicApiMatchedPoolThroughputBenchmark` at
+   concurrency=32/128, both drivers, focused on `FluxInputStreamBridge`'s cross-thread handoff (the
+   leading suspect — the same mechanism was already root-caused once at streaming-scan scale, see
+   [results.md](docs/performance/results.md#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m))
+   vs. Reactor operator overhead vs. row mapping vs. LZ4 decode vs. connection acquisition. Also:
+   replace PR1's "mean of iteration-level percentiles" label with a true merged-HdrHistogram
+   calculation (persist a mergeable histogram per iteration/fork, merge post-run instead of
+   averaging already-computed percentiles). Re-run `BoundedPoolConcurrencyBenchmark` now that it
+   also has `.useAsyncRequests(true)` fixed. Finish `MixedWorkloadRapidRefreshCancelBenchmark`'s
+   incomplete `ourDriver` run and build its no-cancellation
+   `MixedWorkloadRapidRefreshPileUpBenchmark` companion.
+5. **PR5 — one evidence-driven optimization**, only if PR4's profiling points at something
+   specific, followed by an exact-same-config trusted re-run to confirm the fix actually moved the
+   number.
 
 ## Working with Claude / IntelliJ
 
