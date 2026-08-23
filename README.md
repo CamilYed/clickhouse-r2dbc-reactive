@@ -209,7 +209,8 @@ Flux<String> names =
 ## Learn more
 
 This README covers "does this work and how do I add it to a build." Everything past that —
-internals, tuning, and the honest limitations — lives in `docs/`:
+internals, tuning, and the honest limitations — lives in `docs/`, also published as a searchable
+site at [camilyed.github.io/clickhouse-r2dbc-reactive](https://camilyed.github.io/clickhouse-r2dbc-reactive/):
 
 | Topic | Where |
 | --- | --- |

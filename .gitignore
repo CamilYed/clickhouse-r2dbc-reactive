@@ -9,3 +9,8 @@ build/
 **/build/
 
 .gradle-cache/
+
+# Documentation site (VitePress) - built by .github/workflows/docs.yml, not committed.
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
