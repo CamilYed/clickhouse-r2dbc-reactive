@@ -303,3 +303,7 @@ a wash until a multi-fork run says otherwise in either direction.
 - **Widen the concurrency/pool-size matrix** — `BoundedPoolConcurrencyBenchmark` and
   `PublicApiMatchedPoolThroughputBenchmark` currently test one pool size (8) and three concurrency
   levels (8/32/128); a real scalability sweep would cover more of both.
+- **Rename the `ourDriver` label to something more sensible** across every benchmark method,
+  `analyze.py`'s `DRIVER_LABELS`, and every table on this page — flagged 2026-08-23, deliberately
+  not done yet: waiting on the first `DefaultPoolSlowQueryThroughputBenchmark` CI results before
+  touching benchmark naming, so a rename doesn't get tangled up with reading that run's numbers.
