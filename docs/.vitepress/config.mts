@@ -96,6 +96,7 @@ export default defineConfig({
 
     socialLinks: [
       { icon: "github", link: "https://github.com/CamilYed/clickhouse-r2dbc-reactive" },
+      { icon: "linkedin", link: "https://www.linkedin.com/in/jkamil/", ariaLabel: "Kamil Jędrzejuk on LinkedIn" },
     ],
 
     search: {
@@ -109,7 +110,8 @@ export default defineConfig({
     },
 
     footer: {
-      message: "Released under the Apache 2.0 License.",
+      message:
+        'Built by <a href="https://www.linkedin.com/in/jkamil/" target="_blank" rel="noreferrer">Kamil Jędrzejuk</a> · Released under the Apache 2.0 License.',
       copyright: "Not affiliated with or endorsed by ClickHouse, Inc.",
     },
 
