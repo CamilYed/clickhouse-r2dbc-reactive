@@ -1,9 +1,15 @@
 import { defineConfig } from "vitepress";
+import { withMermaid } from "vitepress-plugin-mermaid";
 
 // VitePress config for the clickhouse-r2dbc-reactive documentation site.
 // Renders the existing docs/ tree directly - no content duplication, this is
 // the same source of truth used by README.md's "Learn more" links.
-export default defineConfig({
+//
+// Wrapped in withMermaid(...): VitePress does not render ```mermaid fenced blocks natively - left
+// unwrapped, they render as a plain syntax-highlighted code block (the bug this fixed). Several
+// docs/ pages (architecture/overview.md, README.md's own diagram, the homepage's architecture
+// comparison) rely on the fenced block actually becoming a diagram.
+export default withMermaid(defineConfig({
   title: "clickhouse-r2dbc-reactive",
   description:
     "A non-blocking R2DBC driver for ClickHouse, built on Reactor Netty from the socket up.",
@@ -119,4 +125,4 @@ export default defineConfig({
       level: [2, 3],
     },
   },
-});
+}));
