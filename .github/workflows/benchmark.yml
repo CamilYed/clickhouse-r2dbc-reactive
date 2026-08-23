@@ -75,7 +75,7 @@ jobs:
         # a source distribution, which could execute an arbitrary setup.py/build script during
         # install) - both flagged by SonarCloud as security-sensitive on the unpinned/source-
         # allowed form of this command.
-        run: pip install --only-binary :all: matplotlib==3.10.9
+        run: "pip install --only-binary :all: matplotlib==3.10.9"
 
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
