@@ -220,9 +220,9 @@ internals, tuning, and the honest limitations — lives in `docs/`:
 | Spring Boot guide | [docs/guide/spring-boot.md](docs/guide/spring-boot.md) |
 | Architecture direction and module responsibilities | [docs/architecture/overview.md](docs/architecture/overview.md) |
 | Testing strategy | [docs/internals/testing-strategy.md](docs/internals/testing-strategy.md) |
-| Performance measurements | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
-| R2DBC SPI compatibility (TCK results) | [docs/R2DBC_COMPATIBILITY.md](docs/R2DBC_COMPATIBILITY.md) |
-| What client-v2 actually sends on the wire | [docs/CLIENT_V2_HTTP_REFERENCE.md](docs/CLIENT_V2_HTTP_REFERENCE.md) |
+| Performance measurements | [docs/performance/](docs/performance/index.md) |
+| R2DBC SPI compatibility (TCK results) | [docs/reference/r2dbc-compatibility.md](docs/reference/r2dbc-compatibility.md) |
+| What client-v2 actually sends on the wire | [docs/internals/client-v2-http-reference.md](docs/internals/client-v2-http-reference.md) |
 
 ## Project
 

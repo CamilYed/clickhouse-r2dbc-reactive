@@ -70,7 +70,7 @@ Three mutually exclusive modes, decided by config, all in `addHeaders` (lines 79
 **For us:** Basic auth is the sane default to implement first (it's also literally what R2DBC's
 `ConnectionFactoryOptions.USER`/`PASSWORD` map onto most naturally). SSL cert auth and proxy auth
 are real but lower priority — document as supported-later, not silently unsupported (per
-[CLAUDE.md](../CLAUDE.md)'s no-silent-gaps rule already stated for R2DBC semantics).
+[CLAUDE.md](../../CLAUDE.md)'s no-silent-gaps rule already stated for R2DBC semantics).
 
 ## Headers set on every request
 
@@ -213,7 +213,7 @@ higher-level `Client` façade, insert-path builders) — those weren't read for 
   backpressure/cancellation get proven without also debugging LZ4 framing.
 - **Phase 2 (core protocol):** `query_id` generation/threading, settings-as-open-map, and the
   mid-stream-error open question all belong here — each should get a named test in `testkit`'s
-  contract matrix per [CLAUDE.md](../CLAUDE.md#test-types-and-tools).
+  contract matrix per [CLAUDE.md](../../CLAUDE.md#test-types-and-tools).
   Response compression (LZ4 first, since it's ClickHouse's default) is also natural here, as its
   own small TDD unit once `SELECT 1` works uncompressed.
 - **Phase 3 (connector):** auth mapping from R2DBC `ConnectionFactoryOptions` (Basic first), error

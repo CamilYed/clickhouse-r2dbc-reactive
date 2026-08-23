@@ -79,7 +79,7 @@ end, many more *logical* concurrent queries can be in flight than there are phys
 `Flux.flatMap(..., concurrency)` submits all of them immediately, and whichever don't fit under
 `maxConnections` simply queue inside Reactor Netty with no thread blocked waiting, up to
 `pendingAcquireMaxCount`/`pendingAcquireTimeout`. `BoundedPoolConcurrencyBenchmark` (see
-[../PERFORMANCE.md](../PERFORMANCE.md)) measures exactly this headroom at an artificially small
+[../performance/results.md](../performance/results.md)) measures exactly this headroom at an artificially small
 8-connection pool against 8/32/128 concurrent queries and this driver still wins on latency — the
 default pool (≥16 connections) already has more headroom than that benchmark's deliberately tight
 one. Reach for a higher `maxConnections` only if you've measured real pending-acquire waits under
@@ -116,7 +116,7 @@ pipeline lets many more logical queries than physical connections be *in flight*
 `Flux.flatMap(..., concurrency)` subscribes to all of them immediately; whichever don't fit in the
 physical pool queue inside Reactor Netty itself, with no blocked thread paying for each one.
 Measured directly: `BoundedPoolConcurrencyBenchmark` and `PublicApiMatchedPoolThroughputBenchmark`
-(see [../PERFORMANCE.md](../PERFORMANCE.md)) configure both this driver and client-v2 with the
+(see [../performance/results.md](../performance/results.md)) configure both this driver and client-v2 with the
 *same* 8-connection pool and drive 8/32/128 logical concurrent point queries at once (async on
 both sides, not one blocking thread per query) — this driver wins decisively, **~4x the real
 throughput** through the public R2DBC SPI at every concurrency level tested. Latest run is
@@ -127,7 +127,7 @@ levels, not yet a full scalability sweep — see that doc for the full caveats a
 > [!IMPORTANT]
 > **Call this driver reactively (`Flux`/`Mono`/R2DBC), not wrapped in `.block()` per query.**
 > `ConcurrencyBenchmark` and `MatchedPoolThreadsConcurrencyBenchmark` (see
-> [../PERFORMANCE.md](../PERFORMANCE.md)) both drive this driver through `@Threads(N)`-blocking-
+> [../performance/results.md](../performance/results.md)) both drive this driver through `@Threads(N)`-blocking-
 > callers — one platform thread blocked on `.block()` per in-flight query, the shape you get if you
 > call this driver like a classic blocking JDBC driver. Both show this driver ~5–8% slower on mean
 > than client-v2 under that calling style, reproducible whether the connection pool is matched to
