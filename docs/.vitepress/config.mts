@@ -32,16 +32,17 @@ export default withMermaid(defineConfig({
 
   head: [["link", { rel: "icon", href: "/clickhouse-r2dbc-reactive/favicon.svg" }]],
 
-  // mermaid (pulled in by withMermaid below) depends on fastdom, a CommonJS-only package.
-  // vitepress-plugin-mermaid's own optimizeDeps.include list predates mermaid's current
-  // dependency tree and misses it, so Vite's dev-server dependency scanner never pre-bundles
-  // it and serves it unbundled, which fails with "does not provide an export named 'default'"
-  // (a plain CJS/ESM interop error, browser console only - docs:build is unaffected). Forcing
-  // it into optimizeDeps.include here fixes the dev server; withMermaid() appends its own list
-  // to this one rather than replacing it.
+  // mermaid (pulled in by withMermaid below) depends on fastdom, a CommonJS-only package, and
+  // imports both its main entry and the "fastdom/extensions/fastdom-promised.js" subpath
+  // directly (see mermaid's util/fastdom.ts). vitepress-plugin-mermaid's own optimizeDeps.include
+  // list predates mermaid's current dependency tree and misses both, so Vite's dev-server
+  // dependency scanner never pre-bundles them and serves them unbundled, which fails with
+  // "does not provide an export named 'default'" (a plain CJS/ESM interop error, browser console
+  // only - docs:build is unaffected). Forcing both specifiers into optimizeDeps.include here
+  // fixes the dev server; withMermaid() appends its own list to this one rather than replacing it.
   vite: {
     optimizeDeps: {
-      include: ["fastdom"],
+      include: ["fastdom", "fastdom/extensions/fastdom-promised.js"],
     },
   },
 
