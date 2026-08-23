@@ -110,19 +110,26 @@ including why an earlier attempt at this same fix failed against a real build.
 
 ## Why this is the point of the whole project, not an implementation detail
 
-client-v2's `Client` is blocking — serving *N* logical concurrent queries needs *N* platform
-threads each blocked waiting on a connection, one way or another. This driver's non-blocking
+client-v2's `Client`, run through its blocking default, needs *N* platform threads each blocked
+waiting on a connection to serve *N* logical concurrent queries. This driver's non-blocking
 pipeline lets many more logical queries than physical connections be *in flight* at once —
 `Flux.flatMap(..., concurrency)` subscribes to all of them immediately; whichever don't fit in the
-physical pool queue inside Reactor Netty itself, with no blocked thread paying for each one.
-Measured directly: `BoundedPoolConcurrencyBenchmark` and `PublicApiMatchedPoolThroughputBenchmark`
-(see [../performance/results.md](../performance/results.md)) configure both this driver and client-v2 with the
-*same* 8-connection pool and drive 8/32/128 logical concurrent point queries at once (async on
-both sides, not one blocking thread per query) — this driver wins decisively, **~4x the real
-throughput** through the public R2DBC SPI at every concurrency level tested. Latest run is
-single-fork, not yet multi-fork confirmed — still the strongest measured evidence so far for the
-architectural property this project set out to provide. Still one pool size / three concurrency
-levels, not yet a full scalability sweep — see that doc for the full caveats and what's still open.
+physical pool queue inside Reactor Netty itself, with no blocked thread paying for each one. That
+architectural difference is real, but an earlier version of this page overstated what it currently
+measures as: a "~4x throughput" / "3.5–4x" claim from `BoundedPoolConcurrencyBenchmark` turned out
+to be measured against a client-v2 benchmark-harness bug (it was running near-serially, not
+against its real 8-connection pool) — see
+[../performance/results.md's retraction](../performance/results.md#non-blocking-matched-pool-numbers-below-are-retracted-pending-re-run)
+for the full story.
+
+The honest, cloud-verified number (`PublicApiMatchedPoolThroughputBenchmark`, `trusted` profile,
+confirmed stable across two independent runs — see
+[../performance/results.md's cloud-verified section](../performance/results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23)):
+with client-v2's own async dispatch correctly enabled on both sides, client-v2 is currently ahead
+on throughput (~5–9%) and per-query latency (~5–18%) in this exact matched-pool scenario. This
+driver's win that does hold up is **allocation per query — 2.7–2.9x less, widening as concurrency
+rises**. The latency gap is an open, unresolved investigation (see that page's Open follow-ups),
+not something to paper over with a bigger claim than the data currently supports.
 
 > [!IMPORTANT]
 > **Call this driver reactively (`Flux`/`Mono`/R2DBC), not wrapped in `.block()` per query.**
@@ -132,10 +139,12 @@ levels, not yet a full scalability sweep — see that doc for the full caveats a
 > call this driver like a classic blocking JDBC driver. Both show this driver ~5–8% slower on mean
 > than client-v2 under that calling style, reproducible whether the connection pool is matched to
 > client-v2's or not — so it is not a pool-sizing problem and setting `transportMaxConnections` will
-> not fix it. It is specifically the blocking calling style that forfeits this driver's advantage:
-> `BoundedPoolConcurrencyBenchmark` above uses the identical pool size but drives concurrency
-> through `Flux.flatMap` instead, and wins by 3.5–4x. If your application calls this driver through
-> `.block()`/`.toFuture().get()` under real concurrent load, don't expect this driver's non-blocking
-> design to pay off — and per [../internals/testing-strategy.md](../internals/testing-strategy.md)/
+> not fix it. Note this is now a *smaller* gap than the non-blocking, matched-pool comparison above
+> shows on latency — blocking-per-query is still the calling style to avoid (worse allocation
+> profile than the reactive shape, on top of the platform-thread cost), but it is not, on today's
+> evidence, the sole explanation for this driver's current latency deficit. If your application
+> calls this driver through `.block()`/`.toFuture().get()` under real concurrent load, don't expect
+> this driver's non-blocking design to pay off on latency — and per
+> [../internals/testing-strategy.md](../internals/testing-strategy.md)/
 > [../concepts/fully-reactive.md](../concepts/fully-reactive.md), that calling style is also the one
 > thing this whole project is built to avoid you doing.

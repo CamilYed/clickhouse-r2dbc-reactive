@@ -26,17 +26,19 @@ split from) if that archaeology is ever needed. To reproduce these numbers yours
 | ClickHouse | `clickhouse/clickhouse-server`, run via `scripts/start-benchmark-clickhouse.sh` as an external container (`BENCH_CLICKHOUSE_URL`), not the per-fork Testcontainers path — see that script for the exact image/config |
 | client-v2 (baseline) | `com.clickhouse:client-v2:0.9.8` (pinned in `gradle/libs.versions.toml`) |
 | JMH | `SampleTime` mode for latency benchmarks, `Throughput` mode for `PublicApiMatchedPoolThroughputBenchmark` |
-| This run | **Mixed.** `StreamingScanBenchmark` has been re-run at 3 forks / 3×10s warmup (`-Pjmh.forks=3 -Pjmh.warmupIterations=3`) — see [results.md](results.md#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m). Every other benchmark family remains single-fork (the `jmh` task's own default), a sanity-check signal, not yet multi-fork confirmed. [results.md](results.md) marks each table accordingly. |
+| This run | **Mixed.** `StreamingScanBenchmark` has been re-run at 3 forks / 3×10s warmup (`-Pjmh.forks=3 -Pjmh.warmupIterations=3`) on the local M3 Pro — see [results.md](results.md#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m). `PublicApiMatchedPoolThroughputBenchmark`'s matched-pool result was instead re-run twice on the Phase 10 cloud pipeline (`trusted` profile, GitHub Actions `ubuntu-latest`, 3 forks / 5 warmup iterations each) — see [results.md's cloud-verified section](results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23) for why (a benchmark-harness fairness bug meant the local number for this scenario couldn't be trusted either, cloud or local). Every other benchmark family remains single-fork local (the `jmh` task's own default), a sanity-check signal, not yet multi-fork confirmed. [results.md](results.md) marks each table accordingly. |
 
 Single machine, single point in time, shared consumer laptop (no CPU pinning, no isolated cores).
 Read every comparison as *this driver vs. client-v2, same hardware/JVM/data*, not as a portable
 absolute performance claim.
 
-## Headline results (2026-08-20)
+## Headline results (updated 2026-08-23)
 
 | Scenario | Result |
 | --- | --- |
-| Non-blocking, matched 8-connection pool, real throughput via the public R2DBC SPI | 🟢 **~4x more queries/sec** at every concurrency level tested (8/32/128) — the scenario this project is built for |
+| Non-blocking, matched 8-connection pool, real throughput (cloud-verified, 2 independent runs) | 🟡 **client-v2 ~5–9% ahead**, consistently — see the retraction note in [results.md](results.md#non-blocking-matched-pool-numbers-below-are-retracted-pending-re-run) for why the earlier "~4x" claim here is wrong |
+| Non-blocking, matched pool, per-query latency (p50–p99) | 🔴 **client-v2 ~5–18% lower**, consistently — unresolved, see [Open follow-ups](results.md#open-follow-ups) |
+| Non-blocking, matched pool, allocation per query | 🟢 **this driver allocates 2.7–2.9x less**, and the gap widens as concurrency rises — the one part of the original story that holds up |
 | Full table scan, 10k rows | 🟢 **~12% lower latency**, consistent across repeated 3-fork runs |
 | Full table scan, 100k rows | 🟢 **roughly 4–11% lower latency**, a real but noisier win |
 | Full table scan, 1M rows | 🟡 **unresolved — anywhere from tied to ~30% higher latency**, depending on the run |
@@ -44,6 +46,14 @@ absolute performance claim.
 | Decode alone, no network | 🟢 7–14% lower latency at every tier |
 | Single-row point lookup / `SELECT 1` floor | 🟡 essentially tied (within ±2%) |
 | Blocking `.block()`-per-query calling style, matched pool | 🔴 ~5–8% higher latency — don't call it this way, see below |
+
+> [!IMPORTANT]
+> The three "matched pool" rows above replace an earlier "~4x more queries/sec, 3.5–4.1x lower
+> latency" headline that turned out to be measured against a client-v2 benchmark-harness bug
+> (client-v2 running near-serially, not against its real 8-connection pool) — see
+> [results.md's retraction](results.md#non-blocking-matched-pool-numbers-below-are-retracted-pending-re-run)
+> for the full story. Left here rather than quietly deleted, since the point of this pipeline is
+> honest numbers, including the ones that turn out to have been wrong.
 
 Full tables, charts, and the root-cause analysis behind each row: [results.md](results.md).
 
@@ -53,12 +63,14 @@ Things about this driver that are not obvious from the R2DBC SPI surface alone, 
 building and benchmarking it.
 
 **Call it reactively — `Flux`/`Mono`, `flatMap` for concurrency — never `.block()` per query in a
-concurrent loop.** The entire measured advantage of this driver (3.5–4x under concurrent load, see
-[results.md](results.md#non-blocking-matched-pool-the-actual-point-of-this-project)) comes from not
-blocking a thread per in-flight query. The moment you wrap each call in `.block()` inside a loop or
-`@Threads(N)`-style caller, you get the *slower* number from the blocking-calls table, with none of
-the upside — this driver was never optimized for that calling style, and the benchmarks show it
-losing there, not winning.
+concurrent loop.** This is still correct advice, but not for the magnitude this page used to claim:
+see [results.md's cloud-verified matched-pool
+result](results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23) for what
+actually holds up under a fair comparison — this driver's real, consistent win in that scenario is
+**allocation per query (2.7–2.9x less)**, not throughput or latency, where client-v2 is currently
+ahead. What's still true: wrapping each call in `.block()` inside a loop or `@Threads(N)`-style
+caller gets you the *even slower* number from the blocking-calls table, with none of the allocation
+upside either — this driver was never optimized for that calling style.
 
 **A small, explicit connection pool is normal here, not a limitation.** Because logical concurrent
 queries don't need one thread each, a pool sized for physical parallelism against ClickHouse (8,
