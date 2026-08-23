@@ -31,7 +31,7 @@ classes only — its HTTP transport is confirmed blocking (classic Apache HttpCl
 by reading the source) and is **never used**. Everything that touches the network — connection
 handling, request/response streaming, cancellation — is this project's own, small, explicit,
 non-blocking transport boundary. See
-[ROADMAP.md's Phase 0 finding](ROADMAP.md#phase-0--client-v2-execution-path-finding) for the
+[ROADMAP archive's Phase 0 finding](engineering/roadmap-archive.md#phase-0--client-v2-execution-path-finding) for the
 verified evidence.
 
 This project exists because implementing the R2DBC interfaces is not, by itself, enough to make
@@ -92,7 +92,7 @@ contract tests against a controlled fake server, and real-ClickHouse integration
 Testcontainers, see [Testing strategy](#testing-strategy)), not by production experience yet.
 
 Before relying on this in production, read
-[ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) — an explicit,
+[ROADMAP archive's Production readiness review](engineering/roadmap-archive.md#production-readiness-review) — an explicit,
 honestly-triaged list of what's fixed, what's a documented safe limitation, and what's still an
 open gap (currently: no retry based on ClickHouse's own server-side retryable error codes — see
 [Known limitations](#known-limitations) below for what retry behavior *does* exist, the
@@ -101,7 +101,7 @@ cancellation/`KILL QUERY` caveat, which *is* handled but on a best-effort basis,
 to depend on today", kept up to date as things are found and fixed — treat this README as a summary
 of it, not the other way around.
 
-Since `0.1.0`, [ROADMAP.md's Phase 7](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
+Since `0.1.0`, [ROADMAP archive's Phase 7](engineering/roadmap-archive.md#phase-7--operational-control--r2dbc-correctness-020)
 (`0.2.0`) added configurable transport pool options, a real statement-timeout implementation,
 correct multi-`Result` `Statement.add()` batching, a driver observability SPI, and an R2DBC SPI
 Technology Compatibility Kit lane run against a real server (see
@@ -335,7 +335,7 @@ means for choosing this driver today.
 > **Cancelling a subscription stops the query on the ClickHouse server via a best-effort `KILL
 > QUERY` this driver sends itself — not via ClickHouse's own connection-close detection, which
 > doesn't work.** Verified against a real server, not assumed. See
-> [ROADMAP.md's writeup](ROADMAP.md#production-readiness-review) (search "Cancelling a client-side
+> [ROADMAP archive's writeup](engineering/roadmap-archive.md#production-readiness-review) (search "Cancelling a client-side
 > subscription") and the regression test that proves it,
 > [`QueryCancellationAgainstRealClickHouseTest`](clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/QueryCancellationAgainstRealClickHouseTest.java).
 
@@ -620,7 +620,7 @@ whether you configure it or not.
    parameter (so Spring destroys the pool first, then this factory), and a real integration test
    (`ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest`) asserts a query against the raw
    factory fails once `applicationContext.close()` returns — see
-   [ROADMAP.md's Phase 8, item 10](ROADMAP.md#phase-8--post-020-hardening-021) for the full
+   [ROADMAP archive's Phase 8, item 10](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full
    write-up, including why an earlier attempt at this same fix failed against a real build.
 
 **Why this is the point of the whole project, not an implementation detail:** client-v2's `Client`
@@ -671,7 +671,7 @@ Only the dashed edge touches `client-v2`, and only for its public row-decoding c
 (`internal.HttpAPIClientHelper`, classic Apache HttpClient5 I/O) is confirmed blocking by reading
 its source and is **never called anywhere in this project** — `transport-http` owns its own
 Reactor Netty client, from the socket up, independent of `client-v2` entirely. Full evidence in
-[ROADMAP.md's Phase 0 finding](ROADMAP.md#phase-0--client-v2-execution-path-finding); a complete
+[ROADMAP archive's Phase 0 finding](engineering/roadmap-archive.md#phase-0--client-v2-execution-path-finding); a complete
 audit of what `client-v2` actually sends on the wire (compression, auth, headers, error semantics)
 is in [docs/CLIENT_V2_HTTP_REFERENCE.md](docs/CLIENT_V2_HTTP_REFERENCE.md) — useful background even
 though none of that code is reused, since `transport-http` has to solve the same wire-protocol
@@ -700,7 +700,7 @@ The four modules below exist as Gradle modules today; whole-driver black-box cov
 public R2DBC SPI only, against real ClickHouse) lives inside `connector`'s own
 `*AgainstRealClickHouseTest` classes — a once-planned separate `integration-tests` module for this
 was scaffolded, sat empty, and was later deleted rather than kept as a placeholder (see
-[ROADMAP.md's module map](ROADMAP.md#module-map)). Full responsibilities and the reasoning behind
+[ROADMAP archive's module map](engineering/roadmap-archive.md#module-map)). Full responsibilities and the reasoning behind
 each boundary live there too — treat it as authoritative and this table as a quick summary only, to
 avoid the two drifting apart.
 
@@ -741,22 +741,12 @@ ecosystem.
 
 ### Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the detailed, gated working plan, and its
-[Production readiness review](ROADMAP.md#production-readiness-review) for the current, up-to-date
-list of what's fixed, safe-and-documented, or still an open gap — that section is updated far more
-often than this one and is the one to check before depending on this driver. [CHANGELOG.md](CHANGELOG.md)
-lists what shipped in each release.
-
-`0.1.0` (execution-path analysis, transport spike, the full first R2DBC connector surface, Maven
-Central publication) and [Phase 7/`0.2.0`](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
-(configurable transport pool, statement timeout, correct `Statement.add()` batching, an
-observability SPI, the R2DBC compatibility lane) are both done and published. What's next:
-
-- Native TCP transport / HTTP multiplexing, evaluated as a separate track, not assumed to be faster
-  without a profiler-identified bottleneck forcing it (see
-  [What this project is not](#what-this-project-is-not))
-- Whatever [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) still
-  lists as an open gap once `0.2.0` ships
+See [ROADMAP.md](ROADMAP.md) for what's released, in progress, next, and explicitly not planned.
+[CHANGELOG.md](CHANGELOG.md) lists what shipped in each release. For the full phase-by-phase
+history, engineering rationale, and the [Production readiness
+review](engineering/roadmap-archive.md#production-readiness-review) (the ✅/⚠️/❌ matrix of what's
+fixed, safe-and-documented, or still an open gap), see
+[engineering/roadmap-archive.md](engineering/roadmap-archive.md).
 
 ### What this project is not
 
@@ -773,7 +763,7 @@ observability SPI, the R2DBC compatibility lane) are both done and published. Wh
 This is an independent project, not a fork. It depends on `com.clickhouse:client-v2` as a regular
 Maven dependency, reusing its public row-decoding classes only — its HTTP transport is confirmed
 blocking (classic Apache HttpClient5 I/O) and is not used; this project owns its own non-blocking
-transport instead. See [ROADMAP.md's Phase 0 finding](ROADMAP.md#phase-0--client-v2-execution-path-finding)
+transport instead. See [ROADMAP archive's Phase 0 finding](engineering/roadmap-archive.md#phase-0--client-v2-execution-path-finding)
 for the verified evidence. If the design direction proves useful, parts of it may later be
 proposed back to `ClickHouse/clickhouse-java` as a module or connector, following up on
 [ClickHouse/ClickHouse#113638](https://github.com/ClickHouse/ClickHouse/discussions/113638).
@@ -781,7 +771,7 @@ proposed back to `ClickHouse/clickhouse-java` as a module or connector, followin
 ### Contributing
 
 Issues and discussion are welcome, especially around the open gaps tracked in
-[ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review). Formal
+[ROADMAP archive's Production readiness review](engineering/roadmap-archive.md#production-readiness-review). Formal
 contribution guidelines (`CONTRIBUTING.md`) exist and cover the PR checklist; see there for the
 current process.
 

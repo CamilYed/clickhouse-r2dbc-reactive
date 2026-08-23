@@ -28,7 +28,7 @@ the version it was given and fails the release if it can't find one. See
   `ClickHouseLZ4InputStream`/`ClickHouseLZ4OutputStream`. Proven against a real server, not just
   hand-built fixtures, by `ResponseCompressionAgainstRealClickHouseTest` (100,000-row multi-block
   response, both compressed and explicitly disabled) — closes the compression-parity gap noted in
-  [ROADMAP.md's Phase 8, item 12](ROADMAP.md#phase-8--post-020-hardening-021).
+  [ROADMAP archive's Phase 8, item 12](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ### Fixed
 
@@ -43,8 +43,8 @@ the version it was given and fails the release if it can't find one. See
   close the Spring context, then confirm the same query now fails. Required bumping the demo's
   `runtimeOnly` dependency from `0.2.0` to `0.2.1`, since `ClickHouseConnectionFactory.dispose()`
   didn't exist on the previously-pinned release — an earlier attempt at this exact fix failed
-  against a real build for that reason (see [ROADMAP.md's Phase 8, item
-  10](ROADMAP.md#phase-8--post-020-hardening-021) for the full account of both attempts).
+  against a real build for that reason (see [ROADMAP archive's Phase 8, item
+  10](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full account of both attempts).
 - **The demo's `Enum8`/`Enum16` `status` column workaround is gone.** Now that the demo depends on
   `0.2.1` (which decodes `Enum8`/`Enum16` as a plain `String`, see below), `DatabaseClientOrder
   EventRepository` reads it via `row.get("status", String.class)` directly instead of the previous
@@ -63,7 +63,7 @@ the version it was given and fails the release if it can't find one. See
 - **Netty `ByteBuf` leak-detection test lane**, completed as follow-up to the pilot deferred out of
   `0.2.0` (see that release's Deferred section below). Runs `transport-http` and `testkit` tests with
   `-Dio.netty.leakDetection.level=paranoid` and a custom `LeakRecordingResourceLeakDetector`, and now
-  covers all six target shapes from [ROADMAP.md](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)'s
+  covers all six target shapes from [ROADMAP archive](engineering/roadmap-archive.md#phase-7--operational-control--r2dbc-correctness-020)'s
   item 6: cancellation, disconnect mid-response, decoder failure, timeout, retry, and downstream
   cancellation after a few records.
 - **`responseTimeout` R2DBC connection option** (`ClickHouseConnectionFactoryProvider.RESPONSE_TIMEOUT`),
@@ -73,8 +73,8 @@ the version it was given and fails the release if it can't find one. See
   how it relates to the other three timeouts this driver has (`connectTimeout`, server-side
   `statementTimeout`/`max_execution_time`, `transportPendingAcquireTimeout`) — README's connection
   options table corrected too, since it previously had `connectTimeout`'s row describing
-  `responseTimeout`'s actual behavior. See [ROADMAP.md's Phase 8, item
-  4](ROADMAP.md#phase-8--post-020-hardening-021).
+  `responseTimeout`'s actual behavior. See [ROADMAP archive's Phase 8, item
+  4](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 - **Test coverage characterizing a query failing mid-stream** (some rows already delivered, then
   ClickHouse fails server-side) — `MidStreamQueryFailureAgainstRealClickHouseTest` — plus
   confirmation that ClickHouse's own `wait_end_of_query=1` opt-in (buffer the whole response
@@ -84,7 +84,7 @@ the version it was given and fails the release if it can't find one. See
   as spurious garbage rows mixed in with genuine ones before the stream terminates with an error** —
   a real data-integrity risk, now called out in README's
   [Known limitations](README.md#known-limitations) with `wait_end_of_query=1` as the mitigation. See
-  [ROADMAP.md's Phase 8, item 5](ROADMAP.md#phase-8--post-020-hardening-021) for the full analysis.
+  [ROADMAP archive's Phase 8, item 5](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full analysis.
 - **Correct parameter-binding wire encoding for `LocalDateTime`/`Instant`/`OffsetDateTime`/
   `ZonedDateTime` and `List` (as ClickHouse `Array` literals)**, replacing the previous unqualified
   `value.toString()` fallback that would have sent an ISO `T`-separated datetime (wrong format for
@@ -96,7 +96,7 @@ the version it was given and fails the release if it can't find one. See
   exactly the same Java type a scalar column of type `T` would (e.g. `Array(UInt32)` → `List<Long>`,
   not `List<Integer>`) — now spelled out in `ClickHouseValueConverter`'s Javadoc, since that class's
   numeric conversion matrix deliberately does not extend to `List` elements. See
-  [ROADMAP.md's Phase 8, item 6](ROADMAP.md#phase-8--post-020-hardening-021) for the full matrix and
+  [ROADMAP archive's Phase 8, item 6](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full matrix and
   the reasoning behind each type's encoding.
 - **Opt-in, per-query retry after a retryable ClickHouse server error** —
   `ClickHouseQuery.withServerErrorRetryEnabled()`. By default a query is only ever retried for a
@@ -107,13 +107,13 @@ the version it was given and fails the release if it can't find one. See
   routinely used for both reads and writes, and there is no reliable way to tell a `SELECT` from a
   literal-SQL `INSERT` by inspecting the SQL text alone (CTEs, multi-statement text, `INSERT ... SELECT`
   would all defeat a naive check). Not yet reachable through the R2DBC `Statement` API — that's a
-  tracked follow-up, not part of this change. See [ROADMAP.md's Phase 8, item
-  7](ROADMAP.md#phase-8--post-020-hardening-021) for the full design.
+  tracked follow-up, not part of this change. See [ROADMAP archive's Phase 8, item
+  7](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full design.
 - **`GET /order-events/stream`** in the bundled demo, producing `application/x-ndjson` — each event is
   written to the HTTP response as soon as it arrives, proven (not just asserted) by a new
   `OrderEventStreamingControllerTest` that controls source-element timing directly rather than relying
-  on a real query's own fast, unpredictable timing. See [ROADMAP.md's Phase 8, item
-  9](ROADMAP.md#phase-8--post-020-hardening-021).
+  on a real query's own fast, unpredictable timing. See [ROADMAP archive's Phase 8, item
+  9](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ### Known gap, not yet fixed
 
@@ -126,18 +126,18 @@ the version it was given and fails the release if it can't find one. See
   real build proved it inapplicable: the demo's `runtimeOnly` dependency pins the *published*
   `0.2.0` connector, which predates `ClickHouseConnectionFactory.dispose()` — that method only exists
   in this still-unreleased `0.2.1` work. Genuinely blocked until either `0.2.1` is published and the
-  demo's pinned version bumped, or [ROADMAP.md's Phase 8, item
-  11](ROADMAP.md#phase-8--post-020-hardening-021) (a current-`main` demo lane) lands first. See
-  [item 10](ROADMAP.md#phase-8--post-020-hardening-021) for the full account.
+  demo's pinned version bumped, or [ROADMAP archive's Phase 8, item
+  11](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) (a current-`main` demo lane) lands first. See
+  [item 10](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full account.
 
 ### Fixed
 
 - **`Enum8`/`Enum16` columns now decode as a plain `String` of the member name, not client-v2's
   internal `EnumValue`.** `Row.get(name, String.class)` works directly — previously a caller had to
   ask for `Object.class` and call `toString()` on the result to read the value without depending on
-  the internal type. See [ROADMAP.md's Phase 8, item
-  1](ROADMAP.md#phase-8--post-020-hardening-021) and the "`Enum8`/`Enum16` resolved" note under
-  [Phase 2](ROADMAP.md#phase-2--core-protocol--testkit-contract-tests). (The bundled demo used the
+  the internal type. See [ROADMAP archive's Phase 8, item
+  1](engineering/roadmap-archive.md#phase-8--post-020-hardening-021) and the "`Enum8`/`Enum16` resolved" note under
+  [Phase 2](engineering/roadmap-archive.md#phase-2--core-protocol--testkit-contract-tests). (The bundled demo used the
   old workaround while still pinned to `0.2.0`; removed once it was bumped to `0.2.1` — see the
   `0.2.2` section above.)
 - **Cancelling a query via `Flux.next()`-style single-element consumption no longer forfeits
@@ -160,14 +160,14 @@ the version it was given and fails the release if it can't find one. See
   tracks that context directly — skipping single-quoted string literals, double-quoted/backtick-quoted
   identifiers (both with backslash- and doubled-character escaping), and every comment form
   ClickHouse's own lexer accepts (`--`, `#!`, `# `, `//`, and `/* */` block comments, which — verified
-  against ClickHouse's docs, not assumed — nest, unlike standard SQL's). See [ROADMAP.md's Phase 8,
-  item 3](ROADMAP.md#phase-8--post-020-hardening-021).
+  against ClickHouse's docs, not assumed — nest, unlike standard SQL's). See [ROADMAP archive's Phase 8,
+  item 3](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 - **The demo's `OrderEventController#all()` Javadoc no longer claims the HTTP response streams.** It
   didn't — with no streaming media type, Spring WebFlux's default `application/json` writer collects
   the whole `Flux` into one array before writing anything, even though the underlying ClickHouse query
   itself streams correctly. The Javadoc now says so plainly and points callers who need a response
   actually proven to stream at the HTTP layer to the new `GET /order-events/stream` endpoint above. See
-  [ROADMAP.md's Phase 8, item 9](ROADMAP.md#phase-8--post-020-hardening-021).
+  [ROADMAP archive's Phase 8, item 9](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ### Also confirmed, not yet redesigned
 
@@ -180,12 +180,12 @@ the version it was given and fails the release if it can't find one. See
   a real, understood problem, not a driver defect, and not unique to this project's use of Reactor. A
   POST-body redesign is deliberately scoped as separate, not-yet-started follow-up work; also noted:
   bound parameter values currently ride the same query string as the SQL text, so binding parameters
-  instead of inlining literals does not currently sidestep this. See [ROADMAP.md's Phase 8, item
-  8](ROADMAP.md#phase-8--post-020-hardening-021).
+  instead of inlining literals does not currently sidestep this. See [ROADMAP archive's Phase 8, item
+  8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ## [0.2.0] — 2026-08-20 (Phase 7: operational control & R2DBC correctness)
 
-See [ROADMAP.md's Phase 7 section](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020)
+See [ROADMAP archive's Phase 7 section](engineering/roadmap-archive.md#phase-7--operational-control--r2dbc-correctness-020)
 for the full scoping and acceptance criteria this release was built against.
 
 ### Added
@@ -251,7 +251,7 @@ for the full scoping and acceptance criteria this release was built against.
 ### Deferred
 
 - **Netty `ByteBuf` leak-detection test lane** (Phase 7 P0 item 6) — scoped in
-  [ROADMAP.md](ROADMAP.md#phase-7--operational-control--r2dbc-correctness-020) but not implemented
+  [ROADMAP archive](engineering/roadmap-archive.md#phase-7--operational-control--r2dbc-correctness-020) but not implemented
   for this release. A partial pilot exists on the unmerged `feature/183-netty-leak-detection-lane`
   branch (paranoid-level detector, covering cancellation and reset-mid-response — two of the six
   target shapes), not finished or merged. Moved out of `0.2.0` scope explicitly rather than left
@@ -291,20 +291,20 @@ First published release to Maven Central (`io.github.camilyed`): `clickhouse-r2d
 
 A fully reactive R2DBC driver for ClickHouse, reusing ClickHouse Java Client V2's public
 row-decoding classes only — never its (confirmed blocking) HTTP transport. See
-[ROADMAP.md's Phase 0 finding](ROADMAP.md#phase-0--client-v2-execution-path-finding) and
+[ROADMAP archive's Phase 0 finding](engineering/roadmap-archive.md#phase-0--client-v2-execution-path-finding) and
 [README's Why](README.md#why) for the full rationale.
 
 Functional highlights: the complete R2DBC SPI surface (connection lifecycle,
 `SELECT`/`INSERT`/parameterized statements, batches, row/column metadata, `getRowsUpdated()`,
 R2DBC exception mapping) exercised end to end against a real ClickHouse server; a non-blocking,
 streaming, backpressure-aware transport built on Reactor Netty with a documented, tested
-"fully reactive" property matrix (see [ROADMAP.md Phase 4](ROADMAP.md#phase-4--fully-reactive-sign-off));
+"fully reactive" property matrix (see [ROADMAP archive Phase 4](engineering/roadmap-archive.md#phase-4--fully-reactive-sign-off));
 cancellation that tears down the connection and issues a best-effort `KILL QUERY` server-side;
 `ssl=true` TLS support including a custom trust store (`sslRootCert`); a pre-send-only retry
 policy; a Spring Boot + WebFlux demo module
 ([`examples/spring-boot-webflux-demo`](examples/spring-boot-webflux-demo)); recorded performance
 benchmarks vs. baseline (see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 
-See [ROADMAP.md's Production readiness review](ROADMAP.md#production-readiness-review) for the
+See [ROADMAP archive's Production readiness review](engineering/roadmap-archive.md#production-readiness-review) for the
 detailed, honestly-triaged list of what shipped fixed vs. documented-as-a-limitation for this
 release.

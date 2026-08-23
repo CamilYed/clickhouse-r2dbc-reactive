@@ -69,7 +69,7 @@ the PR checklist.
   adapter implementing it today. `connector` adapts the R2DBC SPI (owned by the R2DBC spec, not by
   us) to `core`; `core` has no idea R2DBC exists. Two real seams, two adapters — that's the whole
   justification, not hexagonal ceremony applied where only one implementation will ever exist. See
-  [ROADMAP.md's module map](ROADMAP.md#module-map) for the full module-by-module breakdown.
+  [ROADMAP archive's module map](engineering/roadmap-archive.md#module-map) for the full module-by-module breakdown.
 - Use DDD tactical patterns (value objects, aggregates, domain events, ubiquitous language) where
   the domain complexity actually warrants it. Don't force DDD ceremony onto what is fundamentally
   a thin protocol/decoding layer — apply it where there is real domain logic to protect (e.g.
@@ -275,13 +275,13 @@ file instead of a whole package.
 | --- | --- | --- |
 | Unit tests | every module, `src/test/java` | JUnit 5 + AssertJ + in-memory fakes. No Spring, no containers, no Mockito. |
 | Transport contract tests | `clickhouse-r2dbc-reactive-transport-http`, using `clickhouse-r2dbc-reactive-testkit`'s `ControlledClickHouseServer` | Deterministic, fast, hermetic wire-level scenarios a real server won't reliably give you on demand: delayed headers/body, fragmented rows, slow subscriber, pool saturation, cancellation at every stage (see README's testing strategy). |
-| Real-ClickHouse integration tests | `clickhouse-r2dbc-reactive-connector` — including the whole-driver, black-box-via-public-R2DBC-SPI-only proof (see ROADMAP.md's module map for why a once-planned separate `integration-tests` module for this was deleted rather than kept empty) | `clickhouse-r2dbc-reactive-testkit`'s `BaseClickHouseIntegrationTest` + Ability-pattern DSL over Testcontainers `ClickHouseContainer`: create data, clean up between tests (`@BeforeEach`), no mocking of ClickHouse itself. |
+| Real-ClickHouse integration tests | `clickhouse-r2dbc-reactive-connector` — including the whole-driver, black-box-via-public-R2DBC-SPI-only proof (see engineering/roadmap-archive.md's module map for why a once-planned separate `integration-tests` module for this was deleted rather than kept empty) | `clickhouse-r2dbc-reactive-testkit`'s `BaseClickHouseIntegrationTest` + Ability-pattern DSL over Testcontainers `ClickHouseContainer`: create data, clean up between tests (`@BeforeEach`), no mocking of ClickHouse itself. |
 
 `clickhouse-r2dbc-reactive-testkit` exists specifically so no other module's tests need Mockito or
 ad-hoc test infrastructure of their own — it owns both halves: the controlled fake server (for
 conditions only a fake can force deterministically) and the real-ClickHouse Testcontainers DSL
 (for proving the driver decodes what an actual server actually sends). See
-[ROADMAP.md's module map](ROADMAP.md#module-map) for why both exist side by side.
+[ROADMAP archive's module map](engineering/roadmap-archive.md#module-map) for why both exist side by side.
 
 ## Coverage
 
@@ -296,7 +296,7 @@ coverage" while trying to honor the actual intent (confidence that the driver wo
 - A number can be gamed (call methods without asserting outcomes) while real bugs — wrong branch,
   wrong field — slip through. Coverage measures *what ran*, not *what was checked*.
 - What we actually want is already stated as this project's real gate:
-  [ROADMAP.md Phase 4](ROADMAP.md#phase-4--fully-reactive-sign-off) — every property in the "fully
+  [ROADMAP archive Phase 4](engineering/roadmap-archive.md#phase-4--fully-reactive-sign-off) — every property in the "fully
   reactive" table has a named test that would fail if that property regressed. That's a stronger,
   more honest bar than a percentage.
 
