@@ -4,12 +4,20 @@ name: Cloud benchmark pipeline
 # a repeatable benchmark environment off the local MacBook M3 Pro, on one standard GitHub-hosted
 # runner - the repo is public, so no dedicated runner infrastructure is needed to start.
 #
-# Runs exactly PublicApiMatchedPoolThroughputBenchmark (poolSize=8, concurrency=8/32/128) - the
-# same benchmark and parameters docs/PERFORMANCE.md's local numbers already use, so cloud and
-# local results are comparable in shape even if not in absolute value. ourDriver and client-v2
-# always run in this one job, against this one ClickHouse container, on this one runner - never
-# split into separate jobs (see the roadmap section's non-negotiable constraint: splitting them
-# would compare two different machines under two different sets of noise, not two drivers).
+# Which benchmark class runs is selectable (workflow_dispatch `benchmark` input, defaults to
+# PublicApiMatchedPoolThroughputBenchmark) - see docs/PERFORMANCE.md's local numbers for why that
+# one is the default: poolSize=8, concurrency=8/32/128, the same parameters this workflow's cloud
+# numbers are meant to compare against. ourDriver and client-v2 always run in this one job, against
+# this one ClickHouse container, on this one runner - never split into separate jobs (see the
+# roadmap section's non-negotiable constraint: splitting them would compare two different machines
+# under two different sets of noise, not two drivers).
+#
+# scripts/benchmarks/analyze.py's summary.md/chart generation is currently written specifically for
+# PublicApiMatchedPoolThroughputBenchmark's own shape (Throughput mode, ops/s, its
+# logLatencySummary log line) - see that script's own docstring. Selecting any other benchmark
+# class still runs it and uploads its raw results.json/raw-stdout.log/metadata.json as an artifact,
+# but skips the analyze.py step entirely rather than mislabeling a shape it wasn't built to read -
+# see the "Analyze results" step below.
 #
 # Trust model: don't trust an absolute number from a single noisy shared runner - trust the
 # ourDriver/client-v2 ratio, repeated across several runs (see scripts/benchmarks/analyze.py's
@@ -58,6 +66,29 @@ on:
           - fast
           - trusted
         default: fast
+      benchmark:
+        description: >-
+          Which JMH benchmark class to run (-Pjmh.includes). Only
+          PublicApiMatchedPoolThroughputBenchmark gets a parsed summary.md/charts - everything else
+          still runs and uploads its raw results.json, but analyze.py is skipped for it (see this
+          file's header comment).
+        required: true
+        type: choice
+        options:
+          - PublicApiMatchedPoolThroughputBenchmark
+          - DefaultPoolSlowQueryThroughputBenchmark
+          - BoundedPoolConcurrencyBenchmark
+          - MatchedPoolThreadsConcurrencyBenchmark
+          - ConcurrencyBenchmark
+          - StreamingScanBenchmark
+          - AggregationBenchmark
+          - TransportOnlyStreamingBenchmark
+          - DecoderOnlyBenchmark
+          - TrivialQueryBenchmark
+          - PointQueryBenchmark
+          - PublicApiPointQueryBenchmark
+          - MixedWorkloadRapidRefreshCancelBenchmark
+        default: PublicApiMatchedPoolThroughputBenchmark
   schedule:
     # 05:00 UTC weekly (Monday) - fast profile only, see the schedule step below. Outside typical
     # working hours for this project's contributors, same reasoning as nightly.yml's schedule.
@@ -68,7 +99,9 @@ permissions:
 
 jobs:
   benchmark:
-    name: Run benchmark (${{ github.event.inputs.profile || 'fast' }})
+    name: >-
+      Run benchmark (${{ github.event.inputs.profile || 'fast' }},
+      ${{ github.event.inputs.benchmark || 'PublicApiMatchedPoolThroughputBenchmark' }})
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
@@ -110,6 +143,18 @@ jobs:
             echo "name=fast" >> "$GITHUB_OUTPUT"
           else
             echo "name=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve benchmark
+        id: benchmark
+        # Same schedule-vs-dispatch distinction as "Resolve profile" above - schedule events have
+        # no `inputs` context, so the weekly fast run always stays on the one benchmark analyze.py
+        # actually knows how to parse.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "name=PublicApiMatchedPoolThroughputBenchmark" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.inputs.benchmark }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set JMH parameters for profile
@@ -187,14 +232,14 @@ jobs:
           docker logs clickhouse-r2dbc-reactive-benchmark || true
           exit 1
 
-      - name: Run PublicApiMatchedPoolThroughputBenchmark
+      - name: Run selected benchmark
         run: |
           PROFILER_FLAG=""
           if [ -n "${{ steps.jmh-params.outputs.profilers }}" ]; then
             PROFILER_FLAG="-Pjmh.profilers=${{ steps.jmh-params.outputs.profilers }}"
           fi
           ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
-            -Pjmh.includes=PublicApiMatchedPoolThroughputBenchmark \
+            -Pjmh.includes=${{ steps.benchmark.outputs.name }} \
             -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
             -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
             $PROFILER_FLAG \
@@ -225,27 +270,29 @@ jobs:
           json.dump(
               {
                   "profile": sys.argv[1],
-                  "commitSha": sys.argv[2],
-                  "branch": sys.argv[3],
-                  "driverVersion": sys.argv[4],
-                  "clientV2Version": sys.argv[5],
-                  "jdkVersion": sys.argv[6],
-                  "osName": sys.argv[7],
-                  "osArch": sys.argv[8],
-                  "clickHouseImage": sys.argv[9],
-                  "forks": int(sys.argv[10]),
-                  "warmupIterations": int(sys.argv[11]),
+                  "benchmark": sys.argv[2],
+                  "commitSha": sys.argv[3],
+                  "branch": sys.argv[4],
+                  "driverVersion": sys.argv[5],
+                  "clientV2Version": sys.argv[6],
+                  "jdkVersion": sys.argv[7],
+                  "osName": sys.argv[8],
+                  "osArch": sys.argv[9],
+                  "clickHouseImage": sys.argv[10],
+                  "forks": int(sys.argv[11]),
+                  "warmupIterations": int(sys.argv[12]),
                   "poolSize": 8,
-                  "cpuModel": sys.argv[12],
-                  "cpuCores": int(sys.argv[13]),
-                  "ramGb": int(sys.argv[14]),
-                  "runDate": sys.argv[15],
+                  "cpuModel": sys.argv[13],
+                  "cpuCores": int(sys.argv[14]),
+                  "ramGb": int(sys.argv[15]),
+                  "runDate": sys.argv[16],
               },
               sys.stdout,
               indent=2,
           )
           ' \
             "${{ steps.profile.outputs.name }}" \
+            "${{ steps.benchmark.outputs.name }}" \
             "${{ github.sha }}" \
             "${{ github.ref_name }}" \
             "${DRIVER_VERSION}" \
@@ -264,6 +311,12 @@ jobs:
           cat metadata.json
 
       - name: Analyze results
+        # See this file's header comment: analyze.py's summary.md/chart generation is written
+        # specifically for PublicApiMatchedPoolThroughputBenchmark's shape (Throughput mode, ops/s,
+        # its logLatencySummary log line) - running it against a different benchmark's results.json
+        # would either crash or silently mislabel a shape it wasn't built to read, neither of which
+        # is better than just skipping it and shipping the raw data.
+        if: steps.benchmark.outputs.name == 'PublicApiMatchedPoolThroughputBenchmark'
         run: |
           python3 scripts/benchmarks/analyze.py \
             --results-json clickhouse-r2dbc-reactive-benchmarks/build/results/jmh/results.json \
@@ -281,7 +334,7 @@ jobs:
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: benchmark-results-${{ steps.profile.outputs.name }}-${{ github.run_id }}
+          name: benchmark-results-${{ steps.profile.outputs.name }}-${{ steps.benchmark.outputs.name }}-${{ github.run_id }}
           path: benchmark-results/
           retention-days: 90
 
