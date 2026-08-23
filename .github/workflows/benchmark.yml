@@ -71,7 +71,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install analyze.py dependencies
-        run: pip install matplotlib
+        # Pinned version (not a floating latest) and --only-binary :all: (refuse to fall back to
+        # a source distribution, which could execute an arbitrary setup.py/build script during
+        # install) - both flagged by SonarCloud as security-sensitive on the unpinned/source-
+        # allowed form of this command.
+        run: pip install --only-binary :all: matplotlib==3.10.9
 
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
