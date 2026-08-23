@@ -211,8 +211,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * underneath a pool a caller explicitly asked for. {@code transportMaxConnections} not being set
    * means the pool itself resolves to Reactor Netty's own default ({@link
    * #REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR}/{@link #REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER} —
-   * see their Javadoc), so this mirrors that exact formula rather than falling back to an unrelated,
-   * typically much smaller number like the CPU core count.
+   * see their Javadoc), so this mirrors that exact formula rather than falling back to an
+   * unrelated, typically much smaller number like the CPU core count.
    */
   private static int resolveDecoderWorkerCount(final @Nullable Integer transportMaxConnections) {
     if (transportMaxConnections != null) {

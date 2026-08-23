@@ -63,8 +63,8 @@ public final class RowDecodingScheduler {
    * capacity ({@link #DEFAULT_QUEUED_TASK_CAPACITY}) — the shape a caller that already knows the
    * right worker count for its own situation (e.g. {@code
    * io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactory} sizing this to its
-   * resolved connection-pool size) reaches for instead of repeating the queued-task-capacity default
-   * itself.
+   * resolved connection-pool size) reaches for instead of repeating the queued-task-capacity
+   * default itself.
    *
    * @param workerCount the maximum number of backing threads this scheduler ever creates; must be
    *     positive
