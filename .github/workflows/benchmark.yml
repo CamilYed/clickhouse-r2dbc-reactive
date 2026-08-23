@@ -36,6 +36,16 @@ name: Cloud benchmark pipeline
 # for the first PR"): no dedicated VM, no Bencher, no GitHub Pages dashboard, no regression-gate
 # thresholds. Raw results.json is never committed to main - the whole result directory just
 # uploads as a GitHub Actions artifact.
+#
+# Runner machine specs (CPU model, core count, RAM) are captured into metadata.json and printed in
+# summary.md's environment header - GitHub-hosted `ubuntu-latest` runners are not a fixed spec
+# (Actions can hand out different underlying hardware between runs), so a run's own specs are part
+# of the trust-model evidence, not just its commit/branch/JDK.
+#
+# The ClickHouse image is cached across runs via actions/cache (docker save/load) since it's
+# otherwise pulled fresh on every run on an ephemeral GitHub-hosted runner - Gradle's own
+# dependency/wrapper caching is already handled automatically by gradle/actions/setup-gradle
+# below, no extra config needed for that half.
 
 on:
   workflow_dispatch:
@@ -115,11 +125,42 @@ jobs:
             echo "profilers=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve ClickHouse image tag
+        id: clickhouse-image
+        # Read out of start-benchmark-clickhouse.sh itself rather than duplicating the tag as a
+        # literal here - that script is already the single source of truth this file's header
+        # comment points to for keeping the tag in sync with BenchmarkEnvironment.CLICK_HOUSE_IMAGE.
+        run: |
+          IMAGE="$(grep -m1 '^IMAGE=' scripts/start-benchmark-clickhouse.sh | sed -E 's/IMAGE="([^"]+)"/\1/')"
+          echo "tag=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore ClickHouse image cache
+        # actions/cache, not pinned to a commit SHA like this file's other third-party actions -
+        # this sandbox's outbound access couldn't resolve the exact commit for the `v4` tag to
+        # verify one. Pin it to a SHA the same way if/when that's convenient to check.
+        id: clickhouse-image-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/clickhouse-image-cache/image.tar
+          key: clickhouse-docker-image-${{ steps.clickhouse-image.outputs.tag }}
+
+      - name: Load cached ClickHouse image
+        if: steps.clickhouse-image-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/clickhouse-image-cache/image.tar
+
       - name: Start ClickHouse (one container for the whole job)
         # See this file's header comment for why: one server shared by every JMH fork, not one
         # Testcontainers-managed process per fork. BENCH_CLICKHOUSE_HTTP_PORT left at the script's
-        # own default (28123) deliberately, so this matches local "trusted" runs exactly.
+        # own default (28123) deliberately, so this matches local "trusted" runs exactly. `docker
+        # run` pulls the image itself only on a cache miss above - the loaded image already
+        # satisfies it otherwise.
         run: bash scripts/start-benchmark-clickhouse.sh
+
+      - name: Save ClickHouse image to cache
+        if: steps.clickhouse-image-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/clickhouse-image-cache
+          docker save "${{ steps.clickhouse-image.outputs.tag }}" -o /tmp/clickhouse-image-cache/image.tar
 
       - name: Point benchmarks at it
         # BenchmarkEnvironment picks up BENCH_CLICKHOUSE_URL/USER/PASSWORD - see its "External
@@ -167,6 +208,12 @@ jobs:
           JDK_VERSION="$(java -version 2>&1 | head -n1)"
           OS_NAME="$(uname -s)"
           OS_ARCH="$(uname -m)"
+          # GitHub-hosted ubuntu-latest runners aren't a fixed spec - Actions can hand out
+          # different underlying hardware between runs - so these go into metadata.json alongside
+          # everything else the trust model (see this file's header comment) needs to judge a run.
+          CPU_MODEL="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed -E 's/^ +//')"
+          CPU_CORES="$(nproc)"
+          RAM_GB="$(awk '/MemTotal/{printf "%.0f", $2/1024/1024}' /proc/meminfo)"
           # Built via python3's json module, not a shell heredoc - java -version's own output
           # embeds literal double quotes (e.g. 'openjdk version "21.0.4" ...'), which broke a
           # heredoc-interpolated JSON string outright (unescaped quotes mid-value). Every value
@@ -189,6 +236,10 @@ jobs:
                   "forks": int(sys.argv[10]),
                   "warmupIterations": int(sys.argv[11]),
                   "poolSize": 8,
+                  "cpuModel": sys.argv[12],
+                  "cpuCores": int(sys.argv[13]),
+                  "ramGb": int(sys.argv[14]),
+                  "runDate": sys.argv[15],
               },
               sys.stdout,
               indent=2,
@@ -205,6 +256,10 @@ jobs:
             "${CLICKHOUSE_IMAGE}" \
             "${{ steps.jmh-params.outputs.forks }}" \
             "${{ steps.jmh-params.outputs.warmup-iterations }}" \
+            "${CPU_MODEL}" \
+            "${CPU_CORES}" \
+            "${RAM_GB}" \
+            "$(date -u +%Y-%m-%d)" \
             > metadata.json
           cat metadata.json
 
