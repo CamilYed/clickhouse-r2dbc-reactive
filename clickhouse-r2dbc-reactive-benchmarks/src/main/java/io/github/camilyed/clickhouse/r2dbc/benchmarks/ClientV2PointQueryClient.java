@@ -14,6 +14,20 @@ import reactor.core.publisher.Mono;
  * OurDriverPointQueryClient} via {@code enableConnectionPool}/{@code setMaxConnections}, the same
  * configuration {@code BoundedPoolConcurrencyBenchmark} (in this module's {@code src/jmh/java})
  * already uses for a matched-pool comparison.
+ *
+ * <p><b>{@code useAsyncRequests(true)} is not optional here.</b> client-v2's {@code
+ * ClientConfigProperties.ASYNC_OPERATIONS} defaults to {@code false} — with that default, {@code
+ * Client#query(...)} runs the entire blocking HTTP round trip synchronously on the calling thread
+ * and only wraps the already-finished result in {@code CompletableFuture.completedFuture(...)}
+ * afterward. Left at the default, every {@link #query(long)} call in this benchmark would execute
+ * serially on whatever thread drives {@code Flux.flatMap(..., concurrency)}, regardless of the
+ * {@code concurrency}/{@code poolSize} parameters — confirmed against a real cloud run
+ * (2026-08-23): client-v2's measured throughput and per-query latency were both flat across
+ * concurrency=8/32/128, and flat-throughput × flat-latency multiplied out to almost exactly one
+ * sequential worker, not eight. With {@code useAsyncRequests(true)}, client-v2 dispatches each
+ * query onto its own {@code Executors.newCachedThreadPool()} (unbounded thread count, but the real
+ * concurrency ceiling is still {@code setMaxConnections(poolSize)} — the same physical-connection
+ * budget both sides are compared under, per this pipeline's non-negotiable constraint).
  */
 final class ClientV2PointQueryClient implements PointQueryClient {
 
@@ -23,7 +37,9 @@ final class ClientV2PointQueryClient implements PointQueryClient {
   private final Client client;
 
   /**
-   * Builds a client-v2 {@link Client} with a physical connection pool sized to {@code poolSize}.
+   * Builds a client-v2 {@link Client} with a physical connection pool sized to {@code poolSize},
+   * async request dispatch enabled (see the class Javadoc for why this is required for a fair
+   * comparison).
    */
   ClientV2PointQueryClient(final int poolSize) {
     this.client =
@@ -34,6 +50,7 @@ final class ClientV2PointQueryClient implements PointQueryClient {
             .setDefaultDatabase("default")
             .enableConnectionPool(true)
             .setMaxConnections(poolSize)
+            .useAsyncRequests(true)
             .build();
   }
 

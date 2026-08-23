@@ -22,6 +22,16 @@ name: Cloud benchmark pipeline
 #   trusted - 3 forks, 5 warmup iterations, -prof gc. workflow_dispatch only - deliberately never
 #             scheduled, so a noisy/slow run is something a human asked for, not unattended.
 #
+# One ClickHouse container for the whole job, not one per JMH fork: BenchmarkEnvironment's default
+# (each fork starting its own Testcontainers-managed container) is meant for local development,
+# where per-fork isolation matters more than a few seconds of startup cost - see that class's own
+# Javadoc. On this workflow's "trusted" profile (3 forks), that default would mean 3 separate
+# ClickHouse processes, each paying its own startup/page-cache-cold cost, adding noise to exactly
+# the runner-noise problem the trust model above already has to work around. Instead this workflow
+# starts one long-lived container via scripts/start-benchmark-clickhouse.sh (the same script local
+# "trusted" runs already use, see that script's own comments) and points every fork at it via
+# BENCH_CLICKHOUSE_URL - see BenchmarkEnvironment's "External server mode" Javadoc section.
+#
 # Explicitly out of scope for this workflow (see the roadmap section's "Explicitly out of scope
 # for the first PR"): no dedicated VM, no Bencher, no GitHub Pages dashboard, no regression-gate
 # thresholds. Raw results.json is never committed to main - the whole result directory just
@@ -104,6 +114,37 @@ jobs:
             echo "warmup-iterations=1" >> "$GITHUB_OUTPUT"
             echo "profilers=" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Start ClickHouse (one container for the whole job)
+        # See this file's header comment for why: one server shared by every JMH fork, not one
+        # Testcontainers-managed process per fork. BENCH_CLICKHOUSE_HTTP_PORT left at the script's
+        # own default (28123) deliberately, so this matches local "trusted" runs exactly.
+        run: bash scripts/start-benchmark-clickhouse.sh
+
+      - name: Point benchmarks at it
+        # BenchmarkEnvironment picks up BENCH_CLICKHOUSE_URL/USER/PASSWORD - see its "External
+        # server mode" Javadoc. Written directly here (not parsed from the start script's own
+        # human-readable "export ..." output) so this doesn't depend on that output's exact format.
+        run: |
+          echo "BENCH_CLICKHOUSE_URL=http://localhost:28123" >> "$GITHUB_ENV"
+          echo "BENCH_CLICKHOUSE_USER=default" >> "$GITHUB_ENV"
+          echo "BENCH_CLICKHOUSE_PASSWORD=" >> "$GITHUB_ENV"
+
+      - name: Wait for ClickHouse to be ready
+        # The start script returns as soon as `docker run -d` returns, not once the server inside
+        # is actually accepting queries - BenchmarkEnvironment's own readiness check (a SELECT
+        # version() call) would otherwise race the container's own startup.
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf "http://localhost:28123/ping" >/dev/null; then
+              echo "ClickHouse is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ClickHouse did not become ready in time." >&2
+          docker logs clickhouse-r2dbc-reactive-benchmark || true
+          exit 1
 
       - name: Run PublicApiMatchedPoolThroughputBenchmark
         run: |
@@ -188,3 +229,9 @@ jobs:
           name: benchmark-results-${{ steps.profile.outputs.name }}-${{ github.run_id }}
           path: benchmark-results/
           retention-days: 90
+
+      - name: Stop ClickHouse
+        # Runs even if an earlier step failed, so a failed run never leaves a container behind on
+        # the runner - same reasoning as this repo's other cleanup-in-always() steps.
+        if: always()
+        run: docker rm -f clickhouse-r2dbc-reactive-benchmark || true

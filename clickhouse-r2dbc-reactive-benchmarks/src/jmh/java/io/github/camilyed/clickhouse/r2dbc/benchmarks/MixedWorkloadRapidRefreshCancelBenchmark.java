@@ -148,6 +148,16 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
   /**
    * Starts the shared server, seeds a heavy-query-sized {@link PointQueryTable}, builds both
    * clients — deliberately asymmetric pooling, see this class's own Javadoc.
+   *
+   * <p>{@code useAsyncRequests(true)} is required for the scenario this class actually describes:
+   * client-v2's {@code ASYNC_OPERATIONS} config defaults to {@code false}, under which {@code
+   * Client#query(...)} runs synchronously on the calling thread and returns an already-{@code
+   * completedFuture} — not the {@code supplyAsync}-backed future this class's own Javadoc reasons
+   * about (the "cancel doesn't interrupt the executor thread" gotcha it describes doesn't even
+   * apply to an already-completed future). Left at the default, every {@link #users} session would
+   * run strictly sequentially on the single thread driving {@code switchMap}, not "many concurrent
+   * users refreshing" — see {@link ClientV2PointQueryClient}'s Javadoc for the cloud run that first
+   * surfaced this class of bug.
    */
   @Setup(Level.Trial)
   public void setUpTrial() {
@@ -168,6 +178,7 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
             .setDefaultDatabase("default")
             .enableConnectionPool(true)
             .setMaxConnections(CLIENT_V2_POOL_SIZE)
+            .useAsyncRequests(true)
             .build();
   }
 
