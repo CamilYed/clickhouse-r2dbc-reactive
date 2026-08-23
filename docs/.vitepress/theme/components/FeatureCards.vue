@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { withBase } from "vitepress";
+
 const features = [
   {
     title: "Non-blocking transport",
@@ -37,7 +39,7 @@ const features = [
       </div>
     </div>
     <p class="chr-more">
-      <a href="/concepts/fully-reactive">What "fully reactive" means, and how each property is tested &#8594;</a>
+      <a :href="withBase('/concepts/fully-reactive')">What "fully reactive" means, and how each property is tested &#8594;</a>
     </p>
   </section>
 </template>

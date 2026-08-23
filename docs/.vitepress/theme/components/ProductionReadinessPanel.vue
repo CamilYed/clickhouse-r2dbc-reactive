@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { withBase } from "vitepress";
+
 const rows = [
   { mark: "✅", label: "Fixed & verified", count: 13, tone: "good" },
   { mark: "⚠️", label: "Documented, safe limitations", count: 4, tone: "warn" },
@@ -24,7 +26,7 @@ const rows = [
     </div>
 
     <p class="chr-more">
-      <a href="/project/production-readiness">See the full matrix &#8594;</a>
+      <a :href="withBase('/project/production-readiness')">See the full matrix &#8594;</a>
     </p>
   </section>
 </template>
