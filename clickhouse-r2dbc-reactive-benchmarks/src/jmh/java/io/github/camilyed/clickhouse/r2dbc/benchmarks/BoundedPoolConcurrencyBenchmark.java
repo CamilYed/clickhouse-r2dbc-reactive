@@ -90,8 +90,8 @@ public class BoundedPoolConcurrencyBenchmark {
    * ClientConfigProperties.ASYNC_OPERATIONS} defaults to {@code false}, under which {@code
    * Client#query(...)} runs the whole blocking HTTP round trip synchronously on the calling thread
    * before ever handing back a (by then already-completed) {@code CompletableFuture}. Left at the
-   * default, every client-v2 query below the {@code concurrency}-wide {@code flatMap} would
-   * execute serially regardless of {@link #concurrency}/{@link #POOL_SIZE} — see {@link
+   * default, every client-v2 query below the {@code concurrency}-wide {@code flatMap} would execute
+   * serially regardless of {@link #concurrency}/{@link #POOL_SIZE} — see {@link
    * ClientV2PointQueryClient}'s Javadoc for the cloud run that surfaced this (flat throughput and
    * flat per-query latency across every concurrency level, consistent with one sequential worker,
    * not {@link #POOL_SIZE}).
