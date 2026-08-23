@@ -36,18 +36,27 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
   private static final int DEFAULT_HTTP_PORT = 8123;
 
-  private final ClickHouseHttpTransport transport;
-  private final RowDecodingScheduler decodingScheduler = RowDecodingScheduler.defaults();
-  private final DriverObservationListener observationListener;
+  /**
+   * Reactor Netty's own {@code ConnectionProvider} default pool size when {@code maxConnections} is
+   * left unset — see {@code docs/operations/connection-pooling.md}'s "Reactor Netty's own defaults"
+   * table. Duplicated here (rather than read back from the transport, which doesn't expose it)
+   * specifically so {@link #resolveDecoderWorkerCount} can size the decoder to match the pool even
+   * when the pool itself is left at this default.
+   */
+  private static final int REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER = 2;
 
-  ClickHouseConnectionFactory(final ClickHouseHttpTransport transport) {
-    this(transport, DriverObservationListener.NOOP);
-  }
+  private static final int REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR = 8;
+
+  private final ClickHouseHttpTransport transport;
+  private final RowDecodingScheduler decodingScheduler;
+  private final DriverObservationListener observationListener;
 
   ClickHouseConnectionFactory(
       final ClickHouseHttpTransport transport,
+      final RowDecodingScheduler decodingScheduler,
       final DriverObservationListener observationListener) {
     this.transport = transport;
+    this.decodingScheduler = decodingScheduler;
     this.observationListener = observationListener;
   }
 
@@ -92,7 +101,10 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * Netty HTTP connection pool via {@link TransportOptions} — each independently defaults to
    * Reactor Netty's own default when not set (see {@link TransportOptions}'s Javadoc); an invalid
    * value (e.g. a negative duration, a non-positive connection count) fails fast right here, at
-   * factory creation, never silently falling back to a default.
+   * factory creation, never silently falling back to a default. {@code transportMaxConnections} in
+   * particular also sizes this factory's {@link RowDecodingScheduler} (see {@link
+   * #resolveDecoderWorkerCount}) — the decoder is never a smaller, hidden concurrency ceiling
+   * underneath the pool this option configures.
    *
    * <p>{@link ClickHouseConnectionFactoryProvider#RESPONSE_COMPRESSION} configures {@link
    * TransportOptions#responseCompression()} — defaults to {@code true} ({@link
@@ -184,8 +196,31 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
         observationListenerOption(
             options, ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER);
 
+    final RowDecodingScheduler decodingScheduler =
+        RowDecodingScheduler.withWorkerCount(resolveDecoderWorkerCount(transportMaxConnections));
+
     return new ClickHouseConnectionFactory(
-        new ClickHouseHttpTransport(baseUrl, transportOptions), observationListener);
+        new ClickHouseHttpTransport(baseUrl, transportOptions),
+        decodingScheduler,
+        observationListener);
+  }
+
+  /**
+   * The number of workers {@link #decodingScheduler} gets sized to — always matching the resolved
+   * connection pool size, so the decoder can never become a smaller, hidden concurrency ceiling
+   * underneath a pool a caller explicitly asked for. {@code transportMaxConnections} not being set
+   * means the pool itself resolves to Reactor Netty's own default ({@link
+   * #REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR}/{@link #REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER} —
+   * see their Javadoc), so this mirrors that exact formula rather than falling back to an unrelated,
+   * typically much smaller number like the CPU core count.
+   */
+  private static int resolveDecoderWorkerCount(final @Nullable Integer transportMaxConnections) {
+    if (transportMaxConnections != null) {
+      return transportMaxConnections;
+    }
+    return Math.max(
+            Runtime.getRuntime().availableProcessors(), REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR)
+        * REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER;
   }
 
   // See intOption's comment above - same reasoning, for DriverObservationListener-typed options.
@@ -290,6 +325,15 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   public Mono<ClickHouseConnection> create() {
     return Mono.fromSupplier(
         () -> new ClickHouseConnection(transport, decodingScheduler, observationListener));
+  }
+
+  /**
+   * The worker count {@link #decodingScheduler} was actually sized to — package-private, test-only
+   * window onto the real capacity guarantee {@link #resolveDecoderWorkerCount} computes, not an
+   * implementation detail (see {@link RowDecodingScheduler#workerCount()}'s own Javadoc).
+   */
+  int decoderWorkerCount() {
+    return decodingScheduler.workerCount();
   }
 
   @Override

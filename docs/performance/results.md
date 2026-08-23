@@ -304,6 +304,16 @@ a wash until a multi-fork run says otherwise in either direction.
   `PublicApiMatchedPoolThroughputBenchmark` currently test one pool size (8) and three concurrency
   levels (8/32/128); a real scalability sweep would cover more of both.
 - **Rename the `ourDriver` label to something more sensible** across every benchmark method,
-  `analyze.py`'s `DRIVER_LABELS`, and every table on this page — flagged 2026-08-23, deliberately
-  not done yet: waiting on the first `DefaultPoolSlowQueryThroughputBenchmark` CI results before
-  touching benchmark naming, so a rename doesn't get tangled up with reading that run's numbers.
+  `analyze.py`'s `DRIVER_LABELS`, and every table on this page — flagged 2026-08-23, still
+  deliberately deferred: the first `DefaultPoolSlowQueryThroughputBenchmark` CI run
+  (2026-08-23, not published here) turned out to be measuring a `RowDecodingScheduler` bug, not the
+  pool comparison it was meant to — see the next bullet. Wait for the post-fix re-run before
+  touching naming.
+- **Re-run `DefaultPoolSlowQueryThroughputBenchmark`.** Its first CI run found that
+  `RowDecodingScheduler` (this driver's row-decoding worker pool) defaulted to one worker per CPU
+  core, entirely independent of the connection pool size — on a small-core-count runner this made
+  the decoder a smaller, silent bottleneck than the pool the benchmark meant to test, so that run's
+  numbers aren't representative and weren't published. Fixed: `RowDecodingScheduler` now tracks the
+  resolved connection pool size instead — see
+  [connection-pooling.md](../operations/connection-pooling.md#the-decode-worker-pool-tracks-this-pools-size-not-the-cpu-core-count).
+  Re-run needed to get numbers actually worth publishing.
