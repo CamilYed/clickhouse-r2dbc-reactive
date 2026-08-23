@@ -12,6 +12,7 @@ dependencies {
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj.core)
     testImplementation(libs.reactor.test)
+    testImplementation(libs.awaitility)
     testImplementation(project(":clickhouse-r2dbc-reactive-testkit"))
     testRuntimeOnly(libs.junit.platform.launcher)
     testRuntimeOnly(libs.slf4j.simple)
