@@ -85,6 +85,16 @@ public class BoundedPoolConcurrencyBenchmark {
    * the same {@link #POOL_SIZE}-connection pool — this driver via the {@code (baseUrl,
    * Authentication, maxConnections)} constructor added specifically for this benchmark, client-v2
    * via {@code Client.Builder#setMaxConnections}/{@code enableConnectionPool}.
+   *
+   * <p>{@code useAsyncRequests(true)} is required here, not optional: client-v2's {@code
+   * ClientConfigProperties.ASYNC_OPERATIONS} defaults to {@code false}, under which {@code
+   * Client#query(...)} runs the whole blocking HTTP round trip synchronously on the calling thread
+   * before ever handing back a (by then already-completed) {@code CompletableFuture}. Left at the
+   * default, every client-v2 query below the {@code concurrency}-wide {@code flatMap} would
+   * execute serially regardless of {@link #concurrency}/{@link #POOL_SIZE} — see {@link
+   * ClientV2PointQueryClient}'s Javadoc for the cloud run that surfaced this (flat throughput and
+   * flat per-query latency across every concurrency level, consistent with one sequential worker,
+   * not {@link #POOL_SIZE}).
    */
   @Setup(Level.Trial)
   public void setUpTrial() {
@@ -105,6 +115,7 @@ public class BoundedPoolConcurrencyBenchmark {
             .setDefaultDatabase("default")
             .enableConnectionPool(true)
             .setMaxConnections(POOL_SIZE)
+            .useAsyncRequests(true)
             .build();
   }
 
