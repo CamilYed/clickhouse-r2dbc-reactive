@@ -1993,7 +1993,9 @@ README outline, the proposed new `ROADMAP.md` outline, and which pages are publi
 
 ## Phase 10 — Cloud benchmark pipeline
 
-**Not started.** Plan captured 2026-08-22, directly answering the blocker every entry in
+**Stage 1 built, not yet run for real** — see [ROADMAP.md's Phase
+10](../ROADMAP.md#phase-10--cloud-benchmark-pipeline) for current status. Plan captured 2026-08-22,
+directly answering the blocker every entry in
 [Phase 8's deferred performance/benchmark section](#deferred--performancebenchmark-work-stays-out-of-scope-until-a-proper-benchmark-environment-exists)
 has been waiting on: a repeatable benchmark environment off the local MacBook M3 Pro (whose 6P+6E
 core split already produced the unresolved 1M-row inter-fork variance documented in
