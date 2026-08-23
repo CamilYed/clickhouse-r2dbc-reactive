@@ -28,6 +28,14 @@ import reactor.core.publisher.Mono;
  * query onto its own {@code Executors.newCachedThreadPool()} (unbounded thread count, but the real
  * concurrency ceiling is still {@code setMaxConnections(poolSize)} — the same physical-connection
  * budget both sides are compared under, per this pipeline's non-negotiable constraint).
+ *
+ * <p>Two constructors, two distinct scenarios: {@link #ClientV2PointQueryClient(int)} matches
+ * client-v2 to an explicit pool size for a fair matched-pool comparison; {@link
+ * #ClientV2PointQueryClient(double)} instead leaves client-v2 at its own default pool (10, see
+ * {@code ClientConfigProperties.HTTP_MAX_OPEN_CONNECTIONS}) and slows every query down via {@code
+ * sleep(...)} — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s Javadoc for why that second
+ * scenario exists. Both share the same query/close logic below, only the SQL text and pool
+ * configuration differ.
  */
 final class ClientV2PointQueryClient implements PointQueryClient {
 
@@ -35,6 +43,7 @@ final class ClientV2PointQueryClient implements PointQueryClient {
       "SELECT label, amount FROM " + PointQueryTable.NAME + " WHERE id = {id:UInt64}";
 
   private final Client client;
+  private final String selectSql;
 
   /**
    * Builds a client-v2 {@link Client} with a physical connection pool sized to {@code poolSize},
@@ -42,23 +51,40 @@ final class ClientV2PointQueryClient implements PointQueryClient {
    * comparison).
    */
   ClientV2PointQueryClient(final int poolSize) {
-    this.client =
-        new Client.Builder()
-            .addEndpoint(BenchmarkEnvironment.httpUrl())
-            .setUsername(BenchmarkEnvironment.username())
-            .setPassword(BenchmarkEnvironment.password())
-            .setDefaultDatabase("default")
-            .enableConnectionPool(true)
-            .setMaxConnections(poolSize)
-            .useAsyncRequests(true)
-            .build();
+    this.selectSql = SELECT_BY_ID_SQL;
+    this.client = baseBuilder().enableConnectionPool(true).setMaxConnections(poolSize).build();
+  }
+
+  /**
+   * Builds a client-v2 {@link Client} left at its own default connection pool size (10, pooling
+   * already enabled by default), async request dispatch enabled. Every query additionally selects
+   * {@code sleep(sleepSeconds)} (ignored in the mapped result) to give the physical pool something
+   * to actually queue behind — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s Javadoc.
+   */
+  ClientV2PointQueryClient(final double sleepSeconds) {
+    this.selectSql =
+        "SELECT label, amount, sleep("
+            + sleepSeconds
+            + ") FROM "
+            + PointQueryTable.NAME
+            + " WHERE id = {id:UInt64}";
+    this.client = baseBuilder().build();
+  }
+
+  private static Client.Builder baseBuilder() {
+    return new Client.Builder()
+        .addEndpoint(BenchmarkEnvironment.httpUrl())
+        .setUsername(BenchmarkEnvironment.username())
+        .setPassword(BenchmarkEnvironment.password())
+        .setDefaultDatabase("default")
+        .useAsyncRequests(true);
   }
 
   @Override
   public Mono<PointResult> query(final long id) {
     return Mono.fromFuture(
         client
-            .query(SELECT_BY_ID_SQL, Map.of("id", id))
+            .query(selectSql, Map.of("id", id))
             .thenApply(response -> mapSingleRow(id, response)));
   }
 

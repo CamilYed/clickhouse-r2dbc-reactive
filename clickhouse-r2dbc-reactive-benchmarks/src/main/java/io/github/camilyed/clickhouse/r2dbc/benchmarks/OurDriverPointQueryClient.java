@@ -29,6 +29,13 @@ import reactor.core.publisher.Mono;
  * and {@code PublicApiPointQueryBenchmark} (in this module's {@code src/jmh/java}) already
  * established this exact reuse-one-connection shape for the same reason. Documented explicitly, per
  * the plan's own instruction not to silently change benchmark semantics from its skeleton.
+ *
+ * <p>Two constructors, two distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches this
+ * driver to an explicit pool size for a fair matched-pool comparison; {@link
+ * #OurDriverPointQueryClient(double)} instead leaves this driver at its own default pool and slows
+ * every query down via {@code sleep(...)} — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s
+ * Javadoc for why that second scenario exists. Both share the same query/close logic below, only
+ * the SQL text and pool configuration differ.
  */
 final class OurDriverPointQueryClient implements PointQueryClient {
 
@@ -36,28 +43,56 @@ final class OurDriverPointQueryClient implements PointQueryClient {
       "SELECT label, amount FROM " + PointQueryTable.NAME + " WHERE id = {id:UInt64}";
 
   private final Connection connection;
+  private final String selectSql;
 
   /**
    * Opens one logical connection against a {@code ConnectionFactory} sized to {@code poolSize}
    * physical connections.
    */
   OurDriverPointQueryClient(final int poolSize) {
-    final ConnectionFactoryOptions options =
-        ConnectionFactoryOptions.builder()
-            .option(ConnectionFactoryOptions.HOST, BenchmarkEnvironment.host())
-            .option(ConnectionFactoryOptions.PORT, BenchmarkEnvironment.port())
-            .option(ConnectionFactoryOptions.USER, BenchmarkEnvironment.username())
-            .option(ConnectionFactoryOptions.PASSWORD, BenchmarkEnvironment.password())
-            .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, poolSize)
-            .build();
+    this.selectSql = SELECT_BY_ID_SQL;
+    this.connection =
+        openConnection(
+            baseOptions()
+                .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, poolSize)
+                .build());
+  }
+
+  /**
+   * Opens one logical connection against a {@code ConnectionFactory} left at this driver's own
+   * default {@code transportMaxConnections} (Reactor Netty's {@code ConnectionProvider} default,
+   * {@code max(availableProcessors, 8) * 2}, at least 16 — see
+   * docs/operations/connection-pooling.md's "Reactor Netty's own defaults" table). Every query
+   * additionally selects {@code sleep(sleepSeconds)} (ignored in the mapped result) to give the
+   * physical pool something to actually queue behind — see {@link
+   * DefaultPoolSlowQueryThroughputBenchmark}'s Javadoc.
+   */
+  OurDriverPointQueryClient(final double sleepSeconds) {
+    this.selectSql =
+        "SELECT label, amount, sleep("
+            + sleepSeconds
+            + ") FROM "
+            + PointQueryTable.NAME
+            + " WHERE id = {id:UInt64}";
+    this.connection = openConnection(baseOptions().build());
+  }
+
+  private static ConnectionFactoryOptions.Builder baseOptions() {
+    return ConnectionFactoryOptions.builder()
+        .option(ConnectionFactoryOptions.HOST, BenchmarkEnvironment.host())
+        .option(ConnectionFactoryOptions.PORT, BenchmarkEnvironment.port())
+        .option(ConnectionFactoryOptions.USER, BenchmarkEnvironment.username())
+        .option(ConnectionFactoryOptions.PASSWORD, BenchmarkEnvironment.password());
+  }
+
+  private static Connection openConnection(final ConnectionFactoryOptions options) {
     final ConnectionFactory factory = ClickHouseConnectionFactory.from(options);
-    this.connection = Mono.from(factory.create()).block(Duration.ofSeconds(10));
+    return Mono.from(factory.create()).block(Duration.ofSeconds(10));
   }
 
   @Override
   public Mono<PointResult> query(final long id) {
-    return Flux.from(
-            connection.createStatement(SELECT_BY_ID_SQL).bind("id", Parameters.in(id)).execute())
+    return Flux.from(connection.createStatement(selectSql).bind("id", Parameters.in(id)).execute())
         .flatMap(
             result ->
                 Flux.from(

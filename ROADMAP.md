@@ -165,12 +165,19 @@ each one gated on the previous, no driver optimization before PR5:
    just for hygiene. Fix `OurDriverPointQueryClient`'s benchmark-only lifecycle leak (it retains
    only the logical `Connection`, never disposes the owning `ClickHouseConnectionFactory`'s
    transport pool/decoder scheduler).
-3. **PR3 — control experiments (code).** A client-v2 fixed-executor variant (vs. its default
-   aggressive cached thread pool) to isolate how much of its throughput edge is executor
-   aggressiveness rather than architecture. A pool-size sweep (4/8/16/32, manual profile, not the
-   default weekly run). A connection-per-operation benchmark (`factory.create()` → statement →
-   `connection.close()`, the shape Spring `DatabaseClient` actually uses) alongside the existing
-   one-`Connection` benchmark, not replacing it.
+3. **PR3 — control experiments (code). `DefaultPoolSlowQueryThroughputBenchmark` done**, the rest
+   planned. Every matched-pool benchmark artificially equalizes both sides' connection pools — this
+   new class instead leaves each driver at its own out-of-the-box default (this driver's Reactor
+   Netty default, ≥16; client-v2's fixed default of 10), with queries slowed via `sleep(0.5)`/
+   `sleep(1.0)` so a real difference in default pool size actually has something to queue behind
+   (existing point queries finish in low single-digit ms — too fast to show contention even at a
+   deliberately tiny matched pool). `concurrency` currently sweeps 8/32 only, a small first pass —
+   see the class's own Javadoc for why 128 isn't in scope yet. Still planned: a client-v2
+   fixed-executor variant (vs. its default aggressive cached thread pool) to isolate how much of its
+   throughput edge is executor aggressiveness rather than architecture; a pool-size sweep (4/8/16/32,
+   manual profile, not the default weekly run); a connection-per-operation benchmark
+   (`factory.create()` → statement → `connection.close()`, the shape Spring `DatabaseClient`
+   actually uses) alongside the existing one-`Connection` benchmark, not replacing it.
 4. **PR4 — root-cause the throughput/latency gap (profiling only, no driver changes).**
    JFR/async-profiler (CPU, wall-clock, allocation) on `PublicApiMatchedPoolThroughputBenchmark` at
    concurrency=32/128, both drivers, focused on `FluxInputStreamBridge`'s cross-thread handoff (the

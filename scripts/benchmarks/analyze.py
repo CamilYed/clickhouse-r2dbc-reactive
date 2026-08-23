@@ -164,7 +164,7 @@ def build_report(
     latency: dict[int, dict[str, dict]],
 ) -> str:
     lines = ["# Benchmark summary", ""]
-    lines.append(f"- Benchmark: `PublicApiMatchedPoolThroughputBenchmark`")
+    lines.append(f"- Benchmark: `{metadata.get('benchmark', 'PublicApiMatchedPoolThroughputBenchmark')}`")
     lines.append(f"- Run date: {metadata.get('runDate', 'unknown')}")
     lines.append(f"- Profile: **{metadata.get('profile', 'unknown')}**")
     lines.append(f"- Commit: `{metadata.get('commitSha', 'unknown')}` ({metadata.get('branch', 'unknown')})")
