@@ -54,7 +54,9 @@ breakdown (PR2-PR5) and [roadmap-archive.md's deferred section](engineering/road
 for older items not yet folded into it: a `RowDecodingScheduler` worker-count tuning pass and a JDK
 21 virtual-thread decoder-scheduler experiment. Response-compression parity and the
 `@OperationsPerInvocation(4096)` verification, both previously listed here, are resolved — see
-Phase 11's PR1.
+Phase 11's PR1. Also parked, same reason: [rewriting the decode path off client-v2's blocking
+reader](#experiment-idea-not-a-decision--rewrite-the-decode-path-off-client-v2s-blocking-reader) —
+an option flagged during PR3's `RowDecodingScheduler` fix, explicitly not decided or started.
 
 ## Explicitly not planned
 
@@ -201,6 +203,42 @@ each one gated on the previous, no driver optimization before PR5:
 5. **PR5 — one evidence-driven optimization**, only if PR4's profiling points at something
    specific, followed by an exact-same-config trusted re-run to confirm the fix actually moved the
    number.
+
+### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
+
+Flagged 2026-08-24 while investigating the `RowDecodingScheduler`/connection-pool coupling bug
+(Phase 11 PR3, see [connection-pooling.md](docs/operations/connection-pooling.md#the-decode-worker-pool-tracks-this-pools-size-not-the-cpu-core-count)).
+This driver reuses client-v2's `RowBinaryWithNamesAndTypesFormatReader` for decoding — a proven,
+spec-compliant `RowBinaryWithNamesAndTypes` parser, but one written against a blocking
+`InputStream`, not Reactor's non-blocking primitives. That's why `RowDecodingScheduler` needs to
+exist at all: every row read is a blocking call that has to be explicitly moved off Reactor Netty's
+event-loop threads (see [fully-reactive.md's new
+section](docs/concepts/fully-reactive.md#why-row-decoding-needs-its-own-scheduler-at-all) for the
+full mechanism). The pool-coupling bug just fixed was a symptom of this design: a second, separate
+concurrency ceiling (the decode scheduler) that has to be kept manually in sync with the connection
+pool, rather than not existing in the first place.
+
+The more radical alternative: write this driver's own non-blocking `RowBinaryWithNamesAndTypes`
+decoder directly against the `Flux<ByteBuffer>`/`ChunkBuffer` stream this driver already has,
+instead of bridging into an `InputStream` for client-v2's reader. If done, this would remove
+`RowDecodingScheduler` entirely — no dedicated worker pool, no second concurrency budget to keep
+matched to the connection pool, one less moving part in the whole pipeline. It also removes this
+driver's last remaining *behavioral* (not just build-time) dependency on client-v2 for the query
+path.
+
+**Not a decision — an option to weigh, deliberately not started:**
+
+- Real cost: `RowBinaryWithNamesAndTypes` is ClickHouse's binary wire format, with its own type
+  encoding for every column type this driver already supports (see the type-coverage table in
+  [README.md](README.md)) — reimplementing and re-verifying all of that correctly is a substantial,
+  correctness-critical undertaking, not a quick rewrite.
+- Real benefit is currently unquantified: PR2's resource-model measurement (thread count, CPU, RSS)
+  is the planned next step that would actually show how much `RowDecodingScheduler`'s thread hop
+  costs today, before spending the effort above to remove it. Don't commit to the rewrite before
+  that number exists.
+- If PR2/PR4's profiling shows the cross-thread handoff is a small, absorbable cost, this idea stays
+  parked — reusing client-v2's decoder remains the right trade-off (one proven parser to maintain,
+  not two).
 
 ## Working with Claude / IntelliJ
 
