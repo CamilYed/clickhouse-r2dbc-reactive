@@ -60,6 +60,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,6 +105,22 @@ def params_label(params: dict) -> str:
     if not params:
         return "(no params)"
     return ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
+
+
+def params_sort_key(label: str) -> tuple:
+    """Sorts @Param labels by the numeric value of each 'key=value' component instead of the
+    label string itself - plain string sort put poolSize 16/32/4/8 and concurrency 128/32/8 in
+    the wrong order (e.g. "128" < "32" < "8" lexically), which read as a rendering bug rather
+    than a sort bug. Each value is tried as a float first (tag 0, sorts before any string), and
+    falls back to the raw string (tag 1) for genuinely non-numeric @Param values - a mixed label
+    still sorts consistently, just alphabetically on its non-numeric components."""
+    key = []
+    for value in re.findall(r"=([^,]+)", label):
+        try:
+            key.append((0, float(value)))
+        except ValueError:
+            key.append((1, value))
+    return key or [(1, label)]
 
 
 def alloc_bytes_per_op(entry: dict) -> float | None:
@@ -200,7 +218,7 @@ def build_class_section(cls: str, artifact: dict) -> tuple[str, list[dict], dict
     all_methods_in_class = max((set(methods) for methods in by_params.values()), key=len, default=set())
 
     csv_rows = []
-    for label in sorted(by_params):
+    for label in sorted(by_params, key=params_sort_key):
         methods = by_params[label]
         for method_key in sorted(methods):
             row = methods[method_key]
@@ -252,71 +270,124 @@ def build_class_section(cls: str, artifact: dict) -> tuple[str, list[dict], dict
     return "\n".join(lines), csv_rows, by_params
 
 
-def plot_class_chart(cls: str, by_params: dict[str, dict[str, dict]], out_path: Path) -> bool:
-    """One grouped bar chart per benchmark class: score by @Param combination, one bar per
-    method. Returns False (and writes nothing) if there's only one bar total - not worth a chart.
-    Deliberately generic across @BenchmarkMode/units (unlike analyze.py's plots, which are
-    written for one specific class's shape) - the y-axis label is just whatever scoreUnit that
-    class's entries actually used, and every class gets its own chart rather than one fixed set
-    of three metrics."""
-    labels = sorted(by_params)
+def _render_grouped_bar_chart(
+    cls: str,
+    by_params: dict[str, dict[str, dict]],
+    out_path: Path,
+    *,
+    value_key: str,
+    ylabel: str,
+    title_suffix: str,
+) -> bool:
+    """Shared renderer behind plot_class_chart/plot_class_allocation_chart - same grouped-bar
+    shape, parameterized only by which field of each row to plot (primary score vs. B/op) and the
+    y-axis label. Returns False (writes nothing) if there's only one bar total - not worth a
+    chart. Fixes applied here after reviewing the first real mega-sweep render (2026-08-24):
+
+    - @Param combinations sorted numerically (params_sort_key), not as label strings - a plain
+      string sort put poolSize 16/32/4/8 and concurrency 128/32/8 in the wrong order, which read
+      as a rendering bug rather than a sort bug.
+    - Missing (method, params) combinations are plotted as NaN, not 0 - matplotlib simply omits a
+      NaN bar instead of drawing a misleading zero-height one sitting on the axis.
+    - The legend is placed fully outside the axes (upper-left anchored just past the right edge)
+      instead of matplotlib's auto-placed "best" corner, which routinely overlapped the tallest
+      bars when they reached close to the top of the plot.
+    - The y-axis switches to log scale when the plotted values span more than ~20x (e.g.
+      StreamingScanBenchmark's 10k/100k/1M row tiers) - on a linear scale the smallest bars were
+      visually flat against zero and impossible to compare.
+    - Figure width now also accounts for the actual rendered length of the @Param labels (not
+      just how many there are) - multi-@Param classes like DefaultPoolSlowQueryThroughputBenchmark
+      produce long combined labels ("concurrency=32, sleepSeconds=1.0") that got clipped off the
+      right edge of the canvas at the old fixed per-bar width.
+    - That same per-label-length width scales with the number of @Param combinations too, which
+      runs away for classes with *many* long labels (FluxInputStreamBridgeMicrobenchmark's 8
+      two-@Param combinations produced a ~44-inch-wide, visually squashed chart with the legend
+      stranded far off the right edge). Past a width cap, this switches to vertical (90°) labels
+      instead: vertical text needs horizontal room proportional to the bars themselves, not the
+      label string length, so width no longer explodes - the extra label height is absorbed by
+      growing the figure's *height* instead.
+    - Each bar gets its value printed above it (`Bar.bar_label`), so the chart is readable on its
+      own without cross-referencing the table below it.
+    """
+    labels = sorted(by_params, key=params_sort_key)
     methods = sorted({m for group in by_params.values() for m in group})
     if len(labels) * len(methods) <= 1:
         return False
 
-    unit = next(
-        (row["unit"] for group in by_params.values() for row in group.values()),
-        "score",
-    )
+    all_values = [
+        row[value_key]
+        for group in by_params.values()
+        for row in group.values()
+        if row.get(value_key) is not None
+    ]
+    if not all_values:
+        return False
 
-    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 1.6), 4))
+    longest_label_chars = max(len(label) for label in labels)
+    diagonal_width = max(6.0, len(labels) * max(1.6, longest_label_chars * 0.11))
+    max_diagonal_width = 20.0
+    if diagonal_width > max_diagonal_width:
+        fig_width = max(6.0, len(labels) * max(1.0, len(methods) * 0.6))
+        fig_height = 4.5 + longest_label_chars * 0.05
+        label_rotation, label_ha = 90, "center"
+    else:
+        fig_width = diagonal_width
+        fig_height = 4.5
+        label_rotation, label_ha = 30, "right"
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
     width = 0.8 / max(len(methods), 1)
     x = range(len(labels))
     for i, method in enumerate(methods):
         offset = (i - (len(methods) - 1) / 2) * width
-        values = [by_params[label].get(method, {}).get("score") for label in labels]
-        plotted = [v if v is not None else 0 for v in values]
-        ax.bar([xi + offset for xi in x], plotted, width=width, label=method)
+        values = [by_params[label].get(method, {}).get(value_key) for label in labels]
+        plotted = [v if v is not None else math.nan for v in values]
+        bars = ax.bar([xi + offset for xi in x], plotted, width=width, label=method)
+        ax.bar_label(bars, fmt=lambda v: f"{v:,.0f}" if v == v else "", fontsize=7, padding=2)
+
+    positive_values = [v for v in all_values if v > 0]
+    if positive_values and max(positive_values) / min(positive_values) > 20:
+        ax.set_yscale("log")
+        ylabel = f"{ylabel} (log scale)"
+
     ax.set_xticks(list(x))
-    ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_ylabel(unit)
-    ax.set_title(f"{cls} - score by params")
-    ax.legend()
+    ax.set_xticklabels(labels, rotation=label_rotation, ha=label_ha)
+    ax.set_ylabel(ylabel)
+    ax.set_title(f"{cls} - {title_suffix}")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return True
+
+
+def plot_class_chart(cls: str, by_params: dict[str, dict[str, dict]], out_path: Path) -> bool:
+    """One grouped bar chart per benchmark class: score by @Param combination, one bar per
+    method. Deliberately generic across @BenchmarkMode/units (unlike analyze.py's plots, which
+    are written for one specific class's shape) - the y-axis label is just whatever scoreUnit
+    that class's entries actually used, and every class gets its own chart rather than one fixed
+    set of three metrics. See _render_grouped_bar_chart for the actual rendering."""
+    unit = next(
+        (row["unit"] for group in by_params.values() for row in group.values()),
+        "score",
+    )
+    return _render_grouped_bar_chart(
+        cls, by_params, out_path, value_key="score", ylabel=unit, title_suffix="score by params"
+    )
 
 
 def plot_class_allocation_chart(cls: str, by_params: dict[str, dict[str, dict]], out_path: Path) -> bool:
     """Same shape as plot_class_chart but for B/op (secondary gc.alloc.rate.norm metric) instead
     of the primary score - skipped entirely (no file written) if the class has no -prof gc data
     at all (fast profile runs, or classes that were never run with -prof gc)."""
-    labels = sorted(by_params)
-    methods = sorted({m for group in by_params.values() for m in group})
-    has_alloc = any(
-        row.get("alloc_bytes_per_op") is not None for group in by_params.values() for row in group.values()
+    return _render_grouped_bar_chart(
+        cls,
+        by_params,
+        out_path,
+        value_key="alloc_bytes_per_op",
+        ylabel="B/op",
+        title_suffix="allocation by params",
     )
-    if not has_alloc or len(labels) * len(methods) <= 1:
-        return False
-
-    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 1.6), 4))
-    width = 0.8 / max(len(methods), 1)
-    x = range(len(labels))
-    for i, method in enumerate(methods):
-        offset = (i - (len(methods) - 1) / 2) * width
-        values = [by_params[label].get(method, {}).get("alloc_bytes_per_op") for label in labels]
-        plotted = [v if v is not None else 0 for v in values]
-        ax.bar([xi + offset for xi in x], plotted, width=width, label=method)
-    ax.set_xticks(list(x))
-    ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_ylabel("B/op")
-    ax.set_title(f"{cls} - allocation by params")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return True
 
 
 def build_report(
