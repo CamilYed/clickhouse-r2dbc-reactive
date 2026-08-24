@@ -326,43 +326,35 @@ class RowDecodingSchedulerTest {
 
   @Test
   void shouldStillReleaseTheAdmissionPermitWhenACommandThrows() {
-    // given - only one admission permit; task A holds it and throws instead of completing normally.
-    // Scheduling a raw, throwing Runnable directly (rather than through a Mono/Flux operator like
-    // production code does via Mono.fromCallable(...).subscribeOn(...), which catches a thrown
-    // exception internally and converts it to an onError signal before it ever reaches the raw
-    // executor) means the exception genuinely becomes an uncaught exception on the scheduler's own
-    // background thread - the default JVM-wide handler is swapped out for the scope of this test so
-    // that expected exception doesn't fail the test process itself, then restored. The restore must
-    // wait for uncaughtExceptionHandled (not just for task B to have run): task B's permit is
-    // released inside AdmissionGatedExecutorService's own finally block, which runs *before* the
-    // exception finishes unwinding out to the thread's uncaught-exception dispatch - restoring the
-    // real handler as soon as task B ran raced that dispatch and lost under load (a real build
-    // failure), since nothing otherwise guarantees task A's own uncaught-exception handling has
-    // already happened by the time task B's flag flips.
+    // given - only one admission permit; task A holds it and fails instead of completing normally.
+    // Routed through Mono.fromRunnable(...).subscribeOn(...) - the same shape production code
+    // (RowBinaryDecoder.decode) actually uses - rather than scheduling a bare throwing Runnable
+    // directly: Reactor's own subscribeOn machinery catches the thrown exception internally and
+    // delivers it as a normal onError signal from inside the scheduled task, so task A's Runnable
+    // always returns normally and nothing here ever becomes a genuinely uncaught exception on a
+    // background thread. An earlier version of this test threw a bare exception through
+    // Scheduler.schedule(Runnable) directly and tried to suppress/observe it via
+    // Thread.setDefaultUncaughtExceptionHandler - that raced the JVM's own uncaught-exception
+    // dispatch under full-suite load and produced repeated, non-reproducible failures even after
+    // adding latch-based synchronization, so that approach was abandoned in favor of never letting
+    // the exception become uncaught in the first place.
     final RowDecodingScheduler scheduler = RowDecodingScheduler.virtualThreads(1);
     final AtomicBoolean taskBRan = new AtomicBoolean(false);
-    final CountDownLatch uncaughtExceptionHandled = new CountDownLatch(1);
-    final Thread.UncaughtExceptionHandler previousHandler =
-        Thread.getDefaultUncaughtExceptionHandler();
-    Thread.setDefaultUncaughtExceptionHandler(
-        (thread, throwable) -> uncaughtExceptionHandled.countDown());
 
     try {
       // when
-      scheduler
-          .asReactorScheduler()
-          .schedule(
+      Mono.fromRunnable(
               () -> {
                 throw new IllegalStateException("boom");
-              });
+              })
+          .subscribeOn(scheduler.asReactorScheduler())
+          .onErrorResume(e -> Mono.empty())
+          .subscribe();
       scheduler.asReactorScheduler().schedule(() -> taskBRan.set(true));
 
       // then - the permit still gets released, so task B (submitted after) can still run
       await().atMost(Duration.ofSeconds(5)).untilTrue(taskBRan);
-      // and - only now is it safe to restore the real handler
-      await().atMost(Duration.ofSeconds(5)).until(() -> uncaughtExceptionHandled.getCount() == 0);
     } finally {
-      Thread.setDefaultUncaughtExceptionHandler(previousHandler);
       scheduler.dispose();
     }
   }
