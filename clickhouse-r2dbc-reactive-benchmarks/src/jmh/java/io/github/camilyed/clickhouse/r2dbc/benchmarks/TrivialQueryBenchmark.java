@@ -63,11 +63,12 @@ public class TrivialQueryBenchmark {
             .build();
   }
 
-  /** Releases both clients' connection pools and this driver's decode scheduler. */
+  /** Releases both clients' connection pools, this driver's decode scheduler, and its transport. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
     decodingScheduler.dispose();
+    ourTransport.dispose();
   }
 
   /**
