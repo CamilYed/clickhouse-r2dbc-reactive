@@ -24,43 +24,51 @@ split from) if that archaeology is ever needed. To reproduce these numbers yours
 
 ## Environment
 
+The primary, trustworthy signal is now the **cloud CI pipeline** (Phase 10), not the local laptop —
+every headline number below comes from there. The local M3 Pro remains useful for quick sanity
+checks during development, but treat any single-fork local number as a first signal only, not
+something to cite.
+
 | | |
 | --- | --- |
-| CPU | Apple M3 Pro, 12 cores (6 performance + 6 efficiency) |
-| RAM | 36 GB LPDDR5 |
-| OS | macOS, Apple Silicon |
-| JDK | Temurin 21.0.8+9-LTS |
-| ClickHouse | `clickhouse/clickhouse-server`, run via `scripts/start-benchmark-clickhouse.sh` as an external container (`BENCH_CLICKHOUSE_URL`), not the per-fork Testcontainers path — see that script for the exact image/config |
+| **Primary: cloud CI runner** | GitHub Actions `ubuntu-latest` (4 cores, 16 GB RAM), `trusted` profile — 3 forks, 5 warmup iterations, `-prof gc`, one shared ClickHouse container per job. This is what produced the 2026-08-24 mega sweep and every other multi-fork-confirmed number on this page. |
+| JDK | Temurin 21 (as pinned in `.github/workflows/benchmark.yml`) |
+| ClickHouse | `clickhouse/clickhouse-server`, one container per CI job |
 | client-v2 (baseline) | `com.clickhouse:client-v2:0.9.8` (pinned in `gradle/libs.versions.toml`) |
-| JMH | `SampleTime` mode for latency benchmarks, `Throughput` mode for `PublicApiMatchedPoolThroughputBenchmark` |
-| This run | **Mixed.** `StreamingScanBenchmark` has been re-run at 3 forks / 3×10s warmup (`-Pjmh.forks=3 -Pjmh.warmupIterations=3`) on the local M3 Pro — see [results.md](results.md#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m). `PublicApiMatchedPoolThroughputBenchmark`'s matched-pool result was instead re-run twice on the Phase 10 cloud pipeline (`trusted` profile, GitHub Actions `ubuntu-latest`, 3 forks / 5 warmup iterations each) — see [results.md's cloud-verified section](results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23) for why (a benchmark-harness fairness bug meant the local number for this scenario couldn't be trusted either, cloud or local). Every other benchmark family remains single-fork local (the `jmh` task's own default), a sanity-check signal, not yet multi-fork confirmed. [results.md](results.md) marks each table accordingly. |
+| JMH | `SampleTime` mode for latency benchmarks, `Throughput` mode for throughput-oriented classes (`PublicApiMatchedPoolThroughputBenchmark`, `PoolSizeSweepThroughputBenchmark`, `DecoderWorkerCountThroughputBenchmark`) |
+| Secondary: local dev machine | Apple M3 Pro, 12 cores (6P+6E), 36 GB LPDDR5, macOS, Temurin 21.0.8+9-LTS. Used for early exploratory runs before a scenario graduates to the cloud pipeline; single machine, single point in time, no CPU pinning — read any local-only number as *this driver vs. client-v2, same hardware/JVM/data*, not a portable claim. |
 
-Single machine, single point in time, shared consumer laptop (no CPU pinning, no isolated cores).
-Read every comparison as *this driver vs. client-v2, same hardware/JVM/data*, not as a portable
-absolute performance claim.
+## Headline results (2026-08-24 cloud mega sweep)
 
-## Headline results (updated 2026-08-23)
+The 12 core benchmark classes run together in one cloud sweep, 3 forks each — see
+[results.md's full mega sweep section](results.md#full-mega-sweep--every-scenario-one-run-2026-08-24)
+for the complete table and every chart.
 
 | Scenario | Result |
 | --- | --- |
-| Non-blocking, matched 8-connection pool, real throughput (cloud-verified, 2 independent runs) | 🟡 **client-v2 ~5–9% ahead**, consistently — see the retraction note in [results.md](results.md#non-blocking-matched-pool-numbers-below-are-retracted-pending-re-run) for why the earlier "~4x" claim here is wrong |
-| Non-blocking, matched pool, per-query latency (p50–p99) | 🔴 **client-v2 ~5–18% lower**, consistently — unresolved, see [Open follow-ups](results.md#open-follow-ups) |
-| Non-blocking, matched pool, allocation per query | 🟢 **this driver allocates 2.7–2.9x less**, and the gap widens as concurrency rises — the one part of the original story that holds up |
-| Full table scan, 10k rows | 🟢 **~12% lower latency**, consistent across repeated 3-fork runs |
-| Full table scan, 100k rows | 🟢 **roughly 4–11% lower latency**, a real but noisier win |
-| Full table scan, 1M rows | 🟡 **unresolved — anywhere from tied to ~30% higher latency**, depending on the run |
-| Transport alone (bytes, no decode) | 🟢 43–45% lower latency at every tier, including 1M rows |
-| Decode alone, no network | 🟢 7–14% lower latency at every tier |
-| Single-row point lookup / `SELECT 1` floor | 🟡 essentially tied (within ±2%) |
-| Blocking `.block()`-per-query calling style, matched pool | 🔴 ~5–8% higher latency — don't call it this way, see below |
+| Full table scan, all tiers (10k/100k/1M rows) | 🟢 **11–12% lower latency at every tier**, including 1M rows — the first cloud run to resolve the earlier local instability at that tier |
+| Non-blocking, matched 8-connection pool, real throughput (4 independent runs/classes agree) | 🔴 **client-v2 ~3–20% ahead**, consistently — unresolved, see [Open follow-ups](results.md#open-follow-ups) |
+| Non-blocking, matched pool, allocation per query | 🟢 **this driver allocates 2.7–2.9x less**, and the gap widens as concurrency rises — the clearest, most consistent win in the whole sweep |
+| Pool size sweep (4/8/16/32) | 🟡 tied at pool=4, but the gap **widens** as the pool gets bigger (client-v2 up to ~7% ahead at pool=32) — new finding, same latency-gap family |
+| Aggregation (`GROUP BY`/`avg`/`quantile`, 10k–1M rows) | 🟡 roughly a wash — +13% slower at 10k, within 2% at 100k/1M |
+| Default pool, slow query (server-side `sleep()`) | 🟢 **~2x faster at concurrency=32**, tied at concurrency=8 — this driver's larger default pool pays off once it's actually saturated |
+| Protocol floor (`SELECT 1`, point lookup) | 🟡 essentially tied to ~8% slower — no meaningful edge either way |
+| Blocking `.block()`-per-query calling style, matched pool | 🔴 same latency gap as above — don't call it this way, see below |
+| Decoder worker count widened past pool size | 🟡 no help — slightly *worse* than the coupled default |
 
 > [!IMPORTANT]
-> The three "matched pool" rows above replace an earlier "~4x more queries/sec, 3.5–4.1x lower
-> latency" headline that turned out to be measured against a client-v2 benchmark-harness bug
-> (client-v2 running near-serially, not against its real 8-connection pool) — see
-> [results.md's retraction](results.md#non-blocking-matched-pool-numbers-below-are-retracted-pending-re-run)
-> for the full story. Left here rather than quietly deleted, since the point of this pipeline is
-> honest numbers, including the ones that turn out to have been wrong.
+> **What this sweep changed the story to, in one paragraph:** this driver's clearest, most
+> repeatable advantage today is **streaming large result sets** (11–12% lower latency at every
+> tier, 10k through 1M rows) and **allocation per query under concurrent load** (2.7–2.9x less,
+> growing with concurrency) — not raw throughput or per-query latency under a matched connection
+> pool, where client-v2 is currently ahead by a consistent, still-unresolved margin that *widens*
+> as the pool or concurrency grows. Four independent benchmark classes
+> (`PublicApiMatchedPoolThroughputBenchmark`, `BoundedPoolConcurrencyBenchmark`,
+> `MatchedPoolThreadsConcurrencyBenchmark`, `PoolSizeSweepThroughputBenchmark`) now agree on that
+> gap, which makes it the single most concrete open question this project has — see
+> [Open follow-ups](results.md#open-follow-ups). An earlier "~4x more queries/sec" headline for
+> the matched-pool scenario was retracted after being traced to a client-v2 benchmark-harness bug;
+> see [archive.md](archive.md) for the full record.
 
 Full tables, charts, and the root-cause analysis behind each row: [results.md](results.md).
 
