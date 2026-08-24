@@ -8,7 +8,9 @@ import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.FluxInputStreamBridge;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
+import io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions;
 import java.io.ByteArrayInputStream;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -80,7 +82,14 @@ public class DecoderOnlyBenchmark {
   /**
    * Starts the shared container, seeds {@link PointQueryTable}, and captures one full response body
    * for {@code rows} — the only network call this benchmark class ever makes, run once per trial,
-   * outside the measured window.
+   * outside the measured window. Captured with {@link ResponseCompression#NONE} explicitly (not
+   * {@link ClickHouseHttpTransport}'s {@link TransportOptions#defaults()} LZ4 default): every
+   * {@code @Benchmark} method below decodes {@link #capturedResponseBytes} either via {@link
+   * RowBinaryDecoder#decodeRows} with an explicit {@link ResponseCompression} argument, or by
+   * feeding {@link FluxInputStreamBridge} the raw bytes directly with no decompression step at all
+   * ({@link #thisDriverWithoutMapCopy}/{@link #thisDriverCompactRow}/{@link #compactRowDirectLoop}/
+   * {@link #compactRowFluxNoBridge}/{@link #clientV2}) — capturing plain bytes up front keeps every
+   * one of those consistent without threading compression through each consumption site.
    */
   @Setup(Level.Trial)
   public void setUpTrial() {
@@ -89,8 +98,11 @@ public class DecoderOnlyBenchmark {
     final ClickHouseHttpTransport transport =
         new ClickHouseHttpTransport(
             BenchmarkEnvironment.httpUrl(),
-            BenchmarkEnvironment.username(),
-            BenchmarkEnvironment.password());
+            TransportOptions.defaults()
+                .withAuthentication(
+                    Authentication.basic(
+                        BenchmarkEnvironment.username(), BenchmarkEnvironment.password()))
+                .withResponseCompression(ResponseCompression.NONE));
     capturedResponseBytes =
         transport
             .query(ClickHouseQuery.of(SELECT_ALL_SQL))

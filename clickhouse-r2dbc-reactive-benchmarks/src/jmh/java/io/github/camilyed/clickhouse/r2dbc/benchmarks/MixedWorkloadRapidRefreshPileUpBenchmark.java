@@ -229,7 +229,9 @@ public class MixedWorkloadRapidRefreshPileUpBenchmark {
   private Mono<Boolean> thisDriverHeavyQuery(final String sql) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)
+    // LZ4, not NONE - ourTransport resolves TransportOptions.defaults()'s own LZ4 default (sends
+    // compress=1); NONE here would feed the decoder compressed bytes it can't parse.
+    return RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.LZ4)
         .flatMapMany(DecodedResult::rows)
         .then(Mono.just(Boolean.TRUE));
   }
