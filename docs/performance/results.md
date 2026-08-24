@@ -6,6 +6,44 @@ retracted/single-fork data sinks toward the bottom. See [index.md](index.md) for
 warning and environment these numbers were measured under, and [methodology.md](methodology.md)
 for what each benchmark class actually exercises.
 
+## Default pool, slow query — this driver's larger default pool wins once it's actually used (2026-08-23)
+
+The fixed, trustworthy re-run of the scenario retracted earlier the same day (see [Open
+follow-ups](#open-follow-ups) and
+[connection-pooling.md](../operations/connection-pooling.md#the-decode-worker-pool-tracks-this-pools-size-not-the-cpu-core-count)
+for what was wrong with the first attempt — `RowDecodingScheduler` capping `ourDriver` at the CPU
+core count regardless of connection pool size — and the fix). `trusted` profile, 3 forks, 5 warmup
+iterations, GitHub Actions `ubuntu-latest` (4 cores, 16GB RAM), commit `66c1303` (the fix,
+merged). Each side left at its own real default pool: `ourDriver` ≥16 (Reactor Netty's
+`max(availableProcessors, 8) * 2` = 16 on this runner), client-v2's fixed default of 10. Every
+query holds server-side via `sleep(0.5)`/`sleep(1.0)` so a real pool-size difference has something
+to queue behind — real point queries finish too fast to show this.
+
+| concurrency | sleepSeconds | ourDriver (ms/op) | client-v2 (ms/op) | verdict |
+| --- | --- | --- | --- | --- |
+| 8 | 0.5 | 509.8 | 508.4 | tie — both undersaturate their own pool |
+| 8 | 1.0 | 1011.1 | 1009.9 | tie |
+| 32 | 0.5 | 1029.1 | 2022.0 | **ourDriver ~2x faster** |
+| 32 | 1.0 | 2033.5 | 4023.4 | **ourDriver ~2x faster** |
+
+At concurrency=8 (below both pools' capacity — 8 < 10 < 16), neither side ever queues, so the tie
+is correct, not a fluke: both numbers are just "one `sleepSeconds`-long round trip plus overhead."
+At concurrency=32, the pool-size difference becomes visible exactly as this benchmark was designed
+to show: `ourDriver`'s 16-connection pool drains 32 queries in 2 waves (`ceil(32/16) = 2`),
+client-v2's 10-connection pool needs 4 (`ceil(32/10) = 4`) — that arithmetic lines up almost
+exactly with the measured times (`2 × 0.5s = 1.0s` vs. measured 1029ms; `4 × 0.5s = 2.0s` vs.
+measured 2022ms; same pattern at `sleepSeconds=1.0`).
+
+Allocation shows the same pattern as the matched-pool result below — `ourDriver` allocates roughly
+2.6x less per query at concurrency=32 (854,115 B/op vs. 2,272,098 B/op at `sleepSeconds=0.5`),
+consistent regardless of which side's pool is under more pressure.
+
+**Read this result for what it actually shows: a bigger default connection pool wins when
+concurrency exceeds the smaller side's pool, and does nothing when it doesn't** — not yet a
+verdict on either driver's architecture, since the pool-size difference itself (16 vs. 10) is what
+produced the gap here, not a difference in calling style or protocol efficiency (both already
+measured, separately, in the matched-pool result below).
+
 ## Cloud-verified matched pool, real async on both sides (2026-08-23)
 
 The fair version of the non-blocking, matched-pool scenario below, run twice independently on the
@@ -304,16 +342,8 @@ a wash until a multi-fork run says otherwise in either direction.
   `PublicApiMatchedPoolThroughputBenchmark` currently test one pool size (8) and three concurrency
   levels (8/32/128); a real scalability sweep would cover more of both.
 - **Rename the `ourDriver` label to something more sensible** across every benchmark method,
-  `analyze.py`'s `DRIVER_LABELS`, and every table on this page — flagged 2026-08-23, still
-  deliberately deferred: the first `DefaultPoolSlowQueryThroughputBenchmark` CI run
-  (2026-08-23, not published here) turned out to be measuring a `RowDecodingScheduler` bug, not the
-  pool comparison it was meant to — see the next bullet. Wait for the post-fix re-run before
-  touching naming.
-- **Re-run `DefaultPoolSlowQueryThroughputBenchmark`.** Its first CI run found that
-  `RowDecodingScheduler` (this driver's row-decoding worker pool) defaulted to one worker per CPU
-  core, entirely independent of the connection pool size — on a small-core-count runner this made
-  the decoder a smaller, silent bottleneck than the pool the benchmark meant to test, so that run's
-  numbers aren't representative and weren't published. Fixed: `RowDecodingScheduler` now tracks the
-  resolved connection pool size instead — see
-  [connection-pooling.md](../operations/connection-pooling.md#the-decode-worker-pool-tracks-this-pools-size-not-the-cpu-core-count).
-  Re-run needed to get numbers actually worth publishing.
+  `analyze.py`'s `DRIVER_LABELS`, and every table on this page — flagged 2026-08-23. The blocker
+  (waiting on trustworthy `DefaultPoolSlowQueryThroughputBenchmark` numbers) is now resolved — see
+  [the results section above](#default-pool-slow-query-this-drivers-larger-default-pool-wins-once-its-actually-used-2026-08-23) —
+  but the rename itself is still not started; still deliberately not bundled into that fix's PR to
+  keep the two changes independently reviewable.
