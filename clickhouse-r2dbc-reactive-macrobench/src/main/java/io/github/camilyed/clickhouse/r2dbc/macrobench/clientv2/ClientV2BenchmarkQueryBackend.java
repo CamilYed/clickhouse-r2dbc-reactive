@@ -20,9 +20,9 @@ import reactor.core.publisher.Mono;
  * Reactor exactly once here - same pattern {@code clickhouse-r2dbc-reactive-benchmarks}' {@code
  * ClientV2PointQueryClient} already proved. {@code useAsyncRequests(true)} (set on the {@link
  * Client} bean, see {@link ClientV2BackendConfiguration}) is required for the same reason
- * documented there: left at client-v2's default, {@link Client#query} runs the blocking HTTP
- * round trip synchronously on the calling thread, which under Reactor Netty's event loop would
- * starve every other in-flight WebFlux request on that thread.
+ * documented there: left at client-v2's default, {@link Client#query} runs the blocking HTTP round
+ * trip synchronously on the calling thread, which under Reactor Netty's event loop would starve
+ * every other in-flight WebFlux request on that thread.
  */
 final class ClientV2BenchmarkQueryBackend implements BenchmarkQueryBackend {
 

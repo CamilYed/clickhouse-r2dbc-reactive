@@ -106,8 +106,8 @@ public class StreamingScanBenchmark {
   }
 
   /**
-   * Releases both clients' connection pools, this driver's decode scheduler and transport, and
-   * logs each driver's time-to-first-row summary.
+   * Releases both clients' connection pools, this driver's decode scheduler and transport, and logs
+   * each driver's time-to-first-row summary.
    */
   @TearDown(Level.Trial)
   public void tearDownTrial() {

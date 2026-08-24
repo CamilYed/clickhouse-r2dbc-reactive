@@ -18,11 +18,11 @@ import org.springframework.r2dbc.core.binding.BindMarkersFactory;
  * This driver's {@link ConnectionFactory}/{@link DatabaseClient} beans for the {@code r2dbc}
  * backend - only created when {@code benchmark.backend} is {@code r2dbc} or {@code dual} (see
  * {@link ConditionalOnBackendEnabled}). Deliberately no {@code io.r2dbc.pool.ConnectionPool}
- * wrapper, unlike {@code examples/spring-boot-webflux-demo}: ROADMAP.md's Phase 12 fairness
- * config is explicit that the real pool here is already this driver's own {@code
- * ClickHouseHttpTransport} Reactor Netty {@code ConnectionProvider} - an outer logical pool would
- * add a queue on top of it that this project's own docs already say most users don't need,
- * contaminating the primary r2dbc-vs-client-v2 comparison this module exists for.
+ * wrapper, unlike {@code examples/spring-boot-webflux-demo}: ROADMAP.md's Phase 12 fairness config
+ * is explicit that the real pool here is already this driver's own {@code ClickHouseHttpTransport}
+ * Reactor Netty {@code ConnectionProvider} - an outer logical pool would add a queue on top of it
+ * that this project's own docs already say most users don't need, contaminating the primary
+ * r2dbc-vs-client-v2 comparison this module exists for.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(R2dbcProperties.class)
@@ -45,7 +45,9 @@ class R2dbcBackendConfiguration {
     if (properties.getPassword() != null) {
       builder.option(ConnectionFactoryOptions.PASSWORD, properties.getPassword());
     }
-    properties.getProperties().forEach((name, value) -> builder.option(Option.valueOf(name), value));
+    properties
+        .getProperties()
+        .forEach((name, value) -> builder.option(Option.valueOf(name), value));
     return ConnectionFactories.get(builder.build());
   }
 

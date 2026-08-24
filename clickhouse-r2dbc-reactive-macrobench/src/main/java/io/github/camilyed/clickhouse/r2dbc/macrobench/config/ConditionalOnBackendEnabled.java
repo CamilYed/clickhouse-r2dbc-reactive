@@ -9,8 +9,8 @@ import org.springframework.context.annotation.Conditional;
 
 /**
  * Gates a {@code @Bean} method so it only runs when {@code benchmark.backend} selects the given
- * {@link Backend}, or is {@link Backend#DUAL}. Needed because isolated single-backend runs are
- * how this module's CPU/RSS/thread measurements stay trusted - an idle backend's own
+ * {@link Backend}, or is {@link Backend#DUAL}. Needed because isolated single-backend runs are how
+ * this module's CPU/RSS/thread measurements stay trusted - an idle backend's own
  * threads/connections would otherwise still show up in process-level resource numbers even with
  * zero traffic reaching it. See {@link Backend}'s own Javadoc and ROADMAP.md's Phase 12.
  */

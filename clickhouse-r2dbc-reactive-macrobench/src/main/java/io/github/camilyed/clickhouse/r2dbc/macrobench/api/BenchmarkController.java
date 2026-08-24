@@ -25,9 +25,9 @@ import reactor.core.publisher.Mono;
  * ClickHouse instance -&gt; same SQL/data/response DTO</code>), routed by a {@code {backend}} path
  * segment ({@code r2dbc} or {@code client-v2}) to whichever {@link BenchmarkQueryBackend}
  * implementations are active for this run - see {@code
- * io.github.camilyed.clickhouse.r2dbc.macrobench.config.ConditionalOnBackendEnabled}. A backend
- * not active for this run (isolated single-backend mode) returns {@code 404}, not a silent
- * fallback to whichever backend happens to be running.
+ * io.github.camilyed.clickhouse.r2dbc.macrobench.config.ConditionalOnBackendEnabled}. A backend not
+ * active for this run (isolated single-backend mode) returns {@code 404}, not a silent fallback to
+ * whichever backend happens to be running.
  */
 @RestController
 @RequestMapping("/benchmark/{backend}")
@@ -39,7 +39,8 @@ class BenchmarkController {
 
   BenchmarkController(final List<BenchmarkQueryBackend> backends) {
     this.backendsByKind =
-        backends.stream().collect(Collectors.toMap(BenchmarkQueryBackend::kind, Function.identity()));
+        backends.stream()
+            .collect(Collectors.toMap(BenchmarkQueryBackend::kind, Function.identity()));
   }
 
   /** Point-lookup scenario: one row by primary key. */

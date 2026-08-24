@@ -24,6 +24,14 @@ import org.springframework.stereotype.Component;
  * BenchmarkEnvironment#executeAdminSql} already established, applied here via a plain {@link
  * HttpClient} against {@link ClickHouseEndpointProperties} rather than either backend under
  * comparison.
+ *
+ * <p><b>Known ordering nuance:</b> as a Spring {@link ApplicationRunner}, {@link #run} executes
+ * after the embedded web server has already started accepting connections (context refresh brings
+ * the server up before {@code ApplicationRunner}s run), so a request can in principle arrive before
+ * seeding finishes. {@code .github/workflows/macro-benchmark.yml}'s smoke check retries for exactly
+ * this reason. A load-testing tool driving real traffic against this module (PR2) should wait for a
+ * successful response from one of the seeded endpoints before starting measurement, not just for
+ * the process to be up.
  */
 @Component
 class DatasetSeeder implements ApplicationRunner {
@@ -105,7 +113,9 @@ class DatasetSeeder implements ApplicationRunner {
         HttpRequest.newBuilder()
             .uri(
                 URI.create(
-                    endpoint.httpUrl() + "/?query=" + URLEncoder.encode(sql, StandardCharsets.UTF_8)))
+                    endpoint.httpUrl()
+                        + "/?query="
+                        + URLEncoder.encode(sql, StandardCharsets.UTF_8)))
             .header("Authorization", "Basic " + basicAuth)
             .timeout(ADMIN_TIMEOUT)
             .POST(HttpRequest.BodyPublishers.noBody())

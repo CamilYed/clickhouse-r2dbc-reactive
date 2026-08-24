@@ -1,0 +1,127 @@
+name: Macrobenchmark smoke check
+
+# Phase 12 PR1 (see ROADMAP.md's Phase 12 section): manual-dispatch-only workflow that boots the
+# clickhouse-r2dbc-reactive-macrobench Spring Boot app against a real ClickHouse instance and
+# smoke-checks each active backend's endpoints respond correctly.
+#
+# Deliberately NOT a load-test/benchmark run yet: no k6/wrk2 open-loop load generator, no
+# paired-A/B-round methodology, no resource collector wired in - those are explicitly PR2's job
+# per ROADMAP.md's Phase 12 "Recommended PR sequence" ("PR1 infrastructure only ... PR2 run and
+# document a baseline report"). This workflow's only job is proving the module boots, seeds its
+# dataset, and answers each scenario correctly end to end - a smoke test, not a benchmark result.
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: "benchmark.backend to smoke-check (r2dbc, client-v2, or dual)"
+        required: false
+        default: "dual"
+        type: choice
+        options:
+          - dual
+          - r2dbc
+          - client-v2
+
+jobs:
+  smoke-check:
+    runs-on: ubuntu-latest
+
+    services:
+      clickhouse:
+        # Same pinned image clickhouse-r2dbc-reactive-benchmarks' BenchmarkEnvironment uses, for
+        # consistency across every ClickHouse-backed CI job in this repo.
+        image: clickhouse/clickhouse-server:26.7.3.19
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Compile macrobench module
+        run: ./gradlew :clickhouse-r2dbc-reactive-macrobench:classes --console=plain
+
+      - name: Start macrobench app in the background
+        env:
+          MACROBENCH_BACKEND: ${{ inputs.backend }}
+          MACROBENCH_POINT_ROWS: "1000"
+          MACROBENCH_ANALYTICS_ROWS: "1000"
+        run: |
+          ./gradlew :clickhouse-r2dbc-reactive-macrobench:bootRun --console=plain > macrobench-app.log 2>&1 &
+          echo $! > macrobench-app.pid
+
+      - name: Wait for the app to be ready
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -sf "http://localhost:8081/actuator/health" >/dev/null 2>&1; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App did not become ready in time"
+          cat macrobench-app.log
+          exit 1
+
+      - name: Smoke-check each active backend
+        # DatasetSeeder runs as a Spring ApplicationRunner, which executes AFTER the embedded
+        # Netty server has already started accepting connections (context refresh brings the
+        # server up before ApplicationRunners run) - so /actuator/health can turn green slightly
+        # before seeding finishes. A short retry loop absorbs that race instead of assuming a
+        # single request right after "health is up" is safe - real fix (a custom health
+        # indicator gated on seeding completion) is a fair PR2 follow-up, not needed for a smoke
+        # check with a few-second seeding window.
+        run: |
+          set -euo pipefail
+          check() {
+            for _ in $(seq 1 15); do
+              if curl -sf "$1" | tee /tmp/last-response.json | grep -q "$2"; then
+                return 0
+              fi
+              sleep 2
+            done
+            echo "Check failed: $1"
+            cat /tmp/last-response.json 2>/dev/null || true
+            return 1
+          }
+          backends="${{ inputs.backend }}"
+          if [ "$backends" = "dual" ]; then
+            backends="r2dbc client-v2"
+          fi
+          for backend in $backends; do
+            echo "=== $backend ==="
+            check "http://localhost:8081/benchmark/$backend/point/1" '"id":1'
+            check "http://localhost:8081/benchmark/$backend/analytics" 'category'
+            check "http://localhost:8081/benchmark/$backend/stream?limit=5" '"id"'
+          done
+
+      - name: Stop the app
+        if: always()
+        run: |
+          if [ -f macrobench-app.pid ]; then
+            kill "$(cat macrobench-app.pid)" || true
+          fi
+
+      - name: Upload app log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macrobench-app-log
+          path: macrobench-app.log
+          retention-days: 7

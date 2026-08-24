@@ -730,6 +730,21 @@ acquisition from decoder-scheduler admission → PR5 the first actual production
 once PR2-4 evidence identifies a real bottleneck, verified with JMH **and** the macrobenchmark
 before/after.
 
+**PR1 status (2026-08-24): infrastructure built, not yet run.** The `clickhouse-r2dbc-reactive-macrobench`
+module exists with the `point`/`analytics`/`stream` scenarios, both backends, dataset seeding, the
+`BenchmarkController` endpoint contract, and a manual `.github/workflows/macro-benchmark.yml`
+smoke check (boots the app, seeds a small dataset, curls each active backend's endpoints — not a
+load test). Deliberately narrower than the full PR1 description above, disclosed rather than
+silently dropped: the `cancel` scenario is not implemented (needs per-backend cancellation-signal
+wiring plus `system.processes`/`system.query_log` correlation — a materially different, riskier
+piece than the other three scenarios, tracked as a PR1 follow-up rather than rushed in
+unverified), and there's no k6/wrk2 open-loop load generator, paired-A/B-round script, or resource
+collector yet — those are PR2's actual job per the sequence above, not scope creep to add here.
+Also not yet done in this sandbox: a real Gradle build/test run (no network for the Gradle wrapper
+distribution in this environment) — needs `./gradlew :clickhouse-r2dbc-reactive-macrobench:spotlessCheck
+:clickhouse-r2dbc-reactive-macrobench:test` before merging, same disclosed limitation as the
+9-benchmark-class dispose fix above.
+
 **Candidate follow-up findings the review doc flagged from reading current `main`** (documented
 here, none implemented yet — do not reopen without new evidence, per the doc's own instruction):
 

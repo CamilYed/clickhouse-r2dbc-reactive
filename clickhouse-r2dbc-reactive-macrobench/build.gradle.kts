@@ -15,6 +15,9 @@ dependencies {
     implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
 
     implementation("org.springframework.boot:spring-boot-starter-webflux")
+    // /actuator/health - what .github/workflows/macro-benchmark.yml polls to know the app finished
+    // startup (dataset seeding included) before it starts smoke-checking endpoints.
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
     // Same reasoning as examples/spring-boot-webflux-demo's build.gradle.kts: spring-boot-starter-r2dbc,
     // not spring-boot-starter-data-r2dbc - this module never uses R2dbcEntityTemplate/Spring Data
     // repositories either, and the latter's DataR2dbcAutoConfiguration eagerly resolves a Dialect
