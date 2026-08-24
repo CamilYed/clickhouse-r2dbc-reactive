@@ -27,6 +27,14 @@ CONCURRENCY="${4:-10}"
 WARMUP_REQUESTS="${WARMUP_REQUESTS:-200}"
 BASE_URL="${MACROBENCH_BASE_URL:-http://localhost:8081}"
 
+# ab refuses to run when -c exceeds -n ("Cannot use concurrency level greater than total number
+# of requests"), so a WARMUP_REQUESTS lower than the requested CONCURRENCY (e.g. the default 200
+# warmup against concurrency 300) makes the warmup pass itself fail before anything is measured -
+# not a real server/pool saturation failure, just this script asking ab for something it refuses.
+if [ "$WARMUP_REQUESTS" -lt "$CONCURRENCY" ]; then
+  WARMUP_REQUESTS="$CONCURRENCY"
+fi
+
 case "$SCENARIO" in
   point) PATH_SUFFIX="point/1" ;;
   analytics) PATH_SUFFIX="analytics" ;;
