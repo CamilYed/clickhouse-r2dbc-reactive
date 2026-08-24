@@ -352,29 +352,44 @@ each one gated on the previous, no driver optimization before PR5:
      concurrency ceiling): it's also this driver's only real admission control today. Phase 11 PR5
      is closed on this finding; no exact-same-config re-run of `PublicApiMatchedPoolThroughputBenchmark`
      is warranted since no default changed.
-   - Parked as a genuinely separate follow-up, not part of PR5: whether widening the decoder
-     together with an explicit, deliberately-sized `transportPendingAcquireMaxCount` recovers the
-     concurrency=8 win at 32/128 too without the outright failures — and, more fundamentally,
-     whether admission control belongs on `RowDecodingScheduler` at all or should be its own
-     explicit mechanism, since today it's an accident of where `subscribeOn` happens to sit.
-     Working theory for *why* this might work, not yet verified: today's shape is two queues in
-     series (the decoder's bounded-elastic queue, then Reactor Netty's own pending-acquire queue),
-     and tandem queueing is a known way to compound tail latency beyond what either queue alone
-     would produce at the same throughput — matching the shape of the observed symptom (p50 tied,
-     only p90-p99 diverges). If confirmed, widening the decoder collapses it back to one queue
-     (the physical connection pool, which is the real, unavoidable bottleneck either way).
-   - Two requirements for whoever picks this up next (explicit user guidance, 2026-08-24): (1) log
-     the effective values — resolved `decoderWorkerCount`, `transportMaxConnections`,
-     `transportPendingAcquireMaxCount`/`transportPendingAcquireTimeout`, and whatever Reactor Netty
-     itself resolved them to when left at its own defaults — at factory construction, so a user
-     debugging a tail-latency or pending-acquire-queue problem in production doesn't have to
-     already know this whole investigation to find the numbers in play; (2) the longer-term goal is
-     for these to size themselves correctly from `transportMaxConnections` (and from each other)
-     without a user ever having to set `decoderWorkerCount` or `transportPendingAcquireMaxCount` by
-     hand — today's explicit options are an escape hatch for this investigation, not the intended
-     end state. If the tandem-queueing theory above holds, auto-deriving
-     `transportPendingAcquireMaxCount` alongside any widened `decoderWorkerCount` (rather than
-     asking a caller to size both) is probably how that end state actually looks.
+   - **Follow-up in progress (code done 2026-08-24, not yet run on CI):** whether widening the
+     decoder together with an explicit, deliberately-sized `transportPendingAcquireMaxCount`
+     recovers the concurrency=8 win at 32/128 too without the outright failures — and, more
+     fundamentally, whether admission control belongs on `RowDecodingScheduler` at all or should be
+     its own explicit mechanism, since today it's an accident of where `subscribeOn` happens to
+     sit. Working theory for *why* this might work: today's shape is two queues in series (the
+     decoder's bounded-elastic queue, then Reactor Netty's own pending-acquire queue), and tandem
+     queueing is a known way to compound tail latency beyond what either queue alone would produce
+     at the same throughput — matching the shape of the observed symptom (p50 tied, only p90-p99
+     diverges). If confirmed, widening the decoder collapses it back to one queue (the physical
+     connection pool, which is the real, unavoidable bottleneck either way).
+   - New `DecoderAndPendingAcquireWidenedThroughputBenchmark`: a fourth `OurDriverPointQueryClient`
+     constructor (`ExplicitDecoderWorkerCountAndPendingAcquireLimit(poolSize, decoderWorkerCount,
+     pendingAcquireMaxCount)`) sets `decoderWorkerCount=32` and `transportPendingAcquireMaxCount=256`
+     together (both deliberately generous, not minimally tuned, same reasoning as PR5's own
+     `WIDENED_DECODER_WORKER_COUNT`), swept across `concurrency` 8/32/128, same merged-histogram
+     logging pattern as the rest of Phase 11's benchmarks. Deliberately a separate class from
+     `DecoderWorkerCountThroughputBenchmark` rather than a third state bolted onto it — that class's
+     own two states already answer "does widening the decoder alone help or hurt"; this class's
+     result should be read against its already-recorded `coupledDecoder` numbers, not re-measured.
+     Wired into `benchmark.yml`'s `workflow_dispatch` dropdown, manual-only.
+   - `ClickHouseConnectionFactory` now logs its effective settings (resolved `decoderWorkerCount`,
+     `transportMaxConnections`, `transportPendingAcquireMaxCount`, `transportPendingAcquireTimeout`
+     — `"unset"` for whichever fall back to Reactor Netty's own defaults) once at construction, via
+     `logEffectiveSettings` — explicit user guidance (2026-08-24): a caller debugging a tail-latency
+     or pending-acquire-queue problem in production shouldn't need to already know this
+     investigation to find the numbers in play.
+   - **Not yet done, explicit user guidance (2026-08-24):** the longer-term goal is for these
+     values to size themselves correctly from `transportMaxConnections` (and from each other)
+     without a caller ever having to set `decoderWorkerCount` or `transportPendingAcquireMaxCount`
+     by hand — today's explicit options remain an escape hatch for this investigation, not the
+     intended end state. If the tandem-queueing theory above is confirmed by the new benchmark,
+     auto-deriving `transportPendingAcquireMaxCount` alongside any widened `decoderWorkerCount`
+     (rather than asking a caller to size both) is probably how that end state actually looks — not
+     started, gated on this benchmark's trusted-run result first.
+   - Next: an actual trusted CI run of `DecoderAndPendingAcquireWidenedThroughputBenchmark`, read
+     against `DecoderWorkerCountThroughputBenchmark`'s already-recorded `coupledDecoder` numbers at
+     the same three concurrencies.
 
 ### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
 
