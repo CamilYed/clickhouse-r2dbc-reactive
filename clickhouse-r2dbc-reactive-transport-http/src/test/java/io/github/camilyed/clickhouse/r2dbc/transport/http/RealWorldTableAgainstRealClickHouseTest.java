@@ -32,7 +32,9 @@ import org.junit.jupiter.api.Test;
  * <ul>
  *   <li><b>Numeric</b> — covered ({@link #shouldDecodeNumericTypes()}): all {@code
  *       Int8..256}/{@code UInt8..256} widths, {@code Float32}/{@code Float64}, {@code Decimal},
- *       {@code Bool}.
+ *       {@code Bool}. {@code Decimal128}/{@code Decimal256} (the {@code BigInteger}-backed wide
+ *       tiers, precision above 18) additionally covered by {@link #shouldDecodeLargeDecimalTypes()}
+ *       — see that test's Javadoc for why.
  *   <li><b>String</b> — covered ({@link #shouldDecodeStringTypes()}): {@code String}, {@code
  *       FixedString}.
  *   <li><b>Date and time</b> — partially covered ({@link #shouldDecodeDateAndTimeTypes()}): {@code
@@ -192,6 +194,53 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
         .hasBigInteger(
             "uint256_val", "12345678901234567890123456789012345678901234567890123456789012345678")
         .hasFloatCloseTo("float32_val", 3.14f, Offset.offset(0.001f));
+  }
+
+  /**
+   * {@code Decimal(P,S)} with {@code P} above 18 significant digits switches client-v2's {@code
+   * BinaryStreamReader.readDecimal} from a plain {@code long}/{@code int} read to a {@code
+   * BigInteger}-backed one ({@code Decimal128} for 19–38 digits, {@code Decimal256} for 39–76) —
+   * {@link #shouldDecodeNumericTypes()} above only exercises {@code Decimal(18,4)}, which stays on
+   * the {@code long} path. Added while checking client-v2 0.10.0's changelog for a reported {@code
+   * getBigDecimal} truncation fix: that fix lives in {@code NumberConverter}/{@code
+   * SerializerUtils}/{@code ValueConverters} (the typed-getter path on {@code
+   * AbstractBinaryFormatReader}), which this driver's decode path never calls — {@code
+   * ListDecodingRowBinaryReader} goes through {@code BinaryStreamReader.readValue} directly — so
+   * that specific fix doesn't apply here. But the investigation surfaced that the BigInteger-backed
+   * width tiers had no coverage at all in this repo, positive or negative value, which is the
+   * actual gap worth closing before trusting a version bump.
+   */
+  @Test
+  void shouldDecodeLargeDecimalTypes() {
+    // given
+    execute(
+        "CREATE TABLE large_decimals ("
+            + "id UInt32, "
+            + "decimal128_val Decimal(38,10), "
+            + "decimal256_val Decimal(76,20)"
+            + ") ENGINE = MergeTree ORDER BY id");
+    execute(
+        "INSERT INTO large_decimals VALUES "
+            + "(1, 9123456789012345678901234567.1234567890, "
+            + "91234567890123456789012345678901234567890123456789012345.12345678901234567890), "
+            + "(2, -9123456789012345678901234567.1234567890, "
+            + "-91234567890123456789012345678901234567890123456789012345.12345678901234567890)");
+
+    // when
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM large_decimals ORDER BY id");
+
+    // then
+    assertThat(rows).hasSize(2);
+    assertThatRow(rows.get(0))
+        .hasDecimal("decimal128_val", "9123456789012345678901234567.1234567890")
+        .hasDecimal(
+            "decimal256_val",
+            "91234567890123456789012345678901234567890123456789012345.12345678901234567890");
+    assertThatRow(rows.get(1))
+        .hasDecimal("decimal128_val", "-9123456789012345678901234567.1234567890")
+        .hasDecimal(
+            "decimal256_val",
+            "-91234567890123456789012345678901234567890123456789012345.12345678901234567890");
   }
 
   @Test

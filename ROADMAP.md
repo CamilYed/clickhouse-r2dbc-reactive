@@ -20,11 +20,24 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
 - **0.2.2 (unreleased)** — HTTP response compression (LZ4, on by default, matching client-v2's own
   default), and a fix so the bundled demo actually disposes the driver's `ConnectionFactory` at
   Spring shutdown. See [CHANGELOG.md's Unreleased section](CHANGELOG.md#unreleased--022).
-- **Phase 8 — post-0.2.0 hardening.** Most items shipped in 0.2.1/0.2.2 (see table above). Open
-  items: Phase 8 P2 doc/policy items (TLS scope, minimum ClickHouse version, multi-host contract,
-  compound statements, client-v2 upgrade checklist), a current-`main` demo integration lane
-  alongside the published-release lane, a non-idempotent `release.yml` `USER_MANAGED` finalization
-  step, and a public vendor extension for per-statement ClickHouse settings. Full detail:
+- **Phase 8 — post-0.2.0 hardening.** Most items shipped in 0.2.1/0.2.2 (see table above). The
+  non-idempotent `release.yml` `USER_MANAGED` finalization step is now fixed (`deployment_id`
+  resume input, 2026-08-24). **client-v2 bumped 0.9.8 → 0.10.0** (2026-08-24): checked the 0.10.0
+  changelog's Breaking Changes entirely against production imports — none apply, since `core` only
+  uses `BinaryStreamReader`/`RowBinaryWithNamesAndTypesFormatReader`-family decode classes (never
+  `Client`/`Client.Builder`, which is where every breaking change in that release lives), and
+  `transport-http`/`connector` construct `ServerException` directly from the raw HTTP response
+  rather than receiving it from client-v2's own `Client`, so the 503/unknown-status reclassification
+  doesn't apply either. The changelog's `getBigDecimal` truncation fix also turned out irrelevant —
+  traced it to `NumberConverter`/`SerializerUtils`/`ValueConverters` (the typed-getter path), which
+  this driver's decode path never calls — but that investigation surfaced a real, pre-existing gap:
+  `Decimal128`/`Decimal256` (the `BigInteger`-backed wide tiers) had no test coverage at all.
+  Closed with `shouldDecodeLargeDecimalTypes` in `RealWorldTableAgainstRealClickHouseTest`. Only the
+  `benchmarks` module's `Client.Builder` baseline setup and 503-retry comparison need a look after
+  this bump — flagged, not yet done. Still open: Phase 8 P2 doc/policy items (TLS scope, minimum
+  ClickHouse version, multi-host contract, compound statements), a current-`main` demo integration
+  lane alongside the published-release lane, and a public vendor extension for per-statement
+  ClickHouse settings. Full detail:
   [roadmap-archive.md's Phase 8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ## Next (not started, plan written)
