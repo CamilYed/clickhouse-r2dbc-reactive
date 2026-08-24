@@ -46,17 +46,23 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   throughput/latency, this driver ahead on allocation) substantially enough that the methodology
   itself needs hardening before any further driver optimization. Planned 2026-08-23.
 
-## Later (deferred, blocked on Phase 11)
+## Later (deferred, was blocked on Phase 11)
 
-Further driver optimization work stays out of scope until [Phase 11](#phase-11--benchmark-methodology-hardening)'s
-resource-model measurement and root-cause profiling exist — see that phase for the current PR
-breakdown (PR2-PR5) and [roadmap-archive.md's deferred section](engineering/roadmap-archive.md#deferred--performancebenchmark-work-stays-out-of-scope-until-a-proper-benchmark-environment-exists)
-for older items not yet folded into it: a `RowDecodingScheduler` worker-count tuning pass and a JDK
-21 virtual-thread decoder-scheduler experiment. Response-compression parity and the
-`@OperationsPerInvocation(4096)` verification, both previously listed here, are resolved — see
-Phase 11's PR1. Also parked, same reason: [rewriting the decode path off client-v2's blocking
+[Phase 11](#phase-11--benchmark-methodology-hardening) is now closed (PR1-PR5 done 2026-08-24):
+resource-model measurement, root-cause profiling, and one evidence-driven optimization attempt all
+happened, and the optimization attempt (`decoderWorkerCount`) was evaluated and explicitly not
+adopted as a default — see PR5's entry for the full result. Further driver optimization is no
+longer blocked on methodology, but nothing new is queued up from Phase 11 itself beyond the two
+follow-ups PR5 parked: widening the decoder together with an explicit
+`transportPendingAcquireMaxCount` (not just the decoder alone), and reconsidering whether admission
+control belongs on `RowDecodingScheduler` at all. Older items not yet folded into this phase, still
+parked, same reasoning as before: a JDK 21 virtual-thread decoder-scheduler experiment (see
+[roadmap-archive.md's deferred section](engineering/roadmap-archive.md#deferred--performancebenchmark-work-stays-out-of-scope-until-a-proper-benchmark-environment-exists)),
+and [rewriting the decode path off client-v2's blocking
 reader](#experiment-idea-not-a-decision--rewrite-the-decode-path-off-client-v2s-blocking-reader) —
 an option flagged during PR3's `RowDecodingScheduler` fix, explicitly not decided or started.
+Response-compression parity and the `@OperationsPerInvocation(4096)` verification, both previously
+listed here, are resolved — see Phase 11's PR1.
 
 ## Explicitly not planned
 
@@ -136,7 +142,7 @@ staged rollout, JMH JSON as source of truth):
 
 ## Phase 11 — Benchmark methodology hardening
 
-**PR1 done, PR2-PR5 planned.** Triggered by the 2026-08-23 cloud-verified matched-pool result
+**PR1-PR5 done, phase closed 2026-08-24.** Triggered by the 2026-08-23 cloud-verified matched-pool result
 (client-v2 ahead ~5-9% on throughput and lower on p50-p99 latency, this driver ahead ~2.7-2.9x on
 allocation per query — replacing the earlier retracted "~4x" claim; see
 [results.md](docs/performance/results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23)).
@@ -313,17 +319,44 @@ each one gated on the previous, no driver optimization before PR5:
      MERGED` log line) since the p90-p99 comparison this class exists to make is exactly what that
      logging makes trustworthy at `forks=3`. Wired into `benchmark.yml`'s `workflow_dispatch`
      dropdown, manual-only (same reasoning as PR3's additions).
-   - **This is the "measure it" half of PR5, not yet the optimization decision.** If widening the
-     decoder measurably shrinks the p90-p99 gap without hurting throughput or p50, that is the
-     evidence needed to decide whether decoupling the decoder from the connection pool by default
-     (not just as an opt-in benchmark knob) is worth pursuing as a real driver change. If it
-     doesn't move the tail at all, decode-worker queueing is ruled out as the explanation just as
-     usefully, and a different hypothesis (still without JFR frame-level data) would need to be
-     found before trying again.
-   - Next: an actual `trusted` CI run of `DecoderWorkerCountThroughputBenchmark`, then — per this
-     PR's own gate — a driver-change decision made from that result, followed by an exact-same-
-     config trusted re-run of `PublicApiMatchedPoolThroughputBenchmark` to confirm any resulting
-     fix actually moved the number.
+   - **Trusted CI run (2026-08-24): decision made, default unchanged.** At `concurrency=8`
+     (matching `poolSize`), `widenedDecoder` did shrink the tail as hypothesized — p90 ~14.4k µs vs
+     `coupledDecoder`'s ~16.4k µs, p99 ~24.5k vs ~27.6k (roughly 10-12% better), throughput and
+     `gc.time` unchanged. But at `concurrency=32` and `concurrency=128`, `widenedDecoder` produced
+     **zero usable measurements** — every one of the 6 fork-runs (3 forks × 2 concurrency tiers)
+     failed every iteration with `reactor.netty...PoolAcquirePendingLimitException: Pending acquire
+     queue has reached its maximum size of 16`. `coupledDecoder` ran cleanly at the same
+     concurrencies, same `poolSize=8`, same everything except the decoder worker count.
+   - **Root cause, confirmed against the source, not just inferred from the failure:**
+     `RowBinaryDecoder.decode`'s `Mono.fromCallable(() -> newReader(source, compression))
+     .subscribeOn(reactorScheduler)` is where `source` — the transport response stream, and with it
+     the underlying HTTP connection acquisition + request send — actually gets subscribed to for the
+     first time. That means `RowDecodingScheduler`'s worker count isn't only a decode-throughput
+     knob: it's also, incidentally, the real admission-control gate on how many queries can even
+     start touching the connection pool at once. Coupling it 1:1 to `poolSize` (today's default)
+     keeps in-flight query admission at roughly `poolSize`, safely under Reactor Netty's own default
+     pending-acquire-queue limit (`2 × maxConnections` = 16 here). Widening it to 4x removes that
+     incidental protection — at `concurrency` 32/128 the driver now tries to admit far more
+     simultaneous queries than the connection pool's own admission control (8 connections + 16
+     queued = 24 max) can hold, and the 25th+ is rejected outright rather than just queued with
+     added latency.
+   - **Decision: do not change the default.** The tail-latency win at matched concurrency is real
+     but the failure mode at higher concurrency is categorically worse than the problem PR5 set out
+     to fix (a request denied outright vs. a slower p99). `decoderWorkerCount` stays as the
+     already-implemented opt-in escape hatch (see
+     [connection-pooling.md](docs/operations/connection-pooling.md#widening-the-decode-pool-beyond-the-connection-pool-decoderworkercount)),
+     with this finding documented there as the reason widening it requires also reconsidering
+     `transportPendingAcquireMaxCount`, not just the decoder — never a name/casual default change.
+     `RowDecodingScheduler`'s pool-coupling (PR3, task #273) turns out to be load-bearing for a
+     reason beyond the one originally documented (avoiding a hidden, smaller-than-the-pool
+     concurrency ceiling): it's also this driver's only real admission control today. Phase 11 PR5
+     is closed on this finding; no exact-same-config re-run of `PublicApiMatchedPoolThroughputBenchmark`
+     is warranted since no default changed.
+   - Parked as a genuinely separate follow-up, not part of PR5: whether widening the decoder
+     together with an explicit, deliberately-sized `transportPendingAcquireMaxCount` recovers the
+     concurrency=8 win at 32/128 too without the outright failures — and, more fundamentally,
+     whether admission control belongs on `RowDecodingScheduler` at all or should be its own
+     explicit mechanism, since today it's an accident of where `subscribeOn` happens to sit.
 
 ### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
 
