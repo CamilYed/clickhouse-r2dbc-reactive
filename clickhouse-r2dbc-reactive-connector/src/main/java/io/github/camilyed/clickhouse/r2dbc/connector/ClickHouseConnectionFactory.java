@@ -19,6 +19,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 /**
@@ -34,6 +36,8 @@ import reactor.core.publisher.Mono;
  */
 public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
+  private static final Logger LOG = LoggerFactory.getLogger(ClickHouseConnectionFactory.class);
+
   private static final int DEFAULT_HTTP_PORT = 8123;
 
   /**
@@ -46,6 +50,9 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   private static final int REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER = 2;
 
   private static final int REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR = 8;
+
+  /** How {@link #logEffectiveSettings} renders an option that was left unset. */
+  private static final String UNSET_MARKER = "unset";
 
   private final ClickHouseHttpTransport transport;
   private final RowDecodingScheduler decodingScheduler;
@@ -201,9 +208,16 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
     final Integer decoderWorkerCountOverride =
         intOption(options, ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT);
 
+    final int resolvedDecoderWorkerCount =
+        resolveDecoderWorkerCount(decoderWorkerCountOverride, transportMaxConnections);
     final RowDecodingScheduler decodingScheduler =
-        RowDecodingScheduler.withWorkerCount(
-            resolveDecoderWorkerCount(decoderWorkerCountOverride, transportMaxConnections));
+        RowDecodingScheduler.withWorkerCount(resolvedDecoderWorkerCount);
+
+    logEffectiveSettings(
+        resolvedDecoderWorkerCount,
+        transportMaxConnections,
+        transportPendingAcquireMaxCount,
+        transportPendingAcquireTimeout);
 
     return new ClickHouseConnectionFactory(
         new ClickHouseHttpTransport(baseUrl, transportOptions),
@@ -235,6 +249,41 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
     return Math.max(
             Runtime.getRuntime().availableProcessors(), REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR)
         * REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER;
+  }
+
+  /**
+   * Logs the values that actually govern this factory's concurrency behavior — every one of them
+   * independently tunable, none of them visible to a caller who only set {@code
+   * transportMaxConnections} (or nothing at all). Exists because Phase 11 PR5's trusted-run finding
+   * (see the root {@code ROADMAP.md}) showed these four numbers interacting in a way that isn't
+   * obvious from any single option's own Javadoc: {@code decoderWorkerCount} isn't only a decode-
+   * throughput knob, it's this driver's actual admission-control gate (see {@link
+   * ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT}'s Javadoc), and widening it without
+   * also widening {@code transportPendingAcquireMaxCount} trades a slow response for an outright
+   * rejected one. A caller debugging exactly that failure shouldn't need to already know this
+   * investigation to find the numbers in play — they're one log line away at factory construction.
+   */
+  private static void logEffectiveSettings(
+      final int resolvedDecoderWorkerCount,
+      final @Nullable Integer transportMaxConnections,
+      final @Nullable Integer transportPendingAcquireMaxCount,
+      final @Nullable Duration transportPendingAcquireTimeout) {
+    LOG.info(
+        "ClickHouseConnectionFactory effective settings: decoderWorkerCount={},"
+            + " transportMaxConnections={}, transportPendingAcquireMaxCount={},"
+            + " transportPendingAcquireTimeout={} (\"{}\" means the option was left unset and falls"
+            + " back to Reactor Netty's own connection-pool default - not shown here, since Reactor"
+            + " Netty doesn't expose what it actually resolved an unset value to; see"
+            + " docs/operations/connection-pooling.md)",
+        resolvedDecoderWorkerCount,
+        describeOrUnset(transportMaxConnections),
+        describeOrUnset(transportPendingAcquireMaxCount),
+        describeOrUnset(transportPendingAcquireTimeout),
+        UNSET_MARKER);
+  }
+
+  private static String describeOrUnset(final @Nullable Object value) {
+    return value == null ? UNSET_MARKER : String.valueOf(value);
   }
 
   // See intOption's comment above - same reasoning, for DriverObservationListener-typed options.
