@@ -53,6 +53,16 @@ run against `/benchmark/{backend}/{scenario}` - see `run-ab.sh`'s own header for
 under real overload), unlike the open-loop `k6`/`wrk2` methodology ROADMAP.md's Phase 12 PR2 is
 for.
 
+To compare both backends across all three scenarios at once instead of reading six separate raw
+`ab` reports, use `scripts/ab-summary.sh`, which runs `run-ab.sh` for every backend x scenario
+combination and prints one table (RPS, mean/p50/p95/p99/max latency, failed requests):
+
+```bash
+scripts/ab-summary.sh              # defaults: 2000 requests, concurrency 10
+scripts/ab-summary.sh 20000 100    # heavier run
+KEEP_LOGS=1 scripts/ab-summary.sh  # keep each run's full ab output for inspection
+```
+
 Configuration (env vars, all optional - see `application.yml` for defaults):
 
 | Variable | Purpose |
