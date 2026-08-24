@@ -75,13 +75,19 @@ public class TrivialQueryBenchmark {
    * production decode path (off {@link #ourTransport}'s Netty event loop, via {@link
    * #decodingScheduler}), not the scheduler-free {@link RowBinaryDecoder#decodeRows} test/benchmark
    * shortcut, since this benchmark's source is a live network response, not an in-memory one.
+   * {@link ResponseCompression#LZ4} here, not {@code NONE} — {@link #ourTransport} is built via
+   * {@link ClickHouseHttpTransport#ClickHouseHttpTransport(String, String, String)}, which resolves
+   * {@link io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions#defaults()}'s own
+   * default of {@link ResponseCompression#LZ4} (sends {@code compress=1}); telling the decoder
+   * {@code NONE} while the transport actually requests LZ4 feeds it compressed bytes it can't
+   * parse.
    */
   @Benchmark
   public void thisDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(SELECT_1_SQL)).asByteArray().map(ByteBuffer::wrap);
     final DecodedRow row =
-        RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)
+        RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.LZ4)
             .flatMapMany(DecodedResult::rows)
             .blockFirst(Duration.ofSeconds(10));
     blackhole.consume(row);

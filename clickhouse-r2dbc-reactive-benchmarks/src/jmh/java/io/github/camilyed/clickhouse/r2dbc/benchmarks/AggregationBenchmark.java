@@ -119,7 +119,9 @@ public class AggregationBenchmark {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(AGGREGATION_SQL)).asByteArray().map(ByteBuffer::wrap);
     final long rowCount =
-        RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)
+        // LZ4, not NONE - ourTransport resolves TransportOptions.defaults()'s own LZ4 default
+        // (sends compress=1); NONE here would feed the decoder compressed bytes it can't parse.
+        RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.LZ4)
             .flatMapMany(DecodedResult::rows)
             .doOnNext(blackhole::consume)
             .count()
