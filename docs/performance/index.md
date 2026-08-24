@@ -5,7 +5,14 @@ This section answers three questions: what does each benchmark actually measure
 how should that change the way you use this driver (below). It does not narrate the history of how
 the benchmark suite got here — see `git log -- docs/PERFORMANCE.md` (the file this section was
 split from) if that archaeology is ever needed. To reproduce these numbers yourself, see
-[running-benchmarks.md](running-benchmarks.md).
+[running-benchmarks.md](running-benchmarks.md). Retracted/fully-superseded result sections live in
+[archive.md](archive.md), not deleted, not mixed in with current numbers.
+
+> [!TIP]
+> **New here? Start with [results.md's "Full mega sweep" section](results.md#full-mega-sweep--every-scenario-one-run-2026-08-24)** —
+> every benchmark scenario this project runs, in one table, from a single 2026-08-24 cloud run.
+> Every other section on that page is either the deep-dive behind one of those rows or an earlier
+> run being superseded/reconfirmed by it.
 
 > [!IMPORTANT]
 > **Read this before any table on these pages.** Every JMH run prints this warning, and it applies
