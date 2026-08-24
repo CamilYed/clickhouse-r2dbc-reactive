@@ -134,6 +134,23 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
   public static final Option<Integer> DECODER_WORKER_COUNT = Option.valueOf("decoderWorkerCount");
 
   /**
+   * Runs the decode-worker pool on JDK 21 virtual threads (one per decode task, capped at the same
+   * worker count {@link #DECODER_WORKER_COUNT}/{@link #TRANSPORT_MAX_CONNECTIONS} would otherwise
+   * resolve to) instead of a bounded platform-thread pool — see {@code
+   * RowDecodingScheduler#virtualThreads(int)}'s Javadoc for the full motivation and pinning-risk
+   * analysis. Defaults to {@code false} (the bounded platform-thread pool), matching this driver's
+   * long-standing default.
+   *
+   * <p>An experimental, opt-in escape hatch, not a replacement for the default: JFR evidence
+   * (ROADMAP.md, Phase 11 PR5 follow-up, 2026-08-24) showed decode is I/O-wait-dominated, which
+   * motivates trying virtual threads for the resource cost of parked platform threads — but this
+   * does not raise the throughput ceiling, still capped by the physical connection pool, and has
+   * not yet been validated by a trusted benchmark run the way {@link #DECODER_WORKER_COUNT} has.
+   */
+  public static final Option<Boolean> DECODER_USE_VIRTUAL_THREADS =
+      Option.valueOf("decoderUseVirtualThreads");
+
+  /**
    * The maximum number of acquisitions allowed to queue once {@link #TRANSPORT_MAX_CONNECTIONS} is
    * reached, before further acquisitions are rejected outright rather than queued. Defaults to
    * Reactor Netty's own default when not set.

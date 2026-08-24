@@ -113,7 +113,10 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * #resolveDecoderWorkerCount}) — the decoder is never a smaller, hidden concurrency ceiling
    * underneath the pool this option configures, unless {@link
    * ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT} explicitly overrides it — see that
-   * option's own Javadoc for why a caller would ever set it independently of the pool size.
+   * option's own Javadoc for why a caller would ever set it independently of the pool size. {@link
+   * ClickHouseConnectionFactoryProvider#DECODER_USE_VIRTUAL_THREADS} (default {@code false})
+   * independently selects which kind of thread the decoder pool is built from — see that option's
+   * Javadoc.
    *
    * <p>{@link ClickHouseConnectionFactoryProvider#RESPONSE_COMPRESSION} configures {@link
    * TransportOptions#responseCompression()} — defaults to {@code true} ({@link
@@ -210,11 +213,16 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
     final int resolvedDecoderWorkerCount =
         resolveDecoderWorkerCount(decoderWorkerCountOverride, transportMaxConnections);
+    final Boolean decoderUseVirtualThreads =
+        booleanOption(options, ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS);
     final RowDecodingScheduler decodingScheduler =
-        RowDecodingScheduler.withWorkerCount(resolvedDecoderWorkerCount);
+        Boolean.TRUE.equals(decoderUseVirtualThreads)
+            ? RowDecodingScheduler.virtualThreads(resolvedDecoderWorkerCount)
+            : RowDecodingScheduler.withWorkerCount(resolvedDecoderWorkerCount);
 
     logEffectiveSettings(
         resolvedDecoderWorkerCount,
+        decodingScheduler.isVirtualThreadBacked(),
         transportMaxConnections,
         transportPendingAcquireMaxCount,
         transportPendingAcquireTimeout);
@@ -265,17 +273,19 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    */
   private static void logEffectiveSettings(
       final int resolvedDecoderWorkerCount,
+      final boolean decoderUsesVirtualThreads,
       final @Nullable Integer transportMaxConnections,
       final @Nullable Integer transportPendingAcquireMaxCount,
       final @Nullable Duration transportPendingAcquireTimeout) {
     LOG.info(
         "ClickHouseConnectionFactory effective settings: decoderWorkerCount={},"
-            + " transportMaxConnections={}, transportPendingAcquireMaxCount={},"
-            + " transportPendingAcquireTimeout={} (\"{}\" means the option was left unset and falls"
-            + " back to Reactor Netty's own connection-pool default - not shown here, since Reactor"
-            + " Netty doesn't expose what it actually resolved an unset value to; see"
-            + " docs/operations/connection-pooling.md)",
+            + " decoderUsesVirtualThreads={}, transportMaxConnections={},"
+            + " transportPendingAcquireMaxCount={}, transportPendingAcquireTimeout={} (\"{}\" means"
+            + " the option was left unset and falls back to Reactor Netty's own connection-pool"
+            + " default - not shown here, since Reactor Netty doesn't expose what it actually"
+            + " resolved an unset value to; see docs/operations/connection-pooling.md)",
         resolvedDecoderWorkerCount,
+        decoderUsesVirtualThreads,
         describeOrUnset(transportMaxConnections),
         describeOrUnset(transportPendingAcquireMaxCount),
         describeOrUnset(transportPendingAcquireTimeout),
@@ -397,6 +407,15 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    */
   int decoderWorkerCount() {
     return decodingScheduler.workerCount();
+  }
+
+  /**
+   * Whether {@link #decodingScheduler} was built by {@link
+   * ClickHouseConnectionFactoryProvider#DECODER_USE_VIRTUAL_THREADS} — package-private, test-only
+   * window, same reasoning as {@link #decoderWorkerCount()}.
+   */
+  boolean decoderUsesVirtualThreads() {
+    return decodingScheduler.isVirtualThreadBacked();
   }
 
   @Override

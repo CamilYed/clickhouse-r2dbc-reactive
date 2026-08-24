@@ -94,4 +94,13 @@ jmh {
     if (project.hasProperty("jmh.warmupIterations")) {
         warmupIterations.set((project.property("jmh.warmupIterations") as String).toInt())
     }
+    // -Pjmh.jvmArgsAppend=-Djdk.tracePinnedThreads=full is how VirtualThreadDecoderThroughputBenchmark's
+    // trusted CI run catches virtual-thread pinning empirically (see that class's Javadoc and
+    // RowDecodingScheduler#virtualThreads's own pinning-risk analysis) - the forked JMH JVM prints a
+    // full stack trace to stdout every time a virtual thread pins its carrier while blocked inside a
+    // `synchronized` block, which raw-stdout.log then captures alongside everything else. Comma-split
+    // like `profilers` above, in case more than one JVM arg is ever needed at once.
+    if (project.hasProperty("jmh.jvmArgsAppend")) {
+        jvmArgsAppend.set((project.property("jmh.jvmArgsAppend") as String).split(","))
+    }
 }

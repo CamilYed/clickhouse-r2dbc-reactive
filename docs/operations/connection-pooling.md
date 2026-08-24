@@ -126,14 +126,44 @@ concurrency above the pool size, exposes the pending-acquire-queue limit as a ha
 of just added latency. **The driver's default stays coupled because of this** — see the ROADMAP.md
 Phase 11 PR5 entry for the full result.
 
-**Follow-up in progress:** `DecoderAndPendingAcquireWidenedThroughputBenchmark` widens
-`decoderWorkerCount` and `transportPendingAcquireMaxCount` together (both deliberately generous,
-not minimally tuned) to test whether that recovers the `concurrency=8` win at 32/128 too, without
-the failures widening the decoder alone produced — working theory being that today's shape is two
-queues in series (the decoder's own queue, then Reactor Netty's pending-acquire queue), and tandem
-queueing compounds tail latency beyond what either queue alone would. Code is built (see
-ROADMAP.md's Phase 11 PR5 entry for the class name and exact values); not yet run on trusted CI, so
-not yet a recommendation either way.
+**Follow-up, closed (trusted CI run, 2026-08-24):** `DecoderAndPendingAcquireWidenedThroughputBenchmark`
+widened `decoderWorkerCount` and `transportPendingAcquireMaxCount` together to test whether that
+recovers the `concurrency=8` win at 32/128 too, without the failures widening the decoder alone
+produced. It did prevent the failures — zero `PoolAcquirePendingLimitException`s this time — but
+the tail-latency win did **not** carry over: worse than the coupled default at `concurrency=128` on
+every percentile. JFR (`jdk.ThreadPark`) explained why: decode is I/O-wait-dominated, not
+CPU-bound — a decoder-scheduler thread spends the overwhelming majority of its time blocked reading
+network bytes, not doing decode work (~31 of 32 widened workers parked at any given moment at
+`concurrency=32`/`128`). The original "two queues in series, widening collapses them into one"
+framing was also arithmetically wrong: with `decoderWorkerCount` fixed at 32, at most ~32 requests
+can ever be admitted to the transport layer at once regardless of `concurrency` — the decoder-level
+queue was never actually removed, just the smaller pending-acquire queue's overflow was prevented.
+**Decision (confirmed twice): the driver's default stays coupled.** Widening either or both remains
+an opt-in escape hatch, not a default change — see the ROADMAP.md Phase 11 PR5 entry for the full
+result and the independently JFR-profiled analysis it's cross-checked against.
+
+### An alternative fix for the same finding: `decoderUseVirtualThreads`
+
+The JFR finding above — decode is I/O-wait-dominated — motivates a different fix than widening the
+platform-thread pool further: run decode tasks on JDK 21 virtual threads instead, which park/unpark
+cheaply and don't hold a platform thread while blocked. `decoderUseVirtualThreads`
+(`ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS`) is an experimental, opt-in
+escape hatch that does exactly this — `RowDecodingScheduler.virtualThreads(maxConcurrency)` caps
+concurrent decode tasks at the same worker count the platform-thread scheduler would use (still
+coupled to `decoderWorkerCount`/`transportMaxConnections` the same way), just on virtual instead of
+platform threads. Defaults to `false` (today's platform-thread pool), unchanged.
+
+This does **not** raise the throughput ceiling — the physical connection pool remains the hard cap
+regardless of decoder thread type — it targets the resource cost of parked platform threads
+(`transportMaxConnections`/coupled decoder means one platform thread held, mostly idle, per
+in-flight query). Checked against client-v2's actual decode-path source (`BinaryStreamReader`/
+`RowBinaryWithNamesAndTypesFormatReader`, 2026-08-24) for virtual-thread pinning risk: the only
+`synchronized` method on the decode path, `BinaryStreamReader.ArrayValue#asList()`, is a pure
+in-memory list-view cache that never blocks on I/O while holding the monitor, and the actual
+blocking reads run directly against the caller-supplied stream with no `BufferedInputStream`/
+`DataInputStream` wrapping in between — so this driver's decode path is Loom-friendly today. Not
+yet validated by a trusted benchmark run (`VirtualThreadDecoderThroughputBenchmark`, run with
+`-Djdk.tracePinnedThreads=full` to catch pinning empirically); see ROADMAP.md's Phase 11 entry.
 
 ### Is it worth setting `maxConnections` yourself?
 
