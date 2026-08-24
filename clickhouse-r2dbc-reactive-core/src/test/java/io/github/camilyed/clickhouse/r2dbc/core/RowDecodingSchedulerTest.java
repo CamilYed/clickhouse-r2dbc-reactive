@@ -7,6 +7,7 @@ import static org.awaitility.Awaitility.await;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
@@ -239,6 +240,94 @@ class RowDecodingSchedulerTest {
       assertThat(maxObservedConcurrency.get()).isEqualTo(maxConcurrency);
     } finally {
       releaseGate.countDown();
+      scheduler.dispose();
+    }
+  }
+
+  @Test
+  void shouldNeverRunACommandThatWasCancelledWhileWaitingForAnAdmissionPermit() {
+    // given - only one admission permit; task A holds it and blocks, task B is scheduled behind it
+    // and then cancelled before task A ever releases the permit task B was waiting for
+    final RowDecodingScheduler scheduler = RowDecodingScheduler.virtualThreads(1);
+    final CountDownLatch taskAStarted = new CountDownLatch(1);
+    final CountDownLatch releaseTaskA = new CountDownLatch(1);
+    final AtomicBoolean taskBRan = new AtomicBoolean(false);
+
+    try {
+      // when
+      scheduler
+          .asReactorScheduler()
+          .schedule(
+              () -> {
+                taskAStarted.countDown();
+                awaitUninterruptibly(releaseTaskA);
+              });
+      await().atMost(Duration.ofSeconds(5)).until(() -> taskAStarted.getCount() == 0);
+      scheduler.asReactorScheduler().schedule(() -> taskBRan.set(true)).dispose();
+      releaseTaskA.countDown();
+
+      // then - task B must never run, even once its permit later becomes available
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> !taskBRan.get());
+    } finally {
+      releaseTaskA.countDown();
+      scheduler.dispose();
+    }
+  }
+
+  @Test
+  void shouldTerminateAWaitingTaskWhenTheSchedulerIsDisposedBeforeAPermitFreesUp() {
+    // given - only one admission permit; task A holds it and blocks forever (never releases
+    // voluntarily), task B is scheduled behind it and never gets a chance to run before the
+    // scheduler itself is disposed
+    final RowDecodingScheduler scheduler = RowDecodingScheduler.virtualThreads(1);
+    final CountDownLatch taskAStarted = new CountDownLatch(1);
+    final AtomicBoolean taskBRan = new AtomicBoolean(false);
+
+    try {
+      // when
+      scheduler
+          .asReactorScheduler()
+          .schedule(
+              () -> {
+                taskAStarted.countDown();
+                awaitUninterruptibly(new CountDownLatch(1));
+              });
+      await().atMost(Duration.ofSeconds(5)).until(() -> taskAStarted.getCount() == 0);
+      scheduler.asReactorScheduler().schedule(() -> taskBRan.set(true));
+      scheduler.dispose();
+
+      // then - task B never runs, and disposal itself doesn't hang waiting on task A or task B
+      await()
+          .during(Duration.ofMillis(300))
+          .atMost(Duration.ofSeconds(5))
+          .until(() -> !taskBRan.get());
+    } finally {
+      scheduler.dispose();
+    }
+  }
+
+  @Test
+  void shouldStillReleaseTheAdmissionPermitWhenACommandThrows() {
+    // given - only one admission permit; task A holds it and throws instead of completing normally
+    final RowDecodingScheduler scheduler = RowDecodingScheduler.virtualThreads(1);
+    final AtomicBoolean taskBRan = new AtomicBoolean(false);
+
+    try {
+      // when
+      scheduler
+          .asReactorScheduler()
+          .schedule(
+              () -> {
+                throw new IllegalStateException("boom");
+              });
+      scheduler.asReactorScheduler().schedule(() -> taskBRan.set(true));
+
+      // then - the permit still gets released, so task B (submitted after) can still run
+      await().atMost(Duration.ofSeconds(5)).untilTrue(taskBRan);
+    } finally {
       scheduler.dispose();
     }
   }

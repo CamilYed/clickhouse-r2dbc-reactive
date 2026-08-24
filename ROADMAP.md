@@ -498,6 +498,46 @@ each one gated on the previous, no driver optimization before PR5:
        class is selected (either profile) — a pinned virtual thread prints its full stack to
        `raw-stdout.log`, so pinning would show up directly in the run's own artifact rather than
        only as an unexplained latency regression.
+     - **Correctness fix, 2026-08-24, caught before any benchmark run:** an independent review
+       (external LLM-generated implementation notes, cross-checked against the actual code before
+       acting on them) flagged that `AdmissionGatedExecutorService.execute()` originally used
+       `admission.acquireUninterruptibly()` — a task still waiting for a permit when its Reactor
+       subscription is cancelled would ignore that cancellation and could still run once a permit
+       later freed up, since `acquireUninterruptibly()` swallows interrupts entirely. Cancellation
+       propagation is a property this driver treats as load-bearing everywhere else (see
+       `RowBinaryDecoder.decode`'s own cancellation test), so a decoder-scheduler variant that could
+       silently ignore it would have been a real regression, not a cosmetic one. Fixed by switching
+       to interruptible `Semaphore#acquire()`: a task interrupted while waiting for a permit now
+       restores the interrupt flag and returns without ever calling `command.run()`. Since
+       `ExecutorService#shutdownNow()` (what `dispose()` calls on the owned executor) interrupts
+       every running/queued task, this is also what makes `dispose()` actually terminate virtual
+       threads still parked waiting for a permit, rather than leaving them stuck.
+     - Three new black-box tests in `RowDecodingSchedulerTest`, each exercising the fix through the
+       real `Scheduler.schedule(Runnable)`/`Disposable` API (not the private executor directly):
+       `shouldNeverRunACommandThatWasCancelledWhileWaitingForAnAdmissionPermit` (a disposed,
+       still-waiting task must never run even once its permit frees up),
+       `shouldTerminateAWaitingTaskWhenTheSchedulerIsDisposedBeforeAPermitFreesUp` (`dispose()` must
+       not leave a waiting task stuck forever), and
+       `shouldStillReleaseTheAdmissionPermitWhenACommandThrows` (a failing task must never leak
+       admission capacity). All three rely on `Semaphore`'s own documented interrupt-priority
+       behavior (an interrupted waiter never receives a permit, regardless of a concurrent release)
+       rather than on any additional synchronization this class would otherwise need to add just to
+       make the tests deterministic.
+     - New production-path tests in `RowBinaryDecoderTest`, run through the real decode chain
+       (`RowBinaryDecoder.decode` → `RowDecodingScheduler.virtualThreads` → `FluxInputStreamBridge` →
+       client-v2's reader) rather than only synthetic `Runnable` submission:
+       `shouldDecodeEveryRowInOrderThroughAVirtualThreadBackedSchedulerFromFragmentedChunks` (wire
+       bytes delivered one byte at a time, proving the bridge's block/resume cycle works correctly
+       across many fragments on a virtual thread, not just a single chunk) and
+       `shouldReadEveryRowOnAVirtualThreadWhenUsingTheVirtualThreadBackedScheduler` (asserts the
+       thread name observed while reading a row actually starts with the virtual-thread prefix, not
+       just that decoding succeeded).
+     - `RowDecodingScheduler.virtualThreads(int)` and `AdmissionGatedExecutorService`'s own Javadoc
+       corrected to say precisely what's bounded: *active* decode concurrency, not the number of
+       virtual threads created — a caller submitting far more tasks than `maxConcurrency` at once
+       gets that many additional parked (not running) virtual threads, which is cheap but not
+       zero-cost, and is a materially different queueing shape than
+       `Schedulers.newBoundedElastic(workerCount, queuedTaskCapacity, ...)`'s bounded queue.
      - **Not yet run on trusted CI.** The static pinning-risk review above is source analysis, not a
        measurement — throughput, every latency percentile, and any `tracePinnedThreads` output still
        need a real trusted run before this is anything more than "plausible, not yet contradicted."

@@ -114,7 +114,12 @@ public final class RowDecodingScheduler {
    * RowBinaryDecoder#decode}'s Javadoc for why that contract incidentally doubles as this driver's
    * real admission-control gate on the connection pool, and why {@code maxConcurrency} must still
    * be sized the same way {@code workerCount} is (typically the resolved {@code
-   * transportMaxConnections}), not left unbounded.
+   * transportMaxConnections}), not left unbounded. Precise wording matters: this bounds how many
+   * decode tasks may actively run {@code command} at once, not how many virtual threads this
+   * scheduler ever creates — a caller that submits far more tasks than {@code maxConcurrency} at
+   * once gets that many additional parked (not running) virtual threads, cheap but not zero-cost.
+   * See {@link AdmissionGatedExecutorService}'s own Javadoc for the exact mechanism, including how
+   * cancellation/interruption of a still-waiting task is handled.
    *
    * <p>Motivated by JFR evidence (ROADMAP.md, Phase 11 PR5 follow-up, 2026-08-24) that decode is
    * I/O-wait-dominated — a worker spends most of its time blocked reading network bytes, not doing
@@ -201,12 +206,24 @@ public final class RowDecodingScheduler {
   }
 
   /**
-   * Runs every submitted task on its own virtual thread, but only lets {@code maxConcurrency} of
-   * them actually run at once — the rest park on a {@link Semaphore} inside their own (cheap)
+   * Runs every submitted task on its own virtual thread — the number of virtual threads this
+   * creates is <b>not</b> itself bounded — but only lets {@code maxConcurrency} of them actually
+   * run {@code command} at once — the rest park on a {@link Semaphore} inside their own (cheap)
    * virtual thread instead of occupying a platform thread while queued. This is the mechanism that
    * lets {@link #virtualThreads(int)} preserve the same "at most N decode tasks in flight"
    * admission-control contract {@link #withWorkerCount(int)} provides via a bounded platform-thread
    * pool — see that method's Javadoc for why that contract matters beyond decode throughput itself.
+   * Precise wording matters here: this is a virtual-thread-per-task executor with bounded
+   * <em>active</em> concurrency, not a bounded pool of virtual threads — a caller that submits far
+   * more tasks than {@code maxConcurrency} at once gets that many additional parked virtual
+   * threads, not a rejection or an unbounded platform-thread queue.
+   *
+   * <p>Waiting on the admission permit is interruptible ({@link Semaphore#acquire()}, not {@link
+   * Semaphore#acquireUninterruptibly()}): a task cancelled or interrupted while still waiting for a
+   * permit must never run {@code command} once one later frees up. {@link
+   * ExecutorService#shutdownNow()} interrupts every running/queued task on the delegate executor,
+   * which is exactly how {@link #dispose()} unblocks every virtual thread parked here instead of
+   * leaving it stuck forever.
    */
   private static final class AdmissionGatedExecutorService extends AbstractExecutorService {
 
@@ -223,7 +240,12 @@ public final class RowDecodingScheduler {
     public void execute(final Runnable command) {
       delegate.execute(
           () -> {
-            admission.acquireUninterruptibly();
+            try {
+              admission.acquire();
+            } catch (final InterruptedException e) {
+              Thread.currentThread().interrupt();
+              return;
+            }
             try {
               command.run();
             } finally {

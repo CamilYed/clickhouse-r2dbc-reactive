@@ -113,6 +113,63 @@ class RowBinaryDecoderTest {
   }
 
   @Test
+  void shouldDecodeEveryRowInOrderThroughAVirtualThreadBackedSchedulerFromFragmentedChunks() {
+    // given - the production decode path (RowBinaryDecoder.decode -> RowDecodingScheduler ->
+    // FluxInputStreamBridge -> client-v2's reader) exercised through the virtual-thread scheduler
+    // variant specifically, not just the platform-thread default every other test in this class
+    // uses; the wire bytes arrive one byte at a time rather than as a single chunk, so the bridge
+    // has to actually block/resume across many fragments, not just pass one buffer straight through
+    final byte[] wireBytes = RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes();
+    final Flux<ByteBuffer> fragmentedSource =
+        Flux.range(0, wireBytes.length).map(i -> ByteBuffer.wrap(new byte[] {wireBytes[i]}));
+    final RowDecodingScheduler virtualThreadScheduler = RowDecodingScheduler.virtualThreads(2);
+
+    try {
+      // when
+      final DecodedResult result =
+          RowBinaryDecoder.decode(
+                  fragmentedSource, virtualThreadScheduler, ResponseCompression.NONE)
+              .block(Duration.ofSeconds(5));
+      final List<Short> rowValues =
+          result
+              .rows()
+              .map(row -> (Short) row.valueAt(0))
+              .collectList()
+              .block(Duration.ofSeconds(5));
+
+      // then
+      assertThat(rowValues).containsExactly((short) 1, (short) 2);
+    } finally {
+      virtualThreadScheduler.dispose();
+    }
+  }
+
+  @Test
+  void shouldReadEveryRowOnAVirtualThreadWhenUsingTheVirtualThreadBackedScheduler() {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.selectOneRowBinaryWithNamesAndTypes()));
+    final RowDecodingScheduler virtualThreadScheduler = RowDecodingScheduler.virtualThreads(2);
+
+    try {
+      // when
+      final DecodedResult result =
+          RowBinaryDecoder.decode(source, virtualThreadScheduler, ResponseCompression.NONE)
+              .block(Duration.ofSeconds(5));
+      final String rowThreadName =
+          result
+              .rows()
+              .map(row -> Thread.currentThread().getName())
+              .blockFirst(Duration.ofSeconds(5));
+
+      // then
+      assertThat(rowThreadName).startsWith("clickhouse-r2dbc-decoder-vt-");
+    } finally {
+      virtualThreadScheduler.dispose();
+    }
+  }
+
+  @Test
   void shouldCancelTheUnderlyingSourceWhenTheDecodedRowsAreCancelledBeforeCompletion() {
     // given - the source never completes on its own (a Flux.never() tail after both rows), so
     // cancelling downstream after the first row tests cancellation propagation through
