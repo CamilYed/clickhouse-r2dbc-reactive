@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.macrobench.r2dbc;
 
 import io.github.camilyed.clickhouse.r2dbc.macrobench.backend.Backend;
 import io.github.camilyed.clickhouse.r2dbc.macrobench.backend.BenchmarkQueryBackend;
+import io.github.camilyed.clickhouse.r2dbc.macrobench.config.BenchmarkProperties;
 import io.github.camilyed.clickhouse.r2dbc.macrobench.config.ConditionalOnBackendEnabled;
 import io.r2dbc.spi.ConnectionFactories;
 import io.r2dbc.spi.ConnectionFactory;
@@ -22,16 +23,23 @@ import org.springframework.r2dbc.core.binding.BindMarkersFactory;
  * is explicit that the real pool here is already this driver's own {@code ClickHouseHttpTransport}
  * Reactor Netty {@code ConnectionProvider} - an outer logical pool would add a queue on top of it
  * that this project's own docs already say most users don't need, contaminating the primary
- * r2dbc-vs-client-v2 comparison this module exists for.
+ * r2dbc-vs-client-v2 comparison this module exists for. Pool pinned to {@link
+ * BenchmarkProperties#poolSize()} (default 8) via {@code transportMaxConnections} unless the caller
+ * already set it explicitly through {@code spring.r2dbc.properties.*} - see that record's Javadoc
+ * for why an unpinned comparison is not trustworthy.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(R2dbcProperties.class)
 class R2dbcBackendConfiguration {
 
-  private final R2dbcProperties properties;
+  private static final String TRANSPORT_MAX_CONNECTIONS_OPTION = "transportMaxConnections";
 
-  R2dbcBackendConfiguration(final R2dbcProperties properties) {
+  private final R2dbcProperties properties;
+  private final BenchmarkProperties benchmark;
+
+  R2dbcBackendConfiguration(final R2dbcProperties properties, final BenchmarkProperties benchmark) {
     this.properties = properties;
+    this.benchmark = benchmark;
   }
 
   @Bean(destroyMethod = "dispose")
@@ -48,6 +56,10 @@ class R2dbcBackendConfiguration {
     properties
         .getProperties()
         .forEach((name, value) -> builder.option(Option.valueOf(name), value));
+    if (!properties.getProperties().containsKey(TRANSPORT_MAX_CONNECTIONS_OPTION)) {
+      builder.option(
+          Option.valueOf(TRANSPORT_MAX_CONNECTIONS_OPTION), String.valueOf(benchmark.poolSize()));
+    }
     return ConnectionFactories.get(builder.build());
   }
 

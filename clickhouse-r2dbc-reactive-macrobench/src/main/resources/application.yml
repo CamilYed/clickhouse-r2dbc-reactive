@@ -16,6 +16,10 @@ benchmark:
   # mentions a ~5M-row fact table for the analytics scenario).
   point-rows: ${MACROBENCH_POINT_ROWS:100000}
   analytics-rows: ${MACROBENCH_ANALYTICS_ROWS:100000}
+  # Physical connection pool size both backends are pinned to (r2dbc via transportMaxConnections,
+  # client-v2 via setMaxConnections) - see BenchmarkProperties' Javadoc for why this defaults to a
+  # fixed, equal value instead of leaving each backend at its own (different) built-in default.
+  pool-size: ${MACROBENCH_POOL_SIZE:8}
   clickhouse:
     # Bare HTTP endpoint, not an r2dbc:clickhouse://... URL - see ClickHouseEndpointProperties'
     # own Javadoc for why this is a separate config surface from spring.r2dbc.url above. Used by

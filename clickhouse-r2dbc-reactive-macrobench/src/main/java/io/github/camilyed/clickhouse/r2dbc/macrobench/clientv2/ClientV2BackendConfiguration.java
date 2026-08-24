@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.macrobench.clientv2;
 import com.clickhouse.client.api.Client;
 import io.github.camilyed.clickhouse.r2dbc.macrobench.backend.Backend;
 import io.github.camilyed.clickhouse.r2dbc.macrobench.backend.BenchmarkQueryBackend;
+import io.github.camilyed.clickhouse.r2dbc.macrobench.config.BenchmarkProperties;
 import io.github.camilyed.clickhouse.r2dbc.macrobench.config.ClickHouseEndpointProperties;
 import io.github.camilyed.clickhouse.r2dbc.macrobench.config.ConditionalOnBackendEnabled;
 import org.springframework.context.annotation.Bean;
@@ -13,14 +14,17 @@ import org.springframework.context.annotation.Configuration;
  * {@code benchmark.backend} is {@code client-v2} or {@code dual} (see {@link
  * ConditionalOnBackendEnabled}). {@code useAsyncRequests(true)} is not optional here - see {@link
  * ClientV2BenchmarkQueryBackend}'s Javadoc, same fairness reasoning already proven in {@code
- * clickhouse-r2dbc-reactive-benchmarks}' {@code ClientV2PointQueryClient}.
+ * clickhouse-r2dbc-reactive-benchmarks}' {@code ClientV2PointQueryClient}. Pool pinned to {@link
+ * BenchmarkProperties#poolSize()} (default 8) - see that record's Javadoc for why an unpinned
+ * comparison is not trustworthy.
  */
 @Configuration(proxyBeanMethods = false)
 class ClientV2BackendConfiguration {
 
   @Bean(destroyMethod = "close")
   @ConditionalOnBackendEnabled(Backend.CLIENT_V2)
-  Client clientV2Client(final ClickHouseEndpointProperties endpoint) {
+  Client clientV2Client(
+      final ClickHouseEndpointProperties endpoint, final BenchmarkProperties benchmark) {
     requireHttpUrl(endpoint);
     return new Client.Builder()
         .addEndpoint(endpoint.httpUrl())
@@ -28,6 +32,8 @@ class ClientV2BackendConfiguration {
         .setPassword(endpoint.password())
         .setDefaultDatabase("default")
         .useAsyncRequests(true)
+        .enableConnectionPool(true)
+        .setMaxConnections(benchmark.poolSize())
         .build();
   }
 

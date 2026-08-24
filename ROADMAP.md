@@ -749,6 +749,25 @@ distribution in this environment) — needs `./gradlew :clickhouse-r2dbc-reactiv
 :clickhouse-r2dbc-reactive-macrobench:test` before merging, same disclosed limitation as the
 9-benchmark-class dispose fix above.
 
+**First real local run + a fairness bug it surfaced (2026-08-24).** The user ran
+`scripts/ab-summary.sh stress` (50000 requests, concurrency 200, warmup 5000) locally against both
+backends — the first actual execution of this module, not just a source review. Numbers are in
+`clickhouse-r2dbc-reactive-macrobench/README.md`'s "Local results" section. That first run exposed
+exactly the fairness gap this Phase's own "8 physical connections both sides" design goal (above)
+was meant to prevent: neither backend had an explicit pool size wired up yet, and their defaults
+aren't equal — this driver defaulted to Reactor Netty's `max(availableProcessors, 8) * 2` (24
+connections on that machine), client-v2 to its own default of 10. Fixed same-day: `BenchmarkProperties`
+now carries a `poolSize` field (`benchmark.pool-size` / `MACROBENCH_POOL_SIZE`, default `8`), wired
+into both `R2dbcBackendConfiguration` (`transportMaxConnections`) and `ClientV2BackendConfiguration`
+(`setMaxConnections`), so every future run is pinned to an equal, explicit, known pool size by
+default instead of silently comparing two different resource budgets. Also added: `scripts/ab-summary.sh`
+(runs the full backend x scenario matrix, prints one comparison table instead of six raw `ab`
+reports) and a `stress` profile (`ab-summary.sh stress` — 50000 requests/concurrency 200/warmup
+5000, vs the `quick` default's 2000/10/200) for heavier local load than the smoke-test defaults.
+The README's documented numbers predate the pool-size fix and are explicitly labeled unreliable for
+that reason - PR2's actual trusted baseline (matched pool confirmed, real dataset sizing, k6/wrk2
+open-loop load, dedicated CI machine) is still open.
+
 **Candidate follow-up findings the review doc flagged from reading current `main`** (documented
 here, none implemented yet — do not reopen without new evidence, per the doc's own instruction):
 
