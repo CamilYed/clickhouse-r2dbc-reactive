@@ -40,6 +40,19 @@ curl http://localhost:8081/benchmark/client-v2/analytics
 curl http://localhost:8081/benchmark/r2dbc/stream?limit=10
 ```
 
+### Quick local comparison with `ab`
+
+```bash
+scripts/run-ab.sh r2dbc point
+scripts/run-ab.sh client-v2 point
+```
+
+Runs a discarded warmup pass, then a measured [Apache Bench](https://httpd.apache.org/docs/2.4/programs/ab.html)
+run against `/benchmark/{backend}/{scenario}` - see `run-ab.sh`'s own header for why it's a
+**local iteration tool, not a trusted published number**: `ab` is closed-loop (hides tail latency
+under real overload), unlike the open-loop `k6`/`wrk2` methodology ROADMAP.md's Phase 12 PR2 is
+for.
+
 Configuration (env vars, all optional - see `application.yml` for defaults):
 
 | Variable | Purpose |

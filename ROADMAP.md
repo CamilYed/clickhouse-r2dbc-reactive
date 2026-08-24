@@ -739,7 +739,11 @@ silently dropped: the `cancel` scenario is not implemented (needs per-backend ca
 wiring plus `system.processes`/`system.query_log` correlation — a materially different, riskier
 piece than the other three scenarios, tracked as a PR1 follow-up rather than rushed in
 unverified), and there's no k6/wrk2 open-loop load generator, paired-A/B-round script, or resource
-collector yet — those are PR2's actual job per the sequence above, not scope creep to add here.
+collector yet — those are PR2's actual job per the sequence above, not scope creep to add here. A
+small `scripts/run-ab.sh` was added for quick local iteration (warmup pass discarded, then a
+measured `ab` run per backend/scenario) — explicitly documented as a local tool only, not a
+substitute for PR2's open-loop methodology, since `ab` is closed-loop and can't show tail-latency
+behavior under real overload.
 Also not yet done in this sandbox: a real Gradle build/test run (no network for the Gradle wrapper
 distribution in this environment) — needs `./gradlew :clickhouse-r2dbc-reactive-macrobench:spotlessCheck
 :clickhouse-r2dbc-reactive-macrobench:test` before merging, same disclosed limitation as the
