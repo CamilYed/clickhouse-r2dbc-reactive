@@ -79,7 +79,8 @@ public class TrivialQueryBenchmark {
    * {@link ClickHouseHttpTransport#ClickHouseHttpTransport(String, String, String)}, which resolves
    * {@link io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions#defaults()}'s own
    * default of {@link ResponseCompression#LZ4} (sends {@code compress=1}); telling the decoder
-   * {@code NONE} while the transport actually requests LZ4 feeds it compressed bytes it can't parse.
+   * {@code NONE} while the transport actually requests LZ4 feeds it compressed bytes it can't
+   * parse.
    */
   @Benchmark
   public void thisDriver(final Blackhole blackhole) {
