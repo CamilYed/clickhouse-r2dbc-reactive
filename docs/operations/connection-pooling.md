@@ -90,6 +90,25 @@ connection pool size — the explicit `transportMaxConnections` value when set, 
 doesn't expose it) when left at the default above. The decoder can no longer be a smaller ceiling
 than the pool a caller explicitly configured, or than the pool's own documented default.
 
+### Widening the decode pool beyond the connection pool: `decoderWorkerCount`
+
+Phase 11 PR5 (see the root `ROADMAP.md`) added an explicit escape hatch from the 1:1 coupling just
+above: `decoderWorkerCount` (`ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT`) sizes
+`RowDecodingScheduler` independently of `transportMaxConnections`, defaulting to `null` (meaning
+"stay coupled to the pool", unchanged from the behavior above) when not set. It exists because a
+trusted-profile benchmark run found this driver's p90-p99 per-query latency running 15-25% behind
+client-v2's at every tested concurrency, with p50 tied and GC time equal between drivers despite
+this driver allocating ~3.3x less per query — ruling out GC pauses and pointing at decode-worker
+queueing as the more likely tail-latency source: a query whose decode has to wait for a free worker
+pays that wait as pure added latency with no corresponding allocation cost, and the decoder pool is
+never wider than the connection pool by default. Setting `decoderWorkerCount` higher gives decode
+work more workers to spread across without also widening the physical connection pool itself (which
+would change a different, unrelated tradeoff — see "Is it worth setting `maxConnections` yourself?"
+below). `DecoderWorkerCountThroughputBenchmark` (in `clickhouse-r2dbc-reactive-benchmarks`) measures
+whether this actually shrinks the p90-p99 gap in practice — see that class's own Javadoc and the
+ROADMAP.md Phase 11 PR5 entry for the current state of that measurement; this option existing does
+not by itself mean widening it is recommended for a given workload.
+
 ### Is it worth setting `maxConnections` yourself?
 
 Usually not, and that's the point of this project: because the pipeline is non-blocking end to

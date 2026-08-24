@@ -483,4 +483,37 @@ class ClickHouseConnectionFactoryTest {
     // then
     assertThat(factory.decoderWorkerCount()).isEqualTo(expectedWorkerCount);
   }
+
+  @Test
+  void shouldSizeTheDecoderSchedulerToAnExplicitDecoderWorkerCountEvenWhenLargerThanThePool() {
+    // given - Phase 11 PR5 (see ROADMAP.md): decoderWorkerCount lets a caller widen the decode
+    // pool beyond the physical connection pool, to absorb transient decode-queueing tail latency
+    // without also widening the connection pool itself
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, 8)
+            .option(ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT, 32)
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then - the explicit override wins over the pool-size-coupled default
+    assertThat(factory.decoderWorkerCount()).isEqualTo(32);
+  }
+
+  @Test
+  void shouldRejectANonPositiveDecoderWorkerCount() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT, 0)
+            .build();
+
+    // when / then
+    assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
 }

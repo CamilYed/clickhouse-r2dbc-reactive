@@ -111,6 +111,29 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
       Option.valueOf("transportMaxConnections");
 
   /**
+   * An explicit override for {@link ClickHouseConnectionFactory}'s {@code RowDecodingScheduler}
+   * worker count, independent of {@link #TRANSPORT_MAX_CONNECTIONS} — see {@link
+   * ClickHouseConnectionFactory#from} for how the two interact. Defaults to {@code null}, meaning
+   * the decoder stays coupled to the resolved connection pool size (this driver's long-standing
+   * default — see {@code docs/operations/connection-pooling.md}'s "The decode worker pool tracks
+   * this pool's size, not the CPU core count").
+   *
+   * <p>Phase 11 PR5 (see ROADMAP.md) added this option after a trusted-profile benchmark run showed
+   * this driver's p90-p99 per-query latency running 15-25% behind client-v2's at every tested
+   * concurrency (8/32/128), while p50 stayed tied and GC time stayed equal despite this driver
+   * allocating ~3.3x less per query — ruling out GC pauses and pointing at decode-worker queueing
+   * (fixed at exactly {@code transportMaxConnections} workers) as the more likely tail- latency
+   * driver: a query whose decode has to wait for a worker, because every worker happened to be busy
+   * decoding another concurrent query's response at that instant, pays that wait as pure added
+   * latency with no corresponding allocation cost. Setting this higher than {@link
+   * #TRANSPORT_MAX_CONNECTIONS} gives decode work more workers to spread across than there are
+   * physical connections, without also widening the connection pool itself (which would change the
+   * very physical-pool-size comparison the matched-pool benchmarks exist to hold fixed) — an
+   * explicit, opt-in escape hatch from the coupled default, not a replacement for it.
+   */
+  public static final Option<Integer> DECODER_WORKER_COUNT = Option.valueOf("decoderWorkerCount");
+
+  /**
    * The maximum number of acquisitions allowed to queue once {@link #TRANSPORT_MAX_CONNECTIONS} is
    * reached, before further acquisitions are rejected outright rather than queued. Defaults to
    * Reactor Netty's own default when not set.

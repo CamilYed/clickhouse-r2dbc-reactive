@@ -104,7 +104,9 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * factory creation, never silently falling back to a default. {@code transportMaxConnections} in
    * particular also sizes this factory's {@link RowDecodingScheduler} (see {@link
    * #resolveDecoderWorkerCount}) — the decoder is never a smaller, hidden concurrency ceiling
-   * underneath the pool this option configures.
+   * underneath the pool this option configures, unless {@link
+   * ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT} explicitly overrides it — see that
+   * option's own Javadoc for why a caller would ever set it independently of the pool size.
    *
    * <p>{@link ClickHouseConnectionFactoryProvider#RESPONSE_COMPRESSION} configures {@link
    * TransportOptions#responseCompression()} — defaults to {@code true} ({@link
@@ -196,8 +198,12 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
         observationListenerOption(
             options, ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER);
 
+    final Integer decoderWorkerCountOverride =
+        intOption(options, ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT);
+
     final RowDecodingScheduler decodingScheduler =
-        RowDecodingScheduler.withWorkerCount(resolveDecoderWorkerCount(transportMaxConnections));
+        RowDecodingScheduler.withWorkerCount(
+            resolveDecoderWorkerCount(decoderWorkerCountOverride, transportMaxConnections));
 
     return new ClickHouseConnectionFactory(
         new ClickHouseHttpTransport(baseUrl, transportOptions),
@@ -206,15 +212,23 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   }
 
   /**
-   * The number of workers {@link #decodingScheduler} gets sized to — always matching the resolved
-   * connection pool size, so the decoder can never become a smaller, hidden concurrency ceiling
-   * underneath a pool a caller explicitly asked for. {@code transportMaxConnections} not being set
-   * means the pool itself resolves to Reactor Netty's own default ({@link
-   * #REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR}/{@link #REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER} —
-   * see their Javadoc), so this mirrors that exact formula rather than falling back to an
-   * unrelated, typically much smaller number like the CPU core count.
+   * The number of workers {@link #decodingScheduler} gets sized to. Three tiers, checked in order:
+   * an explicit {@link ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT} always wins first
+   * (see that option's own Javadoc for why a caller would ever set it above the pool size); absent
+   * that, the resolved connection pool size, so the decoder can never become a smaller, hidden
+   * concurrency ceiling underneath a pool a caller explicitly asked for; absent both, {@code
+   * transportMaxConnections} not being set means the pool itself resolves to Reactor Netty's own
+   * default ({@link #REACTOR_NETTY_DEFAULT_POOL_SIZE_FLOOR}/{@link
+   * #REACTOR_NETTY_DEFAULT_POOL_SIZE_MULTIPLIER} — see their Javadoc), so this mirrors that exact
+   * formula rather than falling back to an unrelated, typically much smaller number like the CPU
+   * core count.
    */
-  private static int resolveDecoderWorkerCount(final @Nullable Integer transportMaxConnections) {
+  private static int resolveDecoderWorkerCount(
+      final @Nullable Integer decoderWorkerCountOverride,
+      final @Nullable Integer transportMaxConnections) {
+    if (decoderWorkerCountOverride != null) {
+      return decoderWorkerCountOverride;
+    }
     if (transportMaxConnections != null) {
       return transportMaxConnections;
     }
