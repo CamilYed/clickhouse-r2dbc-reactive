@@ -161,9 +161,19 @@ in-flight query). Checked against client-v2's actual decode-path source (`Binary
 `synchronized` method on the decode path, `BinaryStreamReader.ArrayValue#asList()`, is a pure
 in-memory list-view cache that never blocks on I/O while holding the monitor, and the actual
 blocking reads run directly against the caller-supplied stream with no `BufferedInputStream`/
-`DataInputStream` wrapping in between — so this driver's decode path is Loom-friendly today. Not
-yet validated by a trusted benchmark run (`VirtualThreadDecoderThroughputBenchmark`, run with
-`-Djdk.tracePinnedThreads=full` to catch pinning empirically); see ROADMAP.md's Phase 11 entry.
+`DataInputStream` wrapping in between — so this driver's decode path is Loom-friendly today.
+
+**Trusted-run result (2026-08-24, `VirtualThreadDecoderThroughputBenchmark`, `poolSize=8`,
+`concurrency` 8/32/128, `-Djdk.tracePinnedThreads=full`): confirmed Loom-friendly, but not adopted
+as a default.** Zero `jdk.VirtualThreadPinned` events across all six recordings — the source review
+above holds up empirically, not just on inspection. Throughput was tied with the platform-thread
+decoder at every concurrency level (both variants admission-gated to the same `maxConcurrency`, so
+neither side's result moved much across the 8/32/128 sweep either). The measured cost: ~45–48% more
+allocation per operation (28.2–28.7 KB/op vs 19.2–19.4 KB/op) and correspondingly more GC activity,
+from `Executors.newThreadPerTaskExecutor` creating a fresh virtual thread per decode task rather
+than reusing a fixed platform-thread pool. Net result: safe, but a pure cost with no throughput
+benefit in this shape — stays opt-in, default remains `false`. See ROADMAP.md's Phase 11 entry for
+the full numbers.
 
 ### Is it worth setting `maxConnections` yourself?
 

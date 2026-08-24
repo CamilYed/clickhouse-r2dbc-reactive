@@ -54,8 +54,9 @@ happened, and the optimization attempt (`decoderWorkerCount`) was evaluated and 
 adopted as a default — see PR5's entry for the full result. Further driver optimization is no
 longer blocked on methodology, but nothing new is queued up from Phase 11 itself beyond the
 architectural admission-control question PR5's follow-up left open (see its entry below), and the
-JDK 21 virtual-thread decoder experiment — now underway, code done 2026-08-24, not yet run on
-trusted CI (see PR5's entry for the pinning-risk source review and what's built). Older items not
+JDK 21 virtual-thread decoder experiment — trusted run completed 2026-08-24: no pinning, tied
+throughput, ~45% more allocation than the platform-thread decoder at matched concurrency, not
+adopted as a default (see PR5's entry for the full result). Older items not
 yet folded into this phase, still parked: [rewriting the decode path off client-v2's blocking
 reader](#experiment-idea-not-a-decision--rewrite-the-decode-path-off-client-v2s-blocking-reader) —
 an option flagged during PR3's `RowDecodingScheduler` fix, explicitly not decided or started.
@@ -538,9 +539,30 @@ each one gated on the previous, no driver optimization before PR5:
        gets that many additional parked (not running) virtual threads, which is cheap but not
        zero-cost, and is a materially different queueing shape than
        `Schedulers.newBoundedElastic(workerCount, queuedTaskCapacity, ...)`'s bounded queue.
-     - **Not yet run on trusted CI.** The static pinning-risk review above is source analysis, not a
-       measurement — throughput, every latency percentile, and any `tracePinnedThreads` output still
-       need a real trusted run before this is anything more than "plausible, not yet contradicted."
+     - **Trusted-run result, 2026-08-24 (`poolSize=8`, `concurrency` 8/32/128, 3 forks, 5 warmup
+       iterations, `-Djdk.tracePinnedThreads=full`):**
+       - **Throughput: tied at every concurrency level.** `platformThreadDecoder` 810–837 ops/s vs
+         `virtualThreadDecoder` 804–826 ops/s, with ~30% error bars on both sides — the difference is
+         well inside measurement noise. Expected, in hindsight: both variants are admission-gated to
+         the same `maxConcurrency` (tied to `poolSize`), which is exactly the property that makes the
+         result barely move across the 8/32/128 sweep on either side too — virtual threads' actual
+         advantage (cheap concurrency *beyond* what a platform-thread pool could hold) never gets
+         exercised when both sides are capped at the same number.
+       - **Allocation: virtual threads cost ~45–48% more per op** (28.2–28.7 KB/op vs 19.2–19.4 KB/op,
+         consistent across all three concurrency levels), with correspondingly more GC activity
+         (53–62 vs 47–51 GC cycles, 228–310ms vs 190–250ms GC time). Consistent with the real cost of
+         `Executors.newThreadPerTaskExecutor` creating a fresh virtual thread per decode task, instead
+         of reusing threads from a fixed platform pool.
+       - **Pinning: none.** `jfr print --events jdk.VirtualThreadPinned` against all six
+         `profile.jfr` recordings (both variants, all three concurrency levels) returned zero events —
+         confirms the static pinning-risk review above empirically, not just by source inspection.
+       - **Verdict: not adopted as a default.** At matched admission-gated concurrency, this
+         implementation trades a real, measured allocation/GC cost for no throughput benefit. Safe
+         (no pinning), but not worth it in its current shape. The scenario where virtual threads could
+         still plausibly help — logical concurrency swept *past* the platform-thread-pool size while
+         platform threads stay capped at `poolSize` (test matrix "C" from the reviewed hints doc,
+         §16) — was not run; left as a follow-up if this line of work continues, not started because
+         nothing in this result motivates it yet.
        See [connection-pooling.md](docs/operations/connection-pooling.md#an-alternative-fix-for-the-same-finding-decoderusevirtualthreads)
        for the option's own docs.
 
