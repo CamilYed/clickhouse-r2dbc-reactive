@@ -43,20 +43,31 @@ import reactor.core.publisher.Mono;
  * above the pool size the pending-acquire-queue limit becomes a hard failure instead of the added
  * latency PR5 originally set out to shrink.
  *
- * <p><b>Working theory this class exists to test:</b> today's shape is two queues in series — the
- * decoder's own bounded-elastic queue, then Reactor Netty's pending-acquire queue. Tandem queueing
- * is a known way to compound tail latency beyond what either queue alone would produce at the same
- * throughput, which matches the observed PR4 symptom shape (p50 tied, only p90-p99 diverges). If
- * that theory holds, widening the decoder <i>and</i> {@link
- * io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_MAX_COUNT}
- * together — collapsing back to one effective queue (the physical connection pool, the real,
- * unavoidable bottleneck either way) — should recover the {@code concurrency=8} tail-latency win at
- * {@code concurrency=32}/{@code 128} too, without the outright failures widening the decoder alone
- * produced. {@link #WIDENED_PENDING_ACQUIRE_MAX_COUNT} is sized with the same "deliberately
- * generous, not minimal-tuned" philosophy {@link
- * DecoderWorkerCountThroughputBenchmark#WIDENED_DECODER_WORKER_COUNT} already uses, so a real
- * effect has every chance to show up before this investigation tries to find the smallest number
- * that still helps.
+ * <p><b>Working theory this class was built to test, since corrected:</b> the original hypothesis
+ * was that today's shape is two queues in series — the decoder's own bounded-elastic queue, then
+ * Reactor Netty's pending-acquire queue — and that widening both would "collapse back to one
+ * effective queue" (the physical connection pool). <b>The trusted run (2026-08-24) showed this
+ * framing was arithmetically wrong and the theory itself unconfirmed</b> — see ROADMAP.md's Phase
+ * 11 PR5 entry for the full result and an independently JFR-profiled explanation. Two corrections,
+ * left here rather than silently fixed, since the wrong reasoning is itself informative:
+ *
+ * <ul>
+ *   <li>With {@link #WIDENED_DECODER_WORKER_COUNT} fixed at 32, at most ~32 requests can ever be
+ *       admitted to the transport layer at once, regardless of {@code concurrency} — {@code
+ *       concurrency=128} never produces anywhere near {@link #WIDENED_PENDING_ACQUIRE_MAX_COUNT}
+ *       (256) or even the naively-computed "120 pending acquisitions" (128 minus {@link
+ *       #POOL_SIZE}) worst case this class's sizing comment originally assumed. A decoder-scheduler
+ *       queue still exists upstream of the transport at {@code concurrency=128} — widening {@link
+ *       io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_MAX_COUNT}
+ *       stopped the smaller, ~24-request transport-level queue from overflowing; it did not remove
+ *       a queue or "collapse" anything to one.
+ *   <li>Decode is I/O-wait-dominated, not CPU-bound: {@code RowDecodingScheduler} threads spend the
+ *       overwhelming majority of their time blocked reading network bytes ({@code
+ *       FluxInputStreamBridge}'s {@code ArrayBlockingQueue.take}), not doing decode work. Widening
+ *       the worker count mostly widens how many threads can be simultaneously parked waiting on the
+ *       same 8 physical connections' worth of network throughput — real extra JVM/OS threads, no
+ *       measured throughput or consistent latency benefit.
+ * </ul>
  *
  * <p>Deliberately a separate class rather than a third {@code @State}/{@code @Benchmark} pair
  * bolted onto {@link DecoderWorkerCountThroughputBenchmark}: that class's own two states already
@@ -65,7 +76,11 @@ import reactor.core.publisher.Mono;
  * against {@link DecoderWorkerCountThroughputBenchmark}'s already-recorded {@code coupledDecoder}
  * numbers (see ROADMAP.md's Phase 11 PR5 entry), not re-measured here. Reuses the same true-merged-
  * HdrHistogram-per-fork logging pattern ({@code logMergedLatencySummary}, tagged {@code TRUE
- * MERGED} in the log) that makes the p90/p99 comparison trustworthy at {@code forks=3}.
+ * MERGED} in the log) that makes the p90/p99 comparison trustworthy at {@code forks=3} — though
+ * note ROADMAP.md also records a real methodology gap this run surfaced: JFR recordings are still
+ * only one-per-fork-overwritten (same documented JMH limitation as PR4's), and a systematic ~30-40%
+ * slower first measurement iteration across every fork means this run's own throughput/allocation
+ * numbers should not be trusted as a clean baseline without a profiler-free control run first.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
