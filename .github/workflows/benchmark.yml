@@ -27,18 +27,24 @@ name: Cloud benchmark pipeline
 #   fast    - 1 fork, 1 warmup iteration. A sanity check ("did it run, no catastrophic
 #             regression"), not a number to make a public performance claim from. Cheap enough to
 #             also run on a weekly schedule.
-#   trusted - 3 forks, 5 warmup iterations, -prof gc,hs_thr, plus a background /proc RSS/thread
+#   trusted - 3 forks, 5 warmup iterations, -prof gc,jfr, plus a background /proc RSS/thread
 #             sampler (scripts/benchmarks/sample-resources.sh) for the whole run. workflow_dispatch
 #             only - deliberately never scheduled, so a noisy/slow run is something a human asked
 #             for, not unattended.
 #
-# Phase 11 PR2 (see ROADMAP.md): `-prof hs_thr` (JMH's own HotspotThreadProfiler, JVM/fork-scoped)
-# and the /proc-based RSS/thread sampler above exist to answer the open question of whether
-# client-v2's throughput edge (docs/performance/results.md's cloud-verified matched-pool result) is
-# bought with materially more platform threads/RSS than this driver's bounded, non-blocking pipeline
-# uses. The sampler is coarse (whole-run, not per-benchmark-method - see its own header comment for
-# why) and its resource-samples.csv section in summary.md is not yet interpreted against a real run's
-# numbers; treat it as raw evidence collection for now, not a settled conclusion.
+# Phase 11 PR2 (see ROADMAP.md): the /proc-based RSS/thread sampler above exists to answer the open
+# question of whether client-v2's throughput edge (docs/performance/results.md's cloud-verified
+# matched-pool result) is bought with materially more platform threads/RSS than this driver's
+# bounded, non-blocking pipeline uses. It is the *only* thread-count source this pipeline has -
+# PR2 originally also wired up `-prof hs_thr` for per-fork thread counts, but a real trusted run
+# (2026-08-24) failed outright with `ClassNotFoundException: hs_thr`: JMH 1.37's
+# `ProfilerFactory.BUILT_IN` map (verified by reading its source) has no `hs_thr` entry at all - no
+# HotSpot thread-count profiler exists as a JMH 1.37 built-in under any name, so this was a bug
+# introduced by PR2 and never actually exercised until this failure. Removed rather than replaced;
+# see Phase 11 PR4's entry in ROADMAP.md for the correction. The sampler is coarse (whole-run, not
+# per-benchmark-method - see its own header comment for why) and its resource-samples.csv section
+# in summary.md is not yet interpreted against a real run's numbers; treat it as raw evidence
+# collection for now, not a settled conclusion.
 #
 # One ClickHouse container for the whole job, not one per JMH fork: BenchmarkEnvironment's default
 # (each fork starting its own Testcontainers-managed container) is meant for local development,
@@ -183,11 +189,15 @@ jobs:
         # JavaFlightRecorderProfiler#createTrialOutDir/afterIteration upstream), not a bug in this
         # workflow - acceptable for this phase's purpose (exploratory profiling to point PR5 at a
         # specific hot path, not a quantitative multi-fork JFR aggregate).
+        #
+        # No `hs_thr` here (see this file's header comment): removed after a real trusted run
+        # (2026-08-24) failed with `ClassNotFoundException: hs_thr` - JMH 1.37 has no built-in
+        # HotSpot thread-count profiler under that or any other name.
         run: |
           if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
             echo "forks=3" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=5" >> "$GITHUB_OUTPUT"
-            echo "profilers=gc,hs_thr,jfr:dir=/tmp/jfr-output" >> "$GITHUB_OUTPUT"
+            echo "profilers=gc,jfr:dir=/tmp/jfr-output" >> "$GITHUB_OUTPUT"
           else
             echo "forks=1" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=1" >> "$GITHUB_OUTPUT"

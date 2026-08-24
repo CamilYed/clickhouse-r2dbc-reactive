@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Phase 11 PR2 (see ROADMAP.md): the open question this exists to help answer is whether client-v2's
 # throughput edge (docs/performance/results.md's cloud-verified matched-pool result) is bought with
-# materially more platform threads/RSS than this driver's bounded, non-blocking pipeline uses. JMH's
-# own `-prof hs_thr` (wired in .github/workflows/benchmark.yml's trusted profile) reports thread
-# counts per JMH iteration already, forked-JVM-scoped; RSS has no JMH-native profiler equivalent, so
-# this script is the /proc half, sampled at whole-forked-JVM-process granularity instead.
+# materially more platform threads/RSS than this driver's bounded, non-blocking pipeline uses. This
+# script is the *only* thread/RSS source in this pipeline - PR2 originally also wired up JMH's own
+# `-prof hs_thr` for per-fork thread counts, but a real trusted run (2026-08-24) failed outright with
+# `ClassNotFoundException: hs_thr`: JMH 1.37 has no built-in HotSpot thread-count profiler under that
+# or any other name (verified by reading org.openjdk.jmh.profile.ProfilerFactory's source), so that
+# was a bug introduced by PR2 and never actually exercised until this failure - removed in Phase 11
+# PR4, see .github/workflows/benchmark.yml's header comment. Neither thread count nor RSS has a JMH-
+# native profiler equivalent that actually works here, so this script covers both, sampled at
+# whole-forked-JVM-process granularity via /proc.
 #
 # Usage: sample-resources.sh <parent-pid> <out-csv> [interval-seconds]
 #

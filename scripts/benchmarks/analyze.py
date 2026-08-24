@@ -366,9 +366,11 @@ def build_report(
             "`concurrency` tier, summed if more than one JMH-forked JVM happens to be alive at a "
             "sample instant. It answers 'how much RSS/thread headroom did this whole run need', not "
             "'how much did thisDriver's fork need vs. clientV2's' - breaking it down per-driver is "
-            "still open (see ROADMAP.md's Phase 11 PR2 entry). JMH's own `-prof hs_thr` (also wired "
-            "into the trusted profile) does report thread counts per fork/iteration already - see "
-            "this run's raw-stdout.log for its output; not parsed into this table yet."
+            "still open (see ROADMAP.md's Phase 11 PR2 entry). This sampler is the only thread-count "
+            "source in this pipeline - JMH's own `-prof hs_thr` was tried in PR2 but doesn't exist "
+            "as a built-in profiler in JMH 1.37 (confirmed by a real trusted run failing with "
+            "`ClassNotFoundException: hs_thr`, and by reading ProfilerFactory's source); removed in "
+            "Phase 11 PR4, see ROADMAP.md."
         )
         lines.append("")
         lines.append(
