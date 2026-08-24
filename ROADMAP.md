@@ -224,18 +224,46 @@ each one gated on the previous, no driver optimization before PR5:
    `results.json`/`raw-stdout.log` only — like every benchmark except
    `PublicApiMatchedPoolThroughputBenchmark`, `analyze.py` doesn't parse their shapes). Next: actual
    CI runs to produce real numbers for all three.
-4. **PR4 — root-cause the throughput/latency gap (profiling only, no driver changes).**
-   JFR/async-profiler (CPU, wall-clock, allocation) on `PublicApiMatchedPoolThroughputBenchmark` at
-   concurrency=32/128, both drivers, focused on `FluxInputStreamBridge`'s cross-thread handoff (the
-   leading suspect — the same mechanism was already root-caused once at streaming-scan scale, see
-   [results.md](docs/performance/results.md#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m))
-   vs. Reactor operator overhead vs. row mapping vs. LZ4 decode vs. connection acquisition. Also:
-   replace PR1's "mean of iteration-level percentiles" label with a true merged-HdrHistogram
-   calculation (persist a mergeable histogram per iteration/fork, merge post-run instead of
-   averaging already-computed percentiles). Re-run `BoundedPoolConcurrencyBenchmark` now that it
-   also has `.useAsyncRequests(true)` fixed. Finish `MixedWorkloadRapidRefreshCancelBenchmark`'s
-   incomplete `thisDriver` run and build its no-cancellation
-   `MixedWorkloadRapidRefreshPileUpBenchmark` companion.
+4. **PR4 — root-cause the throughput/latency gap (profiling only, no driver changes). Code done
+   2026-08-24, not yet re-run/interpreted on CI.**
+   - **Scoped down to JFR only, not JFR/async-profiler both.** async-profiler needs a downloaded
+     native agent jar, which this project's sandboxed development environment has no network path
+     to fetch or verify; JFR ships in the JDK itself and needs no extra artifact, so it's what's
+     wired in. Revisit async-profiler later only if JFR's output turns out not to be enough.
+   - The trusted CI profile now also runs JMH's own `-prof jfr:dir=/tmp/jfr-output` alongside
+     `gc,hs_thr`, on `PublicApiMatchedPoolThroughputBenchmark` at concurrency=8/32/128, both
+     drivers — a first look at `FluxInputStreamBridge`'s cross-thread handoff (the leading suspect
+     — the same mechanism was already root-caused once at streaming-scan scale, see
+     [results.md](docs/performance/results.md#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m))
+     vs. Reactor operator overhead vs. row mapping vs. LZ4 decode vs. connection acquisition. **Known
+     limitation, confirmed by reading JMH's `JavaFlightRecorderProfiler` source upstream**: it writes
+     one `profile.jfr` per (benchmark method, `@Param` combination), overwritten by each successive
+     fork — with `forks=3`, only the last fork's recording survives on disk, not a three-fork merge.
+     Acceptable for this phase's exploratory purpose (point PR5 at a specific hot path), not
+     something `analyze.py` parses automatically — `.jfr` files are uploaded as raw artifacts under
+     `benchmark-results/jfr/`, read locally with JDK Mission Control or `jfr print`/`jfr summary`.
+   - Replaced PR1's "mean of iteration-level percentiles" label with a true merged-HdrHistogram
+     calculation: `PublicApiMatchedPoolThroughputBenchmark` now accumulates every measurement
+     iteration into one running `Histogram` per JMH fork (`Histogram#add`, lossless — both
+     histograms share the same trackable-range/precision settings) and logs it once at trial
+     teardown (`logMergedLatencySummary`, distinguishable in the log by the literal text `TRUE
+     MERGED`). `analyze.py` prefers this line when present: with `forks=1` (fast profile) the
+     result is an exact global percentile; with `forks=3` (trusted profile) it's a mean of three
+     already-exact per-fork percentiles, not dozens of approximate per-iteration ones. Falls back to
+     the old per-iteration-average behavior automatically when reprocessing a pre-PR4 log that has
+     no `TRUE MERGED` lines.
+   - Re-running `BoundedPoolConcurrencyBenchmark` and finishing
+     `MixedWorkloadRapidRefreshCancelBenchmark`'s incomplete `thisDriver` run need no code change —
+     both already have `.useAsyncRequests(true)` from an earlier fix; confirmed by reading both
+     classes. Purely "needs an actual CI run", tracked as part of this PR's own "not yet re-run on
+     CI" status, not a separate code item.
+   - Built `MixedWorkloadRapidRefreshCancelBenchmark`'s no-cancellation companion,
+     `MixedWorkloadRapidRefreshPileUpBenchmark`: identical users/queries/pooling/think-time, but
+     `Flux.flatMap` instead of `switchMap` — every refresh runs to completion and piles up against
+     the pool instead of being cancelled by the next one. Wired into `benchmark.yml`'s
+     `workflow_dispatch` dropdown, not the weekly schedule (same reasoning as PR3's manual-only
+     additions).
+   - Next: an actual `trusted` CI run to produce real JFR/merged-histogram/pile-up numbers.
 5. **PR5 — one evidence-driven optimization**, only if PR4's profiling points at something
    specific, followed by an exact-same-config trusted re-run to confirm the fix actually moved the
    number.
