@@ -20,6 +20,11 @@ benchmark:
   # client-v2 via setMaxConnections) - see BenchmarkProperties' Javadoc for why this defaults to a
   # fixed, equal value instead of leaving each backend at its own (different) built-in default.
   pool-size: ${MACROBENCH_POOL_SIZE:8}
+  # Escape hatch from the pinning above: true skips transportMaxConnections entirely for the r2dbc
+  # backend, leaving it at this driver's own CPU-scaled default - client-v2 still gets pool-size.
+  # For deliberately saturating client-v2's (smaller, fixed) pool under load while r2dbc has
+  # headroom to spare - see BenchmarkProperties' Javadoc.
+  unpin-r2dbc-pool: ${MACROBENCH_UNPIN_R2DBC_POOL:false}
   clickhouse:
     # Bare HTTP endpoint, not an r2dbc:clickhouse://... URL - see ClickHouseEndpointProperties'
     # own Javadoc for why this is a separate config surface from spring.r2dbc.url above. Used by

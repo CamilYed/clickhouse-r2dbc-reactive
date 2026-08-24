@@ -22,10 +22,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * sizes and calls it a driver comparison. Override via {@code benchmark.pool-size} (or the {@code
  * MACROBENCH_POOL_SIZE} environment variable) if you deliberately want a different, still-equal,
  * pool size for both backends.
+ *
+ * <p>{@code unpinR2dbcPool} (default {@code false}) is a deliberate escape hatch from that pinning,
+ * for the opposite kind of experiment: deliberately mismatched pools, e.g. to saturate client-v2's
+ * fixed {@code poolSize} under concurrent load while this driver runs at its own larger, CPU-scaled
+ * default ({@code max(availableProcessors, 8) * 2}) and has headroom to spare - the same "one side
+ * pinned, one side left at its own default" shape {@code clickhouse-r2dbc-reactive-benchmarks}'
+ * {@code DefaultPoolSlowQueryThroughputBenchmark} already uses at the JMH level. When {@code true},
+ * {@code R2dbcBackendConfiguration} never sets {@code transportMaxConnections} at all - {@code
+ * poolSize} still applies to client-v2 unchanged.
  */
 @ConfigurationProperties("benchmark")
 public record BenchmarkProperties(
-    String backend, long pointRows, long analyticsRows, Integer poolSize) {
+    String backend, long pointRows, long analyticsRows, Integer poolSize, boolean unpinR2dbcPool) {
 
   private static final String DEFAULT_BACKEND = "dual";
   private static final long DEFAULT_ROW_COUNT = 100_000;

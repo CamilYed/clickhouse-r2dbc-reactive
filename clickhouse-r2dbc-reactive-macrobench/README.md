@@ -81,9 +81,31 @@ Configuration (env vars, all optional - see `application.yml` for defaults):
 | `MACROBENCH_CLICKHOUSE_USER` / `MACROBENCH_CLICKHOUSE_PASSWORD` | credentials for both |
 | `MACROBENCH_POINT_ROWS` / `MACROBENCH_ANALYTICS_ROWS` | dataset size (default `100000` each - a local-smoke-test size, not the "trusted" ~5M-row sizing ROADMAP.md's Phase 12 describes) |
 | `MACROBENCH_POOL_SIZE` | physical connection pool size both backends are pinned to (default `8`) - see `BenchmarkProperties`' Javadoc for why this exists and defaults to a fixed, equal value rather than each backend's own (different) built-in default |
+| `MACROBENCH_UNPIN_R2DBC_POOL` | `true`/`false` (default `false`) - when `true`, r2dbc skips `pool-size` entirely and runs at its own CPU-scaled default instead, while client-v2 stays pinned to `pool-size`. For deliberately saturating client-v2's smaller, fixed pool under load while r2dbc has headroom to spare |
 
 Not published to Maven Central, not part of the driver's public API - see the root
 `build.gradle.kts`'s `nonPublishedModules`.
+
+### Saturating client-v2's pool on purpose
+
+To reproduce the "client-v2 runs out of connections first" scenario - r2dbc left at its own
+CPU-scaled default (`max(availableProcessors, 8) * 2`, typically well above 20 on a modern
+machine), client-v2 pinned to a small fixed pool - set `MACROBENCH_UNPIN_R2DBC_POOL=true` and pick
+a `MACROBENCH_POOL_SIZE` well below the concurrency you intend to drive:
+
+```bash
+MACROBENCH_UNPIN_R2DBC_POOL=true MACROBENCH_POOL_SIZE=20 \
+  ./gradlew :clickhouse-r2dbc-reactive-macrobench:bootRun
+
+clickhouse-r2dbc-reactive-macrobench/scripts/ab-summary.sh 20000 100
+```
+
+At concurrency 100 against a client-v2 pool of 20, expect client-v2 requests to queue behind the
+pool (or fail once `HTTP_MAX_OPEN_CONNECTIONS`-driven client-side queuing/timeouts kick in,
+depending on client-v2's own connection-manager configuration) while r2dbc's larger pool absorbs
+more of the concurrency directly. This is a deliberately mismatched-pool experiment, not a fairness
+comparison - don't read its numbers as "r2dbc is faster," the same way `DefaultPoolSlowQueryThroughputBenchmark`'s
+JMH-level equivalent isn't read that way either (see that class's own Javadoc).
 
 ## Local results (informal, not a trusted baseline)
 

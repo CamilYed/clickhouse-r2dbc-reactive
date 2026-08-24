@@ -56,7 +56,8 @@ class R2dbcBackendConfiguration {
     properties
         .getProperties()
         .forEach((name, value) -> builder.option(Option.valueOf(name), value));
-    if (!properties.getProperties().containsKey(TRANSPORT_MAX_CONNECTIONS_OPTION)) {
+    if (!benchmark.unpinR2dbcPool()
+        && !properties.getProperties().containsKey(TRANSPORT_MAX_CONNECTIONS_OPTION)) {
       builder.option(
           Option.valueOf(TRANSPORT_MAX_CONNECTIONS_OPTION), String.valueOf(benchmark.poolSize()));
     }
