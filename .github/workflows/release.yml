@@ -15,6 +15,16 @@ on:
         options:
           - USER_MANAGED
           - AUTOMATIC
+      deployment_id:
+        description: >-
+          Resume finalizing a USER_MANAGED release after clicking Publish in Central Portal.
+          Paste the deployment ID printed by the earlier run's "Upload bundle to Central Portal"
+          step (also visible in that run's job summary/logs) to skip rebuilding and re-uploading
+          and jump straight to tagging + creating the GitHub Release. Leave empty for a normal
+          release run.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -31,21 +41,33 @@ jobs:
       SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
       RELEASE_VERSION: ${{ inputs.version }}
       PUBLISHING_TYPE: ${{ inputs.publishing_type }}
+      RESUME_DEPLOYMENT_ID: ${{ inputs.deployment_id }}
 
     steps:
       - name: Checkout sources
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Everything below that's gated on RESUME_DEPLOYMENT_ID being empty is the "build, sign, and
+      # upload" half of a release. When resuming a USER_MANAGED release after manually clicking
+      # Publish in the Central Portal UI, that half already happened in the earlier run - redoing
+      # it here would both waste a full build+sign cycle and re-upload the same version's artifacts
+      # to Central Portal's /upload endpoint, which creates a brand-new deployment rather than
+      # resuming the one that's already VALIDATED/PUBLISHED (and Sonatype rejects re-uploading an
+      # already-published version outright). Pass this run's deployment_id input instead to skip
+      # straight to polling + tag/release finalization against the existing deployment.
       - name: Set up Java
+        if: env.RESUME_DEPLOYMENT_ID == ''
         uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
         with:
           distribution: temurin
           java-version: 21
 
       - name: Set up Gradle
+        if: env.RESUME_DEPLOYMENT_ID == ''
         uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
 
       - name: Make Gradle wrapper executable
+        if: env.RESUME_DEPLOYMENT_ID == ''
         run: chmod +x gradlew
 
       - name: Validate release inputs
@@ -71,12 +93,15 @@ jobs:
           echo "Central Portal publishing type: $PUBLISHING_TYPE"
 
       - name: Verify root project
+        if: env.RESUME_DEPLOYMENT_ID == ''
         run: ./gradlew spotlessCheck clean build jacocoTestReport "-PreleaseVersion=$RELEASE_VERSION" --stacktrace
 
       - name: Publish signed artifacts to local staging repository
+        if: env.RESUME_DEPLOYMENT_ID == ''
         run: ./gradlew publishAllPublicationsToLocalBuildRepository "-PreleaseVersion=$RELEASE_VERSION" --stacktrace
 
       - name: Create Central Portal bundle
+        if: env.RESUME_DEPLOYMENT_ID == ''
         run: |
           set -euo pipefail
 
@@ -84,6 +109,7 @@ jobs:
           find io -type f | LC_ALL=C sort | zip -@ "../central-bundle-$RELEASE_VERSION.zip"
 
       - name: Verify Central Portal bundle
+        if: env.RESUME_DEPLOYMENT_ID == ''
         run: |
           set -euo pipefail
 
@@ -139,12 +165,14 @@ jobs:
           fi
 
       - name: Upload Central Portal bundle artifact
+        if: env.RESUME_DEPLOYMENT_ID == ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: central-bundle-${{ env.RELEASE_VERSION }}
           path: build/central-bundle-${{ env.RELEASE_VERSION }}.zip
 
       - name: Upload bundle to Central Portal
+        if: env.RESUME_DEPLOYMENT_ID == ''
         id: central-upload
         run: |
           set -euo pipefail
@@ -167,11 +195,15 @@ jobs:
 
           echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
           echo "Central Portal deployment ID: $DEPLOYMENT_ID"
+          echo "### Central Portal deployment ID: \`$DEPLOYMENT_ID\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "If this is a USER_MANAGED release, save this ID: after clicking Publish in Central" >> "$GITHUB_STEP_SUMMARY"
+          echo "Portal, re-run this workflow with the same version and this ID in the" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`deployment_id\` input to finalize (tag + GitHub Release) without rebuilding." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wait for Central Portal validation or publication
         id: wait-for-central
         env:
-          DEPLOYMENT_ID: ${{ steps.central-upload.outputs.deployment_id }}
+          DEPLOYMENT_ID: ${{ env.RESUME_DEPLOYMENT_ID != '' && env.RESUME_DEPLOYMENT_ID || steps.central-upload.outputs.deployment_id }}
         run: |
           set -euo pipefail
 
@@ -224,9 +256,12 @@ jobs:
       # Central Portal UI). Tagging/releasing on VALIDATED would let the Git tag and GitHub Release
       # point at a commit whose artifacts aren't actually live on Central yet, breaking the "tag,
       # release, and Central artifact all point at the same, actually-published commit" guarantee
-      # this step exists for (ROADMAP.md Phase 7 item 13). For USER_MANAGED releases, re-run this
-      # workflow (or trigger a small follow-up) once you've clicked Publish in Central Portal so
-      # these steps run against the now-PUBLISHED deployment.
+      # this step exists for (ROADMAP.md Phase 7 item 13). For USER_MANAGED releases, once you've
+      # clicked Publish in Central Portal, re-run this workflow with the same version and the
+      # deployment_id printed by the earlier run's "Upload bundle to Central Portal" step/summary -
+      # that resumes polling the existing deployment and runs these steps once it reports
+      # PUBLISHED, without rebuilding or re-uploading (see that input's description for why a plain
+      # re-run of the whole workflow is unsafe here).
       - name: Create Git tag
         if: steps.wait-for-central.outputs.final_state == 'PUBLISHED'
         run: |
