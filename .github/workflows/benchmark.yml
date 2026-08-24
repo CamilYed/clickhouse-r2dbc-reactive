@@ -97,6 +97,7 @@ on:
           - DecoderWorkerCountThroughputBenchmark
           - DecoderAndPendingAcquireWidenedThroughputBenchmark
           - VirtualThreadDecoderThroughputBenchmark
+          - FluxInputStreamBridgeMicrobenchmark
           - PoolSizeSweepThroughputBenchmark
           - ConnectionPerOperationThroughputBenchmark
           - BoundedPoolConcurrencyBenchmark
