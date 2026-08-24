@@ -194,12 +194,36 @@ each one gated on the previous, no driver optimization before PR5:
    at concurrency=32, `thisDriver`'s 16-connection default pool now correctly beats client-v2's
    10-connection default by ~2x — see
    [results.md](docs/performance/results.md#default-pool-slow-query-this-drivers-larger-default-pool-wins-once-its-actually-used-2026-08-23)
-   for the full numbers. Still planned: a client-v2
-   fixed-executor variant (vs. its default aggressive cached thread pool) to isolate how much of its
-   throughput edge is executor aggressiveness rather than architecture; a pool-size sweep (4/8/16/32,
-   manual profile, not the default weekly run); a connection-per-operation benchmark
-   (`factory.create()` → statement → `connection.close()`, the shape Spring `DatabaseClient`
-   actually uses) alongside the existing one-`Connection` benchmark, not replacing it.
+   for the full numbers. **Remaining three items done 2026-08-24, not yet re-run/interpreted on
+   CI:**
+   - `ClientV2ExecutorAggressivenessBenchmark`: isolates how much of client-v2's throughput edge
+     over this driver is its default `Executors.newCachedThreadPool()` async-dispatch executor
+     versus something architectural, by comparing client-v2 against itself — same pool size, same
+     query, same concurrency sweep as `PublicApiMatchedPoolThroughputBenchmark`, only the executor
+     differs (a new `ClientV2PointQueryClient(FixedExecutorPoolSize)` constructor swaps in
+     `Executors.newFixedThreadPool(poolSize)`, owned and shut down by that class since client-v2
+     itself never closes a caller-supplied executor). Deliberately doesn't involve this driver — see
+     the class's own Javadoc for why.
+   - `PoolSizeSweepThroughputBenchmark`: fixes `concurrency=32` and sweeps `poolSize` across
+     `4/8/16/32` for both drivers — a real scalability curve, not just the headline benchmark's one
+     matched-pool snapshot. Manual-only: swept across four pool sizes, it's meaningfully more
+     expensive than the headline benchmark at the trusted profile's 3 forks/5 warmup iterations, so
+     it's a `workflow_dispatch` dropdown option only, never the weekly schedule (which stays pinned
+     to `PublicApiMatchedPoolThroughputBenchmark` regardless).
+   - `ConnectionPerOperationThroughputBenchmark`: measures this driver's R2DBC `Connection` through
+     the shape Spring's `DatabaseClient` actually uses — `factory.create()` → statement →
+     `connection.close()` per operation, via a new `OurDriverConnectionPerOperationPointQueryClient`
+     (a separate class, not a third constructor on `OurDriverPointQueryClient`, since the difference
+     is the shape of `query()` itself, not just configuration) — alongside, not replacing, the
+     existing reuse-one-connection benchmark. client-v2's side is unchanged from
+     `ClientV2PointQueryClient(int)`: it has no separate logical-connection object to open/close per
+     operation, so its existing shape already is "per operation" in the sense this class cares
+     about.
+
+   All three are wired into `benchmark.yml`'s `workflow_dispatch` benchmark dropdown (raw
+   `results.json`/`raw-stdout.log` only — like every benchmark except
+   `PublicApiMatchedPoolThroughputBenchmark`, `analyze.py` doesn't parse their shapes). Next: actual
+   CI runs to produce real numbers for all three.
 4. **PR4 — root-cause the throughput/latency gap (profiling only, no driver changes).**
    JFR/async-profiler (CPU, wall-clock, allocation) on `PublicApiMatchedPoolThroughputBenchmark` at
    concurrency=32/128, both drivers, focused on `FluxInputStreamBridge`'s cross-thread handoff (the

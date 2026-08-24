@@ -87,6 +87,9 @@ on:
         options:
           - PublicApiMatchedPoolThroughputBenchmark
           - DefaultPoolSlowQueryThroughputBenchmark
+          - ClientV2ExecutorAggressivenessBenchmark
+          - PoolSizeSweepThroughputBenchmark
+          - ConnectionPerOperationThroughputBenchmark
           - BoundedPoolConcurrencyBenchmark
           - MatchedPoolThreadsConcurrencyBenchmark
           - ConcurrencyBenchmark

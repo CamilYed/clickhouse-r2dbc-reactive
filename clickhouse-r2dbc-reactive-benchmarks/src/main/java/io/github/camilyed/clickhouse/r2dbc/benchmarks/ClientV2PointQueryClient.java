@@ -5,6 +5,9 @@ import com.clickhouse.client.api.data_formats.ClickHouseBinaryFormatReader;
 import com.clickhouse.client.api.query.QueryResponse;
 import java.util.Map;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.jspecify.annotations.Nullable;
 import reactor.core.publisher.Mono;
 
 /**
@@ -29,13 +32,19 @@ import reactor.core.publisher.Mono;
  * concurrency ceiling is still {@code setMaxConnections(poolSize)} — the same physical-connection
  * budget both sides are compared under, per this pipeline's non-negotiable constraint).
  *
- * <p>Two constructors, two distinct scenarios: {@link #ClientV2PointQueryClient(int)} matches
+ * <p>Three constructors, three distinct scenarios: {@link #ClientV2PointQueryClient(int)} matches
  * client-v2 to an explicit pool size for a fair matched-pool comparison; {@link
  * #ClientV2PointQueryClient(double)} instead leaves client-v2 at its own default pool (10, see
  * {@code ClientConfigProperties.HTTP_MAX_OPEN_CONNECTIONS}) and slows every query down via {@code
  * sleep(...)} — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s Javadoc for why that second
- * scenario exists. Both share the same query/close logic below, only the SQL text and pool
- * configuration differ.
+ * scenario exists; {@link #ClientV2PointQueryClient(FixedExecutorPoolSize)} matches an explicit
+ * pool size like the first constructor, but additionally swaps client-v2's own default {@code
+ * Executors.newCachedThreadPool()} (see this class's own Javadoc above for why async dispatch runs
+ * on one at all) for a {@code Executors.newFixedThreadPool(poolSize)} sized to match the connection
+ * pool — see Phase 11 PR3 in ROADMAP.md: isolates how much of client-v2's throughput/latency edge
+ * over this driver is the cached executor's willingness to spin up as many threads as concurrent
+ * requests demand, versus something architectural. All three share the same query/close logic
+ * below, only the SQL text, pool configuration, and (for the third) executor differ.
  */
 final class ClientV2PointQueryClient implements PointQueryClient {
 
@@ -46,13 +55,28 @@ final class ClientV2PointQueryClient implements PointQueryClient {
   private final String selectSql;
 
   /**
+   * A distinct parameter type (rather than a boolean flag on {@link
+   * #ClientV2PointQueryClient(int)}) so a call site self-documents "fixed executor, sized to this
+   * pool" instead of an opaque {@code true}/{@code false} — see CLAUDE.md's "no boolean/flag
+   * parameters that silently change behavior".
+   */
+  record FixedExecutorPoolSize(int poolSize) {}
+
+  /**
+   * Non-null only when this instance owns a fixed executor it must shut down in {@link #close()}.
+   */
+  private final @Nullable ExecutorService ownedFixedExecutor;
+
+  /**
    * Builds a client-v2 {@link Client} with a physical connection pool sized to {@code poolSize},
    * async request dispatch enabled (see the class Javadoc for why this is required for a fair
-   * comparison).
+   * comparison), executor left at client-v2's own default (a cached thread pool it creates and
+   * shuts down itself).
    */
   ClientV2PointQueryClient(final int poolSize) {
     this.selectSql = SELECT_BY_ID_SQL;
     this.client = baseBuilder().enableConnectionPool(true).setMaxConnections(poolSize).build();
+    this.ownedFixedExecutor = null;
   }
 
   /**
@@ -69,6 +93,28 @@ final class ClientV2PointQueryClient implements PointQueryClient {
             + PointQueryTable.NAME
             + " WHERE id = {id:UInt64}";
     this.client = baseBuilder().build();
+    this.ownedFixedExecutor = null;
+  }
+
+  /**
+   * Builds a client-v2 {@link Client} with a physical connection pool sized to {@code
+   * fixedExecutorPoolSize.poolSize()}, async dispatch running on a {@code
+   * Executors.newFixedThreadPool(poolSize)} instead of client-v2's own default cached pool — see
+   * this class's own Javadoc for why. Unlike the default executor, a caller-supplied one is never
+   * closed by {@code Client#close()} (per client-v2's own {@code setSharedOperationExecutor}
+   * Javadoc: "it is application responsibility to close the executor"), so this instance owns and
+   * shuts it down itself in {@link #close()}.
+   */
+  ClientV2PointQueryClient(final FixedExecutorPoolSize fixedExecutorPoolSize) {
+    this.selectSql = SELECT_BY_ID_SQL;
+    final int poolSize = fixedExecutorPoolSize.poolSize();
+    this.ownedFixedExecutor = Executors.newFixedThreadPool(poolSize);
+    this.client =
+        baseBuilder()
+            .enableConnectionPool(true)
+            .setMaxConnections(poolSize)
+            .setSharedOperationExecutor(ownedFixedExecutor)
+            .build();
   }
 
   private static Client.Builder baseBuilder() {
@@ -108,5 +154,8 @@ final class ClientV2PointQueryClient implements PointQueryClient {
   @Override
   public void close() {
     client.close();
+    if (ownedFixedExecutor != null) {
+      ownedFixedExecutor.shutdownNow();
+    }
   }
 }
