@@ -22,7 +22,10 @@ ClickHouse - it only reads three inputs already sitting on disk:
 Produces, in --out-dir:
   - summary.md         - one readable report: environment header, then one table per concurrency
                           tier (throughput ops/s, thisDriver/clientV2 ratio, p50/p90/p95/p99 latency,
-                          bytes/op allocation when -prof gc data is present).
+                          bytes/op allocation when -prof gc data is present), plus an optional
+                          whole-run process resource usage section (max/mean RSS, max thread count)
+                          when --resource-samples-csv is given (Phase 11 PR2 - see
+                          scripts/benchmarks/sample-resources.sh, trusted profile only).
   - throughput.png      \
   - latency-p99.png      | the three charts the roadmap plan asks for - not a dozen.
   - allocation-bytes.png/
@@ -35,6 +38,7 @@ for this first PR (see roadmap-archive.md's "Explicitly out of scope for the fir
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sys
@@ -66,6 +70,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stdout-log", required=True, type=Path, help="captured `jmh` task stdout")
     parser.add_argument("--metadata-json", required=True, type=Path, help="run metadata.json")
     parser.add_argument("--out-dir", required=True, type=Path, help="output directory")
+    parser.add_argument(
+        "--resource-samples-csv",
+        required=False,
+        type=Path,
+        default=None,
+        help=(
+            "optional scripts/benchmarks/sample-resources.sh output (trusted profile only, Phase "
+            "11 PR2) - whole-run RSS/thread samples, not attributed to a single benchmark method"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -158,10 +172,32 @@ def average_latency_per_concurrency(
     return out
 
 
+def load_resource_samples(path: Path) -> dict | None:
+    """Parses scripts/benchmarks/sample-resources.sh's CSV (timestamp_epoch, rss_kb, thread_count,
+    jvm_count) into {"max_rss_kb", "mean_rss_kb", "max_threads", "sample_count"}, or None if the
+    file has no data rows (e.g. every JMH fork finished between two sample intervals - unlikely at
+    the default 2s interval across a multi-minute trusted run, but not impossible for a very short
+    one). Whole-run, not attributed to a single (driver, concurrency) combination - see this
+    function's caller and the sampler script's own header comment for why."""
+    with path.open(encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        return None
+    rss_values = [int(row["rss_kb"]) for row in rows]
+    thread_values = [int(row["thread_count"]) for row in rows]
+    return {
+        "max_rss_kb": max(rss_values),
+        "mean_rss_kb": sum(rss_values) / len(rss_values),
+        "max_threads": max(thread_values),
+        "sample_count": len(rows),
+    }
+
+
 def build_report(
     metadata: dict,
     throughput: dict[int, dict[str, dict]],
     latency: dict[int, dict[str, dict]],
+    resource_samples: dict | None = None,
 ) -> str:
     lines = ["# Benchmark summary", ""]
     lines.append(f"- Benchmark: `{metadata.get('benchmark', 'PublicApiMatchedPoolThroughputBenchmark')}`")
@@ -233,6 +269,37 @@ def build_report(
             ratio = tier["thisDriver"]["score"] / tier["clientV2"]["score"]
             lines.append("")
             lines.append(f"r2dbc-reactive/client-v2 throughput ratio: **{ratio:.2f}**")
+        lines.append("")
+
+    if resource_samples is not None:
+        lines.append("## Process resource usage (whole run, from /proc - trusted profile only)")
+        lines.append("")
+        lines.append(
+            "> **Whole-run aggregate, not per-driver or per-concurrency-tier.** Phase 11 PR2 (see "
+            "ROADMAP.md) added `scripts/benchmarks/sample-resources.sh`, a background /proc sampler "
+            "covering the entire JMH invocation - every fork, every `@Benchmark` method, every "
+            "`concurrency` tier, summed if more than one JMH-forked JVM happens to be alive at a "
+            "sample instant. It answers 'how much RSS/thread headroom did this whole run need', not "
+            "'how much did thisDriver's fork need vs. clientV2's' - breaking it down per-driver is "
+            "still open (see ROADMAP.md's Phase 11 PR2 entry). JMH's own `-prof hs_thr` (also wired "
+            "into the trusted profile) does report thread counts per fork/iteration already - see "
+            "this run's raw-stdout.log for its output; not parsed into this table yet."
+        )
+        lines.append("")
+        lines.append(
+            f"- Samples: {resource_samples['sample_count']} "
+            f"(~{resource_samples['sample_count'] * 2}s of wall-clock coverage at the sampler's "
+            "default 2s interval)"
+        )
+        lines.append(f"- Max RSS across every sampled JMH-forked JVM, summed: {resource_samples['max_rss_kb']:,} KB")
+        lines.append(
+            f"- Mean RSS across every sampled JMH-forked JVM, summed: "
+            f"{resource_samples['mean_rss_kb']:.0f} KB"
+        )
+        lines.append(
+            f"- Max live thread count across every sampled JMH-forked JVM, summed: "
+            f"{resource_samples['max_threads']}"
+        )
         lines.append("")
 
     return "\n".join(lines)
@@ -343,7 +410,11 @@ def main() -> int:
     latency_rows = extract_latency_rows(stdout_text)
     latency = average_latency_per_concurrency(results, latency_rows)
 
-    summary_md = build_report(metadata, throughput, latency)
+    resource_samples = None
+    if args.resource_samples_csv is not None and args.resource_samples_csv.exists():
+        resource_samples = load_resource_samples(args.resource_samples_csv)
+
+    summary_md = build_report(metadata, throughput, latency, resource_samples)
     (args.out_dir / "summary.md").write_text(summary_md, encoding="utf-8")
 
     plot_throughput(throughput, args.out_dir / "throughput.png")

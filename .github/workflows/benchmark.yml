@@ -27,8 +27,18 @@ name: Cloud benchmark pipeline
 #   fast    - 1 fork, 1 warmup iteration. A sanity check ("did it run, no catastrophic
 #             regression"), not a number to make a public performance claim from. Cheap enough to
 #             also run on a weekly schedule.
-#   trusted - 3 forks, 5 warmup iterations, -prof gc. workflow_dispatch only - deliberately never
-#             scheduled, so a noisy/slow run is something a human asked for, not unattended.
+#   trusted - 3 forks, 5 warmup iterations, -prof gc,hs_thr, plus a background /proc RSS/thread
+#             sampler (scripts/benchmarks/sample-resources.sh) for the whole run. workflow_dispatch
+#             only - deliberately never scheduled, so a noisy/slow run is something a human asked
+#             for, not unattended.
+#
+# Phase 11 PR2 (see ROADMAP.md): `-prof hs_thr` (JMH's own HotspotThreadProfiler, JVM/fork-scoped)
+# and the /proc-based RSS/thread sampler above exist to answer the open question of whether
+# client-v2's throughput edge (docs/performance/results.md's cloud-verified matched-pool result) is
+# bought with materially more platform threads/RSS than this driver's bounded, non-blocking pipeline
+# uses. The sampler is coarse (whole-run, not per-benchmark-method - see its own header comment for
+# why) and its resource-samples.csv section in summary.md is not yet interpreted against a real run's
+# numbers; treat it as raw evidence collection for now, not a settled conclusion.
 #
 # One ClickHouse container for the whole job, not one per JMH fork: BenchmarkEnvironment's default
 # (each fork starting its own Testcontainers-managed container) is meant for local development,
@@ -163,7 +173,7 @@ jobs:
           if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
             echo "forks=3" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=5" >> "$GITHUB_OUTPUT"
-            echo "profilers=gc" >> "$GITHUB_OUTPUT"
+            echo "profilers=gc,hs_thr" >> "$GITHUB_OUTPUT"
           else
             echo "forks=1" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=1" >> "$GITHUB_OUTPUT"
@@ -233,17 +243,41 @@ jobs:
           exit 1
 
       - name: Run selected benchmark
+        # trusted profile also runs scripts/benchmarks/sample-resources.sh in the background for the
+        # whole run (Phase 11 PR2, see this file's header comment) - Gradle is backgrounded so the
+        # sampler can run alongside it, `tail -f --pid` restores the same live-streamed log a plain
+        # foreground `| tee` would have given, and the sampler is stopped once Gradle exits either
+        # way (success or failure) so it never outlives this step.
         run: |
           PROFILER_FLAG=""
           if [ -n "${{ steps.jmh-params.outputs.profilers }}" ]; then
             PROFILER_FLAG="-Pjmh.profilers=${{ steps.jmh-params.outputs.profilers }}"
           fi
-          ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
-            -Pjmh.includes=${{ steps.benchmark.outputs.name }} \
-            -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
-            -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
-            $PROFILER_FLAG \
-            2>&1 | tee raw-stdout.log
+          if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
+            ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+              -Pjmh.includes=${{ steps.benchmark.outputs.name }} \
+              -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
+              -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
+              $PROFILER_FLAG \
+              >raw-stdout.log 2>&1 &
+            GRADLE_PID=$!
+            tail -f raw-stdout.log --pid="$GRADLE_PID" &
+            TAIL_PID=$!
+            bash scripts/benchmarks/sample-resources.sh "$GRADLE_PID" resource-samples.csv 2 &
+            SAMPLER_PID=$!
+            GRADLE_EXIT=0
+            wait "$GRADLE_PID" || GRADLE_EXIT=$?
+            kill "$SAMPLER_PID" "$TAIL_PID" 2>/dev/null || true
+            wait "$SAMPLER_PID" "$TAIL_PID" 2>/dev/null || true
+            exit "$GRADLE_EXIT"
+          else
+            ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+              -Pjmh.includes=${{ steps.benchmark.outputs.name }} \
+              -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
+              -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
+              $PROFILER_FLAG \
+              2>&1 | tee raw-stdout.log
+          fi
 
       - name: Write run metadata
         run: |
@@ -318,11 +352,16 @@ jobs:
         # is better than just skipping it and shipping the raw data.
         if: steps.benchmark.outputs.name == 'PublicApiMatchedPoolThroughputBenchmark'
         run: |
+          RESOURCE_SAMPLES_FLAG=""
+          if [ -f resource-samples.csv ]; then
+            RESOURCE_SAMPLES_FLAG="--resource-samples-csv resource-samples.csv"
+          fi
           python3 scripts/benchmarks/analyze.py \
             --results-json clickhouse-r2dbc-reactive-benchmarks/build/results/jmh/results.json \
             --stdout-log raw-stdout.log \
             --metadata-json metadata.json \
-            --out-dir benchmark-results
+            --out-dir benchmark-results \
+            $RESOURCE_SAMPLES_FLAG
 
       - name: Assemble artifact directory
         run: |
@@ -330,6 +369,11 @@ jobs:
           cp clickhouse-r2dbc-reactive-benchmarks/build/results/jmh/results.json benchmark-results/results.json
           cp raw-stdout.log benchmark-results/raw-stdout.log
           cp metadata.json benchmark-results/metadata.json
+          # Only present on the trusted profile (see scripts/benchmarks/sample-resources.sh) - not
+          # an error if missing on fast, so no existence check failure here.
+          if [ -f resource-samples.csv ]; then
+            cp resource-samples.csv benchmark-results/resource-samples.csv
+          fi
 
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
