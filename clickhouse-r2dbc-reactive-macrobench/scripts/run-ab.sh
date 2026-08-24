@@ -24,7 +24,7 @@ BACKEND="${1:?usage: $0 <r2dbc|client-v2> <point|analytics|stream> [requests] [c
 SCENARIO="${2:?usage: $0 <r2dbc|client-v2> <point|analytics|stream> [requests] [concurrency]}"
 REQUESTS="${3:-2000}"
 CONCURRENCY="${4:-10}"
-WARMUP_REQUESTS=200
+WARMUP_REQUESTS="${WARMUP_REQUESTS:-200}"
 BASE_URL="${MACROBENCH_BASE_URL:-http://localhost:8081}"
 
 case "$SCENARIO" in

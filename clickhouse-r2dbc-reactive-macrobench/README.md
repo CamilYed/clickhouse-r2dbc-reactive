@@ -58,10 +58,17 @@ To compare both backends across all three scenarios at once instead of reading s
 combination and prints one table (RPS, mean/p50/p95/p99/max latency, failed requests):
 
 ```bash
-scripts/ab-summary.sh              # defaults: 2000 requests, concurrency 10
-scripts/ab-summary.sh 20000 100    # heavier run
+scripts/ab-summary.sh              # "quick" profile: 2000 requests, concurrency 10
+scripts/ab-summary.sh stress       # "stress" profile: 50000 requests, concurrency 200, warmup 5000
+scripts/ab-summary.sh 20000 100 2000  # explicit requests/concurrency/warmup
 KEEP_LOGS=1 scripts/ab-summary.sh  # keep each run's full ab output for inspection
 ```
+
+`stress` is still `ab` (closed-loop, local-only - see `run-ab.sh`'s header), just heavier concurrency
+and a proportionally longer warmup than the default smoke-test profile - useful for seeing
+tail-latency behavior diverge under real concurrent load instead of an idle 10-connection sanity
+check. If `ab` fails with `apr_socket_recv: ... Too many open files`, raise your shell's open-file
+limit first: `ulimit -n 4096`.
 
 Configuration (env vars, all optional - see `application.yml` for defaults):
 
