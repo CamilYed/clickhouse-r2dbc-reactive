@@ -95,6 +95,7 @@ on:
           - DefaultPoolSlowQueryThroughputBenchmark
           - ClientV2ExecutorAggressivenessBenchmark
           - DecoderWorkerCountThroughputBenchmark
+          - DecoderAndPendingAcquireWidenedThroughputBenchmark
           - PoolSizeSweepThroughputBenchmark
           - ConnectionPerOperationThroughputBenchmark
           - BoundedPoolConcurrencyBenchmark

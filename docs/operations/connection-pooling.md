@@ -124,8 +124,16 @@ default) keeps that number safely under Reactor Netty's own pending-acquire-queu
 (`2 × maxConnections` by default); widening it removes that incidental protection and, at
 concurrency above the pool size, exposes the pending-acquire-queue limit as a hard failure instead
 of just added latency. **The driver's default stays coupled because of this** — see the ROADMAP.md
-Phase 11 PR5 entry for the full result and the parked follow-up (widening the decoder *and*
-`transportPendingAcquireMaxCount` together, not just the decoder alone).
+Phase 11 PR5 entry for the full result.
+
+**Follow-up in progress:** `DecoderAndPendingAcquireWidenedThroughputBenchmark` widens
+`decoderWorkerCount` and `transportPendingAcquireMaxCount` together (both deliberately generous,
+not minimally tuned) to test whether that recovers the `concurrency=8` win at 32/128 too, without
+the failures widening the decoder alone produced — working theory being that today's shape is two
+queues in series (the decoder's own queue, then Reactor Netty's pending-acquire queue), and tandem
+queueing compounds tail latency beyond what either queue alone would. Code is built (see
+ROADMAP.md's Phase 11 PR5 entry for the class name and exact values); not yet run on trusted CI, so
+not yet a recommendation either way.
 
 ### Is it worth setting `maxConnections` yourself?
 
