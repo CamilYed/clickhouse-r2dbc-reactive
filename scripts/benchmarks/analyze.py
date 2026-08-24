@@ -11,10 +11,12 @@ ClickHouse - it only reads three inputs already sitting on disk:
                        secondary-metric source of truth; never parsed from stdout).
   2. raw-stdout.log  - the full console output of the `jmh` Gradle task, captured via `tee` in the
                        workflow. PublicApiMatchedPoolThroughputBenchmark logs a per-query latency
-                       percentile line once per measurement iteration via SLF4J
-                       (see logLatencySummary in that class) - JMH's own JSON has no per-query
-                       latency at all in Throughput mode, only the aggregate score, so this is the
-                       only source for p50/p90/p95/p99.
+                       percentile line once per measurement iteration via SLF4J (logLatencySummary)
+                       and, since Phase 11 PR4, one exact merged-histogram line per JMH fork
+                       (logMergedLatencySummary, preferred by this script when present - see
+                       MERGED_LATENCY_LINE) - JMH's own JSON has no per-query latency at all in
+                       Throughput mode, only the aggregate score, so this is the only source for
+                       p50/p90/p95/p99.
   3. metadata.json   - environment/run metadata the workflow writes before invoking this script
                        (commit SHA, branch, JDK, OS/arch, ClickHouse image, client-v2 version,
                        driver version, fork/warmup/pool-size counts, profile name).
@@ -53,9 +55,21 @@ import matplotlib.pyplot as plt
 #   thisDriver per-query latency (us, n=4096): mean=123.4, p50=100, p90=200, p95=250, p99=400, p99.9=600, max=1200
 # slf4j-simple prefixes it with "[thread] LEVEL logger - ", which this pattern ignores by
 # matching only the part after the last " - " (kept liberal on purpose: the exact SLF4J prefix
-# format isn't a contract this script should be coupled to).
+# format isn't a contract this script should be coupled to). One line per measurement iteration -
+# kept around only as a fallback for reprocessing pre-Phase-11-PR4 logs, see MERGED_LATENCY_LINE.
 LATENCY_LINE = re.compile(
     r"(?P<driver>thisDriver|clientV2) per-query latency .*?n=(?P<n>\d+)\):"
+    r" mean=(?P<mean>[\d.]+), p50=(?P<p50>\d+), p90=(?P<p90>\d+), p95=(?P<p95>\d+),"
+    r" p99=(?P<p99>\d+), p99\.9=(?P<p999>\d+), max=(?P<max>\d+)"
+)
+
+# PublicApiMatchedPoolThroughputBenchmark.logMergedLatencySummary's SLF4J log line (Phase 11 PR4,
+# see ROADMAP.md) - one per JMH fork, not per measurement iteration. Its percentiles are an exact
+# HdrHistogram merge (via Histogram#add, lossless since every histogram shares the same trackable
+# range/precision - see that class's Javadoc) of every iteration inside that fork, e.g.:
+#   thisDriver TRUE MERGED per-query latency (us, n=12288): mean=123.4, p50=100, ...
+MERGED_LATENCY_LINE = re.compile(
+    r"(?P<driver>thisDriver|clientV2) TRUE MERGED per-query latency .*?n=(?P<n>\d+)\):"
     r" mean=(?P<mean>[\d.]+), p50=(?P<p50>\d+), p90=(?P<p90>\d+), p95=(?P<p95>\d+),"
     r" p99=(?P<p99>\d+), p99\.9=(?P<p999>\d+), max=(?P<max>\d+)"
 )
@@ -172,6 +186,62 @@ def average_latency_per_concurrency(
     return out
 
 
+def extract_merged_latency_rows(stdout_text: str) -> dict[str, list[dict]]:
+    """{driver: [one dict per JMH fork, in file order]} - see MERGED_LATENCY_LINE's own comment.
+    No concurrency tag in the log line itself, same caveat as extract_latency_rows: the caller must
+    zip these against results.json's own fork-by-fork, method-by-method, concurrency-by-concurrency
+    ordering."""
+    rows: dict[str, list[dict]] = {"thisDriver": [], "clientV2": []}
+    for match in MERGED_LATENCY_LINE.finditer(stdout_text):
+        d = match.groupdict()
+        rows[d["driver"]].append(
+            {
+                "n": int(d["n"]),
+                "mean": float(d["mean"]),
+                "p50": int(d["p50"]),
+                "p90": int(d["p90"]),
+                "p95": int(d["p95"]),
+                "p99": int(d["p99"]),
+                "p99_9": int(d["p999"]),
+                "max": int(d["max"]),
+            }
+        )
+    return rows
+
+
+def merged_latency_per_concurrency(
+    results: list[dict], merged_rows: dict[str, list[dict]]
+) -> dict[int, dict[str, dict]]:
+    """Matches each (driver, concurrency) entry to its own JMH forks' TRUE MERGED lines - one line
+    per fork, not per iteration, so the chunk size here is each entry's own `forks` count (compare
+    average_latency_per_concurrency, which chunks by measurementIterations * forks instead). Each
+    matched line is already an exact merge of every iteration inside its fork; this function only
+    averages *those* together when more than one fork ran (the trusted profile's forks=3) - with
+    forks=1 (the fast profile) the result is an exact global percentile, not an approximation at
+    all."""
+    cursors = {"thisDriver": 0, "clientV2": 0}
+    out: dict[int, dict[str, dict]] = {}
+    for entry in results:
+        driver = method_name(entry["benchmark"])
+        if driver not in DRIVER_LABELS:
+            continue
+        concurrency = int(entry["params"]["concurrency"])
+        forks = int(entry.get("forks", 1))
+        start = cursors[driver]
+        end = start + forks
+        chunk = merged_rows[driver][start:end]
+        cursors[driver] = end
+        if not chunk:
+            out.setdefault(concurrency, {})[driver] = None
+            continue
+        averaged = {
+            key: sum(row[key] for row in chunk) / len(chunk)
+            for key in ("p50", "p90", "p95", "p99", "p99_9", "mean")
+        }
+        out.setdefault(concurrency, {})[driver] = averaged
+    return out
+
+
 def load_resource_samples(path: Path) -> dict | None:
     """Parses scripts/benchmarks/sample-resources.sh's CSV (timestamp_epoch, rss_kb, thread_count,
     jvm_count) into {"max_rss_kb", "mean_rss_kb", "max_threads", "sample_count"}, or None if the
@@ -198,6 +268,7 @@ def build_report(
     throughput: dict[int, dict[str, dict]],
     latency: dict[int, dict[str, dict]],
     resource_samples: dict | None = None,
+    latency_is_merged: bool = True,
 ) -> str:
     lines = ["# Benchmark summary", ""]
     lines.append(f"- Benchmark: `{metadata.get('benchmark', 'PublicApiMatchedPoolThroughputBenchmark')}`")
@@ -228,24 +299,38 @@ def build_report(
         "repeated across several runs."
     )
     lines.append("")
-    lines.append(
-        "> **p50/p90/p95/p99 below are the mean of each measurement iteration's own HdrHistogram "
-        "percentile, not one percentile computed over all samples merged together.** JMH logs one "
-        "percentile set per iteration (see `logLatencySummary`); this script averages those "
-        "per-iteration values rather than merging the underlying histograms, so a genuine p99 "
-        "outlier confined to one iteration can be smoothed out here. The *direction* of a "
-        "comparison (which driver is faster) is unaffected, but treat the exact number as a "
-        "mean-of-iteration-p99, not a statistically precise global p99, until this is replaced with "
-        "a true merged-histogram calculation (tracked in ROADMAP.md)."
-    )
+    if latency_is_merged:
+        lines.append(
+            "> **p50/p90/p95/p99 below are exact HdrHistogram merges, not an average of "
+            "per-iteration percentiles.** Phase 11 PR4 (see ROADMAP.md) changed "
+            "`PublicApiMatchedPoolThroughputBenchmark` to accumulate every measurement iteration "
+            "into one running histogram per JMH fork (via `Histogram#add`, lossless since every "
+            "histogram shares the same trackable-range/precision settings) and log it once at "
+            "trial teardown - see `logMergedLatencySummary`. With `forks=1` (the fast profile) the "
+            "value below is an exact global percentile for that `(driver, concurrency)` "
+            "combination; with `forks>1` (the trusted profile, `forks=3`) this script still "
+            "averages across forks, but that now only smooths over 3 already-exact per-fork "
+            "percentiles instead of dozens of approximate per-iteration ones. The *direction* of a "
+            "comparison (which driver is faster) was already reliable before this change; this "
+            "mainly tightens the exact numbers."
+        )
+    else:
+        lines.append(
+            "> **p50/p90/p95/p99 below are the mean of each measurement iteration's own HdrHistogram "
+            "percentile, not one percentile computed over all samples merged together.** This log "
+            "predates Phase 11 PR4's merged-histogram line (`logMergedLatencySummary`), so this "
+            "script fell back to averaging each iteration's own percentile instead - a genuine p99 "
+            "outlier confined to one iteration can be smoothed out here. The *direction* of a "
+            "comparison (which driver is faster) is unaffected, but treat the exact number as a "
+            "mean-of-iteration-p99, not a statistically precise global p99."
+        )
     lines.append("")
 
     for concurrency in sorted(throughput):
         lines.append(f"## concurrency={concurrency}")
         lines.append("")
         lines.append(
-            "| driver | throughput (ops/s) | error | p50 (avg-of-iters, us) | p90 (avg-of-iters, us) "
-            "| p95 (avg-of-iters, us) | p99 (avg-of-iters, us) | B/op |"
+            "| driver | throughput (ops/s) | error | p50 (us) | p90 (us) | p95 (us) | p99 (us) | B/op |"
         )
         lines.append("|---|---|---|---|---|---|---|---|")
         tier = throughput[concurrency]
@@ -407,14 +492,19 @@ def main() -> int:
         )
         return 1
 
-    latency_rows = extract_latency_rows(stdout_text)
-    latency = average_latency_per_concurrency(results, latency_rows)
+    merged_rows = extract_merged_latency_rows(stdout_text)
+    latency_is_merged = any(merged_rows.values())
+    if latency_is_merged:
+        latency = merged_latency_per_concurrency(results, merged_rows)
+    else:
+        latency_rows = extract_latency_rows(stdout_text)
+        latency = average_latency_per_concurrency(results, latency_rows)
 
     resource_samples = None
     if args.resource_samples_csv is not None and args.resource_samples_csv.exists():
         resource_samples = load_resource_samples(args.resource_samples_csv)
 
-    summary_md = build_report(metadata, throughput, latency, resource_samples)
+    summary_md = build_report(metadata, throughput, latency, resource_samples, latency_is_merged)
     (args.out_dir / "summary.md").write_text(summary_md, encoding="utf-8")
 
     plot_throughput(throughput, args.out_dir / "throughput.png")

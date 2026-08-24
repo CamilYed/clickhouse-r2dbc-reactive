@@ -69,6 +69,19 @@ import reactor.core.publisher.Mono;
  * not JMH's own {@code Score}/{@code Error}, which only describes the aggregate throughput of the
  * whole sustained workload.
  *
+ * <h2>What the logged TRUE MERGED per-query latency means</h2>
+ *
+ * Phase 11 PR4 (see ROADMAP.md): each state also accumulates every measurement iteration's interval
+ * histogram into one running, never-reset {@link Histogram} via {@link Histogram#add(Histogram)} —
+ * an exact, lossless merge, since every histogram involved shares the same {@link
+ * #LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS}/precision settings — logged once per fork at {@link
+ * Level#Trial} teardown. Unlike the per-iteration lines above (an approximate mean of however many
+ * iterations a fork ran), this line's percentiles are computed over every sample the fork actually
+ * recorded. With {@code forks=1} that's already an exact global percentile for that {@code (driver,
+ * concurrency)} combination; with {@code forks>1} (the trusted CI profile) {@code analyze.py} still
+ * averages this line's value across forks, but that is now only averaging a handful of
+ * already-exact per-fork percentiles, not dozens of approximate per-iteration ones.
+ *
  * <h2>Why {@link ThisDriverState}/{@link ClientV2State} are separate {@code @State} classes</h2>
  *
  * Earlier versions of this class used one shared {@code @State(Scope.Benchmark)} holding both
@@ -125,6 +138,7 @@ public class PublicApiMatchedPoolThroughputBenchmark {
     private final AtomicLong idCursor = new AtomicLong();
     private OurDriverPointQueryClient client;
     private Recorder latencyRecorder;
+    private Histogram mergedHistogram;
 
     /**
      * Starts the shared/external server, seeds {@link PointQueryTable}, builds this driver's client
@@ -139,20 +153,28 @@ public class PublicApiMatchedPoolThroughputBenchmark {
       client = new OurDriverPointQueryClient(poolSize);
       client.prewarm(ids, PREWARM_CALLS);
       latencyRecorder = new Recorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
+      mergedHistogram = new Histogram(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
     }
 
-    /** Closes the client's connection and disposes its owning factory at the end of the trial. */
+    /**
+     * Logs this fork's exact merged per-query latency (see the class Javadoc's "TRUE MERGED"
+     * section), then closes the client's connection and disposes its owning factory.
+     */
     @TearDown(Level.Trial)
     public void tearDownTrial() {
+      logMergedLatencySummary("thisDriver", mergedHistogram);
       client.close();
     }
 
     /**
-     * Logs and resets this driver's per-query latency distribution once per measurement iteration.
+     * Merges this iteration's interval histogram into {@link #mergedHistogram}, then logs and
+     * resets this driver's per-query latency distribution.
      */
     @TearDown(Level.Iteration)
     public void tearDownIteration() {
-      logLatencySummary("thisDriver", latencyRecorder.getIntervalHistogram());
+      final Histogram interval = latencyRecorder.getIntervalHistogram();
+      mergedHistogram.add(interval);
+      logLatencySummary("thisDriver", interval);
     }
 
     /**
@@ -183,6 +205,7 @@ public class PublicApiMatchedPoolThroughputBenchmark {
     private final AtomicLong idCursor = new AtomicLong();
     private ClientV2PointQueryClient client;
     private Recorder latencyRecorder;
+    private Histogram mergedHistogram;
 
     /**
      * Starts the shared/external server, seeds {@link PointQueryTable}, builds client-v2's client
@@ -197,20 +220,28 @@ public class PublicApiMatchedPoolThroughputBenchmark {
       client = new ClientV2PointQueryClient(poolSize);
       client.prewarm(ids, PREWARM_CALLS);
       latencyRecorder = new Recorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
+      mergedHistogram = new Histogram(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
     }
 
-    /** Closes client-v2's client (and its connection pool) at the end of the trial. */
+    /**
+     * Logs this fork's exact merged per-query latency (see the class Javadoc's "TRUE MERGED"
+     * section), then closes client-v2's client (and its connection pool).
+     */
     @TearDown(Level.Trial)
     public void tearDownTrial() {
+      logMergedLatencySummary("clientV2", mergedHistogram);
       client.close();
     }
 
     /**
-     * Logs and resets client-v2's per-query latency distribution once per measurement iteration.
+     * Merges this iteration's interval histogram into {@link #mergedHistogram}, then logs and
+     * resets client-v2's per-query latency distribution.
      */
     @TearDown(Level.Iteration)
     public void tearDownIteration() {
-      logLatencySummary("clientV2", latencyRecorder.getIntervalHistogram());
+      final Histogram interval = latencyRecorder.getIntervalHistogram();
+      mergedHistogram.add(interval);
+      logLatencySummary("clientV2", interval);
     }
 
     /**
@@ -278,6 +309,30 @@ public class PublicApiMatchedPoolThroughputBenchmark {
     // would correspond to roughly one sample and shouldn't be treated as evidence of anything.
     LOG.info(
         "{} per-query latency (µs, n={}): mean={}, p50={}, p90={}, p95={}, p99={}, p99.9={}, max={}",
+        driverName,
+        histogram.getTotalCount(),
+        String.format("%.1f", histogram.getMean()),
+        histogram.getValueAtPercentile(50),
+        histogram.getValueAtPercentile(90),
+        histogram.getValueAtPercentile(95),
+        histogram.getValueAtPercentile(99),
+        histogram.getValueAtPercentile(99.9),
+        histogram.getMaxValue());
+  }
+
+  /**
+   * Logs one fork's exact merged per-query latency distribution — see the class Javadoc's "What the
+   * logged TRUE MERGED per-query latency means" section. A distinct log message (containing the
+   * literal text {@code "TRUE MERGED"}) rather than reusing {@link #logLatencySummary}, so {@code
+   * analyze.py} can tell the two kinds of line apart by regex without any ambiguity.
+   */
+  private static void logMergedLatencySummary(final String driverName, final Histogram histogram) {
+    if (histogram.getTotalCount() == 0) {
+      return;
+    }
+    LOG.info(
+        "{} TRUE MERGED per-query latency (µs, n={}): mean={}, p50={}, p90={}, p95={}, p99={},"
+            + " p99.9={}, max={}",
         driverName,
         histogram.getTotalCount(),
         String.format("%.1f", histogram.getMean()),

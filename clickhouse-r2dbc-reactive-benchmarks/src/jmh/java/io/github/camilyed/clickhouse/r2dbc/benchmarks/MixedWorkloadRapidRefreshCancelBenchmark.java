@@ -36,8 +36,8 @@ import reactor.core.scheduler.Schedulers;
  * {@link #users} concurrent logical user sessions, each repeatedly picking one of {@link
  * #HEAVY_QUERY_COUNT} distinct heavy analytical queries, firing it, then — after a short {@link
  * #THINK_TIME} shorter than these queries typically take — abandoning it for a new one, exactly
- * like a user rapidly hitting refresh on a dashboard before the previous load finished. A separate,
- * not-yet-built {@code MixedWorkloadRapidRefreshPileUpBenchmark} is planned as the other named
+ * like a user rapidly hitting refresh on a dashboard before the previous load finished. {@link
+ * MixedWorkloadRapidRefreshPileUpBenchmark} (Phase 11 PR4, see ROADMAP.md) is the other named
  * variant (no cancellation — old and new queries both run to completion) — a separate class rather
  * than a flag on this one, per this project's own "don't collapse different questions into one
  * parameterized benchmark" practice (the same reasoning {@code

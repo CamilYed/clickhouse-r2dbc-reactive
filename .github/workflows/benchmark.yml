@@ -101,6 +101,7 @@ on:
           - PointQueryBenchmark
           - PublicApiPointQueryBenchmark
           - MixedWorkloadRapidRefreshCancelBenchmark
+          - MixedWorkloadRapidRefreshPileUpBenchmark
         default: PublicApiMatchedPoolThroughputBenchmark
   schedule:
     # 05:00 UTC weekly (Monday) - fast profile only, see the schedule step below. Outside typical
@@ -172,11 +173,21 @@ jobs:
 
       - name: Set JMH parameters for profile
         id: jmh-params
+        # jfr:dir=/tmp/jfr-output (Phase 11 PR4, see ROADMAP.md) - an explicit absolute path rather
+        # than JFR's own default (the forked JVM's user.dir, whatever Gradle happens to launch it
+        # from), so "Assemble artifact directory" below can find it without guessing. JMH's own
+        # JavaFlightRecorderProfiler writes one profile.jfr per (benchmark method, @Param
+        # combination) subdirectory, overwritten by each successive fork within that combination -
+        # with forks=3, only the last fork's recording survives on disk, not a merge of all three.
+        # That's an inherent JMH/JFR limitation (confirmed by reading
+        # JavaFlightRecorderProfiler#createTrialOutDir/afterIteration upstream), not a bug in this
+        # workflow - acceptable for this phase's purpose (exploratory profiling to point PR5 at a
+        # specific hot path, not a quantitative multi-fork JFR aggregate).
         run: |
           if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
             echo "forks=3" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=5" >> "$GITHUB_OUTPUT"
-            echo "profilers=gc,hs_thr" >> "$GITHUB_OUTPUT"
+            echo "profilers=gc,hs_thr,jfr:dir=/tmp/jfr-output" >> "$GITHUB_OUTPUT"
           else
             echo "forks=1" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=1" >> "$GITHUB_OUTPUT"
@@ -376,6 +387,13 @@ jobs:
           # an error if missing on fast, so no existence check failure here.
           if [ -f resource-samples.csv ]; then
             cp resource-samples.csv benchmark-results/resource-samples.csv
+          fi
+          # Only present on the trusted profile (Phase 11 PR4's -prof jfr:dir=/tmp/jfr-output, see
+          # the "Set JMH parameters for profile" step above) - raw .jfr files, not parsed by
+          # analyze.py; open with JDK Mission Control or `jfr print`/`jfr summary` locally.
+          if [ -d /tmp/jfr-output ]; then
+            mkdir -p benchmark-results/jfr
+            cp -r /tmp/jfr-output/. benchmark-results/jfr/
           fi
 
       - name: Upload benchmark artifact
