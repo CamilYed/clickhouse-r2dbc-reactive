@@ -1,4 +1,4 @@
-# Results (newest first — last updated 2026-08-23)
+# Results (newest first — last updated 2026-08-24)
 
 Sections below are ordered by when that result was last (re-)measured, newest first, not grouped
 by benchmark category — so the current, trustworthy numbers are always at the top and older/
@@ -13,6 +13,75 @@ for what each benchmark class actually exercises.
 > exactly as it was measured and reported at the time — it's a literal record of what that CI run's
 > JMH output and this page's own analysis actually said, not a live label — so it is **not**
 > rewritten retroactively. Only benchmark runs from this point forward will show `thisDriver`.
+
+## Full mega sweep — every scenario, one run (2026-08-24)
+
+The 12 "core" benchmark classes (task #295) run together in one sweep, `trusted` profile (3 forks,
+5 warmup iterations, `-prof gc`), GitHub Actions `ubuntu-latest` (4 cores, 16GB RAM), commit
+`a012481` — right after fixing a real, previously-undiscovered bug (task #296: 10 "manual pipeline"
+benchmarks were feeding the decoder `ResponseCompression.NONE` while the transport actually sent
+`compress=1`, so `thisDriver` failed outright on every one of them; fixed by matching the two).
+Aggregated from each run's raw `results.json` via the new `scripts/benchmarks/aggregate-all.py`
+(generic across `@Param` shapes and `@BenchmarkMode`, unlike `analyze.py` which only knows
+`PublicApiMatchedPoolThroughputBenchmark`'s specific shape). 11 of 12 produced usable data;
+`MixedWorkloadRapidRefreshPileUpBenchmark` timed out completely on every fork for both drivers
+under the shared runner's limited resources and was removed — see [Open
+follow-ups](#open-follow-ups).
+
+This is the "every scenario in one place" view; several rows below link to an existing section with
+the full root-cause narrative behind that number instead of repeating it here.
+
+| Benchmark | What it tests | Key result | Verdict |
+| --- | --- | --- | --- |
+| [`TrivialQueryBenchmark`](#protocol-floor-essentially-tied) | `SELECT 1`, raw protocol floor | thisDriver 1316 µs vs client-v2 1221 µs | 🔴 thisDriver ~8% slower |
+| [`PublicApiPointQueryBenchmark`](#protocol-floor-essentially-tied) | Point lookup via public R2DBC SPI, enabled vs noop observability | client-v2 1830 µs, thisDriver (observation enabled) 1925 µs, thisDriver (noop) 1966 µs | 🟡 thisDriver ~5–8% slower either way — enabling observation cost nothing extra here |
+| [`AggregationBenchmark`](#aggregation-a-wash) | `GROUP BY`/`count()`/`avg()`/`quantile()`, 10k–1M rows | 10k: +13.4% slower · 100k: +0.7% · 1M: +1.6% | 🟡 mostly tied, 10k the one outlier |
+| [`StreamingScanBenchmark`](#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m) | Full table scan, 10k–1M rows | 10k: **11.5% faster** · 100k: **5.2% faster** · 1M: **12.3% faster** | 🟢 clean win at every tier — first cloud run to resolve the 1M instability |
+| [`DefaultPoolSlowQueryThroughputBenchmark`](#default-pool-slow-query-this-drivers-larger-default-pool-wins-once-its-actually-used-2026-08-23) | Server-side `sleep()`, each side's real default pool | concurrency=32: **~2x faster** · concurrency=8: tied | 🟢 reconfirms the 2026-08-23 finding almost exactly |
+| [`BoundedPoolConcurrencyBenchmark`](#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23) | Matched 8-connection pool, burst latency | concurrency=8: +20.2% slower · 32: +9.5% · 128: +3.5% | 🔴 same direction as the matched-pool latency gap below — third confirmation |
+| [`PublicApiMatchedPoolThroughputBenchmark`](#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23) | Matched 8-connection pool, real throughput via public SPI | concurrency=8: ratio 0.88 · 32: 0.91 · 128: 0.97 | 🔴 client-v2 ahead by 3–12%, consistent with the two earlier cloud runs |
+| [`MatchedPoolThreadsConcurrencyBenchmark`](#blocking-calls-confirms-its-the-calling-style-not-the-pool) | `@Threads(8)` blocking-caller style, matched pool | rows=10000: +8.8% slower | 🔴 same latency gap again, fourth benchmark now pointing at it |
+| `PoolSizeSweepThroughputBenchmark` | Point-query throughput across pool sizes 4/8/16/32 | 4: tied · 8: −2.0% · 16: −3.4% · 32: −6.9% | 🟡 new finding — thisDriver's throughput deficit *grows* with pool size, see below |
+| `DecoderWorkerCountThroughputBenchmark` | thisDriver only: coupled (pool-sized) vs manually widened decoder worker count | coupled ≈760–772 ops/s flat across concurrency · widened@8 721.9 ops/s | 🟡 widening the decoder pool past the connection-pool size didn't help, see below |
+| [`FluxInputStreamBridgeMicrobenchmark`](../../ROADMAP.md#fluxinputstreambridge-queuecopy-overhead--measured-ruled-out-as-a-bottleneck-2026-08-24) | Microbenchmark, not a driver comparison — isolates the chunk-handoff queue/copy cost | ~40–50 ns/chunk, ~200x smaller than the real per-chunk cost | ⚪ ruled out as a bottleneck, not built on further |
+
+### Pool size sweep: thisDriver's throughput gap widens as the pool gets bigger
+
+<p align="center">
+  <img src="../images/2026-08-24-mega-pool-size-sweep.png" width="720" alt="PoolSizeSweepThroughputBenchmark throughput by pool size, this driver vs client-v2">
+</p>
+
+| Pool size | thisDriver (ops/s) | client-v2 (ops/s) | verdict |
+| --- | --- | --- | --- |
+| 4 | 1105.07 | 1105.04 | tied |
+| 8 | 1104.11 | 1126.43 | client-v2 2.0% ahead |
+| 16 | 1145.50 | 1185.34 | client-v2 3.4% ahead |
+| 32 | 1091.50 | 1172.57 | client-v2 6.9% ahead |
+
+Not explained by this sweep alone — consistent with the same latency-gap family as the matched-pool
+and blocking-caller findings above, but the fact that it *widens* with pool size (rather than
+staying flat) is new information worth folding into the open latency-gap investigation rather than
+treating as a separate mystery.
+
+### Decoder worker count: widening past the pool size didn't help
+
+<p align="center">
+  <img src="../images/2026-08-24-mega-decoder-worker-count.png" width="720" alt="DecoderWorkerCountThroughputBenchmark throughput, coupled vs widened decoder worker count">
+</p>
+
+`RowDecodingScheduler`'s worker count is normally tied to the resolved connection pool size (task
+#273). This class tests whether manually widening it past that (more decode workers than
+connections) buys any throughput — it doesn't: 721.9 ops/s widened vs ~769 ops/s coupled at the
+same concurrency=8, i.e. slightly *worse*, not better. The coupled default stays justified; no
+follow-up experiment planned from this result alone.
+
+<p align="center">
+  <img src="../images/2026-08-24-mega-trivial-query.png" width="720" alt="TrivialQueryBenchmark latency, this driver vs client-v2, 2026-08-24 cloud sweep">
+</p>
+
+<p align="center">
+  <img src="../images/2026-08-24-mega-point-query.png" width="720" alt="PublicApiPointQueryBenchmark latency, this driver (observation enabled/noop) vs client-v2, 2026-08-24 cloud sweep">
+</p>
 
 ## Default pool, slow query — this driver's larger default pool wins once it's actually used (2026-08-23)
 
@@ -51,6 +120,14 @@ concurrency exceeds the smaller side's pool, and does nothing when it doesn't** 
 verdict on either driver's architecture, since the pool-size difference itself (16 vs. 10) is what
 produced the gap here, not a difference in calling style or protocol efficiency (both already
 measured, separately, in the matched-pool result below).
+
+> [!NOTE]
+> **Reconfirmed in the 2026-08-24 mega sweep** (`DefaultPoolSlowQueryThroughputBenchmark`, see the
+> [overview table](#full-mega-sweep--every-scenario-one-run-2026-08-24)) — numbers are
+> near-identical to the run above (concurrency=32/sleepSeconds=0.5: 1036.9 vs 2026.7 ms;
+> concurrency=8: tied both ways), a good stability signal across two independent trusted runs on
+> different days.
+> ![DefaultPoolSlowQueryThroughputBenchmark chart](../images/2026-08-24-mega-default-pool-slow-query.png)
 
 ## Cloud-verified matched pool, real async on both sides (2026-08-23)
 
@@ -106,46 +183,18 @@ the fix intact.
   <img src="../images/2026-08-23-cloud-matched-pool-allocation.png" width="720" alt="Cloud-verified allocation per query, matched 8-connection pool, this driver vs client-v2, run 2">
 </p>
 
-## Non-blocking, matched pool: numbers below are retracted pending re-run
-
-> [!WARNING]
-> **The `BoundedPoolConcurrencyBenchmark` numbers in this section (3.5–4.1x latency, ~4x
-> throughput) were measured against a client-v2 benchmark-harness bug, not a fair comparison —
-> treat them as retracted until this class is re-run with the fix.** client-v2's async client
-> defaults `ClientConfigProperties.ASYNC_OPERATIONS` to `false`; without `.useAsyncRequests(true)`
-> on the `Client.Builder` used here, `Client#query(...)` runs synchronously on the calling thread
-> and returns an already-completed future — every client-v2 query in this benchmark's
-> `Flux.flatMap(..., concurrency)` therefore ran on one sequential worker, not the matched
-> 8-connection pool the table below claims. Confirmed by the math: client-v2's own numbers here
-> show flat throughput and latency scaling almost exactly linearly with concurrency (8→32→128
-> tracks 4x→4x) — the textbook signature of a single-server queue, not an 8-way pool. See
-> ["Cloud-verified matched pool" above](#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23)
-> for the same scenario re-run with the bug fixed — a materially different, honest result. This
-> section is kept for the record, not as a current claim.
-
-<p align="center">
-  <img src="../images/2026-08-20-bounded-pool-concurrency.png" width="720" alt="BoundedPoolConcurrencyBenchmark burst latency by concurrency level, this driver vs client-v2 (retracted — see warning above)">
-</p>
-
-| Concurrency (pool=8, both sides) | this driver (mean) | client-v2 (mean) | verdict |
-| --- | --- | --- | --- |
-| 8 | 2700 µs | 9324 µs | ~~this driver 71.0% faster (3.5x)~~ retracted |
-| 32 | 10,008 µs | 37,086 µs | ~~this driver 73.0% faster (3.7x)~~ retracted |
-| 128 | 36,723 µs | 148,890 µs | ~~this driver 75.3% faster (4.1x)~~ retracted |
-
-<p align="center">
-  <img src="../images/2026-08-20-throughput.png" width="720" alt="Real point-query throughput through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2 (retracted — see warning above)">
-</p>
-
-| Concurrency (pool=8, both sides) | this driver (ops/s) | client-v2 (ops/s) | verdict |
-| --- | --- | --- | --- |
-| 8 | 3516 | 900 | ~~3.9x throughput~~ retracted |
-| 32 | 3615 | 900 | ~~4.0x throughput~~ retracted |
-| 128 | 3541 | 893 | ~~4.0x throughput~~ retracted |
-
-`BoundedPoolConcurrencyBenchmark` itself now has `.useAsyncRequests(true)` fixed (same fix as
-`PublicApiMatchedPoolThroughputBenchmark` above) — this table just hasn't been re-run yet. Until it
-is, don't cite the numbers above.
+> [!NOTE]
+> **A third and fourth independent confirmation, 2026-08-24 mega sweep** (see the [overview
+> table](#full-mega-sweep--every-scenario-one-run-2026-08-24)): `PublicApiMatchedPoolThroughputBenchmark`
+> itself, run a third time, lands in the same 3–12% client-v2-ahead band (ratios 0.88–0.97 across
+> concurrency 8/32/128). `BoundedPoolConcurrencyBenchmark` — the class originally retracted for a
+> benchmark-harness bug (see [archive.md](archive.md)), now fixed and re-run for the first time —
+> shows the same direction and a similar magnitude (thisDriver 3.5–20.2% slower depending on
+> concurrency). Four independent benchmark classes now agree on this gap; it's a real, repeatable
+> finding, not a fluke of one class's harness. [Root-causing it](#open-follow-ups) is the most
+> concrete next step in this whole page.
+> ![PublicApiMatchedPoolThroughputBenchmark chart](../images/2026-08-24-mega-matched-pool-throughput.png)
+> ![BoundedPoolConcurrencyBenchmark chart](../images/2026-08-24-mega-bounded-pool-concurrency.png)
 
 ## Rapid-refresh cancellation: incomplete this run
 
@@ -169,6 +218,14 @@ scheduler hop from the section below becomes pure overhead with nothing to hide 
 [index.md's "How to use this driver well"](index.md#how-to-use-this-driver-well): this is exactly
 the calling style not to use.
 
+> [!NOTE]
+> **Reconfirmed on the cloud runner, 2026-08-24 mega sweep** (`MatchedPoolThreadsConcurrencyBenchmark`,
+> see the [overview table](#full-mega-sweep--every-scenario-one-run-2026-08-24)) — thisDriver 8.8%
+> slower at rows=10000, same direction as the local M3 Pro numbers above and the two matched-pool
+> cloud runs. This is now the fourth independent benchmark class agreeing on the same latency gap —
+> see the note under "Cloud-verified matched pool" above.
+> ![MatchedPoolThreadsConcurrencyBenchmark chart](../images/2026-08-24-mega-matched-pool-threads-concurrency.png)
+
 ## Aggregation: a wash
 
 | Rows | this driver (mean) | client-v2 (mean) | verdict |
@@ -181,6 +238,14 @@ the calling style not to use.
 decode cost is small next to the server-side aggregation both drivers pay identically. Neither
 driver has a structural advantage here — which is itself useful to know: the streaming-scan
 regression below is specifically a large-result-set problem, not a general one.
+
+> [!NOTE]
+> **Reconfirmed on the cloud runner, 2026-08-24 mega sweep** (see the [overview
+> table](#full-mega-sweep--every-scenario-one-run-2026-08-24)) — same "mostly a wash" shape, though
+> the 10k gap widened somewhat on the shared 4-core runner: 10k client-v2 ~13.4% faster, 100k tied
+> (+0.7%), 1M tied within noise (+1.6%). Absolute numbers aren't comparable to the table above (M3
+> Pro vs. GitHub Actions `ubuntu-latest`), but the ratios point the same direction.
+> ![AggregationBenchmark chart](../images/2026-08-24-mega-aggregation.png)
 
 ## Full table scan: found, partially fixed, and the fix's own measurement is unstable at 1M
 
@@ -208,8 +273,20 @@ fix more material to merge per blocking `take()`):
 | 100,000 | 13,825–14,525 µs | 15,211–15,548 µs | **this driver roughly 4–11% faster, across repeated runs** |
 | 1,000,000 | 94,000–131,439 µs | 96,031–98,617 µs | **unstable: anywhere from a tie to 33% slower, depending on the run** |
 
-10k is a clean, repeatable win. 100k is a real, if noisier, win. 1M is not resolved — see "Why the
-1M number won't sit still" below before treating any single 1M number on this page as the answer.
+10k is a clean, repeatable win. 100k is a real, if noisier, win. 1M is not resolved locally — see
+"Why the 1M number won't sit still" below.
+
+> [!NOTE]
+> **2026-08-24 cloud mega sweep — the 1M number finally sits still, and this driver wins at every
+> tier.** On the GitHub Actions runner (shared, 4 cores, none of the Apple Silicon
+> performance/efficiency-core asymmetry suspected below): 10k **11.5% faster**, 100k **5.2%
+> faster**, 1M **12.3% faster** — no tie, no 30%-slower worst case, no fork-to-fork spread anywhere
+> close to the 18–33% swings seen locally. This doesn't retroactively explain *why* the local M3 Pro
+> runs were unstable (see the investigation below, still unresolved as a local-hardware question),
+> but it does mean the 1M tier is no longer an open question for the numbers that matter most — the
+> cloud CI signal. Treat the section below as "what we found investigating the local instability,"
+> not as the current headline number.
+> ![StreamingScanBenchmark chart](../images/2026-08-24-mega-streaming-scan.png)
 
 ### Why it happened, and why the fix mostly worked
 
@@ -308,6 +385,19 @@ the protocol path changed; the more likely explanation is that earlier single-fo
 themselves noise (see the confidence warning in [index.md](index.md)). Treat the protocol floor as
 a wash until a multi-fork run says otherwise in either direction.
 
+> [!NOTE]
+> **2026-08-24 cloud mega sweep shows a small, consistent client-v2 edge here that the local "wash"
+> verdict above didn't catch.** `TrivialQueryBenchmark`: thisDriver ~7.8% slower (1316 µs vs 1221
+> µs). `PublicApiPointQueryBenchmark`: thisDriver ~5.2% slower with observation enabled (1925 µs vs
+> 1830 µs), ~7.5% slower with it disabled (1966 µs) — enabling observation cost nothing extra,
+> partially answering [task #201](../../ROADMAP.md) (NOOP vs enabled observation) for the point-query
+> shape, though not yet under concurrency. Small enough to still be in the same ballpark as "tied,"
+> but consistent in direction with every other cloud result on this page (client-v2 slightly ahead)
+> rather than a wash — worth folding into the same open latency-gap question rather than treating
+> the protocol floor as fully settled.
+> ![TrivialQueryBenchmark chart](../images/2026-08-24-mega-trivial-query.png)
+> ![PublicApiPointQueryBenchmark chart](../images/2026-08-24-mega-point-query.png)
+
 ## Open follow-ups
 
 - **Explain the 1M-row inter-fork variance.** See ["Why the 1M number won't sit
@@ -326,29 +416,44 @@ a wash until a multi-fork run says otherwise in either direction.
   `RESPONSE_CHUNK_DEMAND` has already been raised to 16 — not attempted, since the 1M
   instability above makes it hard to tell a real improvement from run-to-run noise until that's
   resolved first.
-- **Re-run at 3 forks.** `StreamingScanBenchmark` now has 3-fork data; every other benchmark family
-  (protocol floor, aggregation, blocking calls, concurrency, throughput) is still single-fork and
-  several of those results (protocol floor, aggregation) are close enough that fork noise could
-  plausibly change the verdict.
+- ~~**Re-run at 3 forks.**~~ — done, 2026-08-24 mega sweep: every one of the 11 successfully-run
+  classes (see the [overview table](#full-mega-sweep--every-scenario-one-run-2026-08-24)) is now
+  `trusted` profile, 3 forks, 5 warmup iterations, on the same cloud runner. Protocol floor and
+  aggregation both held their local "wash" shape (with a slightly clearer client-v2 edge on the
+  cloud runner — see the notes on those sections above); fork noise didn't flip either verdict.
 - **Re-run `MixedWorkloadRapidRefreshCancelBenchmark` to completion** — this run has no `ourDriver`
-  data to compare against client-v2's.
-- **Root-cause the latency gap** — now confirmed by two independent benchmarks, not one:
-  `MatchedPoolThreadsConcurrencyBenchmark`'s blocking-caller regression, and the cloud-verified
-  `PublicApiMatchedPoolThroughputBenchmark` result above (real async on both sides, still client-v2
-  ahead on p50–p99 at every concurrency level). `RowDecodingScheduler`'s cross-thread hand-off is
-  the leading suspect (see the streaming-scan root cause above for the same mechanism at a
-  different scale) — `-prof gc` plus `async-profiler`/JFR on `PublicApiMatchedPoolThroughputBenchmark`
-  is the next concrete step, not another blind re-run.
-- **Re-run `BoundedPoolConcurrencyBenchmark`** now that it has `.useAsyncRequests(true)` fixed —
-  see the retraction warning above. Its numbers should land in the same shape as the cloud-verified
-  `PublicApiMatchedPoolThroughputBenchmark` result, since both now exercise the same fair
-  matched-pool scenario; if they don't agree, that's itself worth explaining.
-- **Build `MixedWorkloadRapidRefreshPileUpBenchmark`**, the no-cancellation counterpart to the
-  rapid-refresh scenario above (old and new queries both run to completion) — a named, not-yet-built
-  companion benchmark.
+  data to compare against client-v2's. Still not part of the mega sweep (task #295's 12 classes
+  chose `MixedWorkloadRapidRefreshPileUpBenchmark` over its cancel-variant sibling for the sweep;
+  see that task).
+- **Root-cause the latency gap** — now confirmed by **four** independent benchmark classes, not
+  two: `MatchedPoolThreadsConcurrencyBenchmark`'s blocking-caller regression, the cloud-verified
+  `PublicApiMatchedPoolThroughputBenchmark` result (real async on both sides, client-v2 ahead on
+  p50–p99 at every concurrency level, now measured three separate times), `BoundedPoolConcurrencyBenchmark`
+  (newly re-run, same direction), and `PoolSizeSweepThroughputBenchmark` (the gap widens as pool
+  size grows, a new data point for whatever's causing this). `RowDecodingScheduler`'s cross-thread
+  hand-off is the leading suspect (see the streaming-scan root cause above for the same mechanism at
+  a different scale) — `-prof gc` plus `async-profiler`/JFR on `PublicApiMatchedPoolThroughputBenchmark`
+  is still the next concrete step, now with four converging data points instead of one to justify it.
+- ~~**Re-run `BoundedPoolConcurrencyBenchmark`**~~ — done, 2026-08-24 mega sweep, `.useAsyncRequests(true)`
+  fixed. Lands in the same direction as `PublicApiMatchedPoolThroughputBenchmark` as predicted
+  (client-v2 ahead on latency, 3.5–20.2% depending on concurrency) — see the note under
+  "Cloud-verified matched pool" above. The old retracted numbers are archived in
+  [archive.md](archive.md), not deleted.
+- ~~**Build `MixedWorkloadRapidRefreshPileUpBenchmark`**~~ — built (2026-08-24, task #285), run on
+  the mega sweep, then removed again the same day: all 3 forks timed out completely for **both**
+  drivers (`thisDriver`'s 120s blocking-read timeout, client-v2's 10s connection-acquire timeout),
+  producing zero measurable data points. That's the scenario doing exactly what its name says — old
+  and new queries both run to completion instead of being cancelled, piling up faster than either
+  side's pool can drain — on a 4-core shared GitHub Actions runner that just can't sustain the
+  load. Not a driver bug on either side; removed from `benchmark.yml`'s dropdown and deleted rather
+  than left in as a benchmark that can never produce a result on this pipeline's hardware. Could be
+  revived with longer timeouts/lower load, or run locally on real hardware, if the scenario is
+  wanted again.
 - **Widen the concurrency/pool-size matrix** — `BoundedPoolConcurrencyBenchmark` and
-  `PublicApiMatchedPoolThroughputBenchmark` currently test one pool size (8) and three concurrency
-  levels (8/32/128); a real scalability sweep would cover more of both.
+  `PublicApiMatchedPoolThroughputBenchmark` still test one pool size (8) and three concurrency
+  levels (8/32/128) each. `PoolSizeSweepThroughputBenchmark` (2026-08-24 mega sweep) covers the
+  pool-size axis on its own at a fixed concurrency (4/8/16/32) — see above — but concurrency and
+  pool size have never been swept together in one matrix; a real scalability sweep still would.
 - ~~**Rename the `ourDriver` label to something more sensible**~~ — done 2026-08-24 (task #270):
   every `@Benchmark` method/field/log line across the JMH sources now uses `thisDriver`, and
   `analyze.py`'s raw key and display label (`r2dbc-reactive`) match. Historical tables on this page

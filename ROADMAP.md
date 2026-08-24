@@ -286,6 +286,13 @@ each one gated on the previous, no driver optimization before PR5:
      `workflow_dispatch` dropdown, not the weekly schedule (same reasoning as PR3's manual-only
      additions).
    - Next: an actual `trusted` CI run to produce real JFR/merged-histogram/pile-up numbers.
+   - **Update (2026-08-24, mega sweep):** that `trusted` run happened — both drivers timed out on
+     every fork (`thisDriver`'s 120s blocking-read timeout, client-v2's 10s connection-acquire
+     timeout), zero usable data. The pile-up load this class deliberately creates exceeds what the
+     shared 4-core GitHub Actions runner can drain within either timeout. Removed the class and its
+     `benchmark.yml` dropdown entry rather than keep a benchmark that structurally can't produce a
+     result on this pipeline's hardware — see docs/performance/results.md's "Open follow-ups" entry
+     for the same note.
 5. **PR5 — one evidence-driven optimization, only if PR4's profiling points at something
    specific.** PR4's first real trusted run (2026-08-24) did: p90-p99 per-query latency for
    `thisDriver` ran 15-25% behind `clientV2` at every tested concurrency (8/32/128), consistently

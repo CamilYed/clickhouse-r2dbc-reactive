@@ -111,7 +111,6 @@ on:
           - PointQueryBenchmark
           - PublicApiPointQueryBenchmark
           - MixedWorkloadRapidRefreshCancelBenchmark
-          - MixedWorkloadRapidRefreshPileUpBenchmark
         default: PublicApiMatchedPoolThroughputBenchmark
   schedule:
     # 05:00 UTC weekly (Monday) - fast profile only, see the schedule step below. Outside typical
