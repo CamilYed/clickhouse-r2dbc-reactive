@@ -379,17 +379,67 @@ each one gated on the previous, no driver optimization before PR5:
      `logEffectiveSettings` — explicit user guidance (2026-08-24): a caller debugging a tail-latency
      or pending-acquire-queue problem in production shouldn't need to already know this
      investigation to find the numbers in play.
-   - **Not yet done, explicit user guidance (2026-08-24):** the longer-term goal is for these
-     values to size themselves correctly from `transportMaxConnections` (and from each other)
-     without a caller ever having to set `decoderWorkerCount` or `transportPendingAcquireMaxCount`
-     by hand — today's explicit options remain an escape hatch for this investigation, not the
-     intended end state. If the tandem-queueing theory above is confirmed by the new benchmark,
-     auto-deriving `transportPendingAcquireMaxCount` alongside any widened `decoderWorkerCount`
-     (rather than asking a caller to size both) is probably how that end state actually looks — not
-     started, gated on this benchmark's trusted-run result first.
-   - Next: an actual trusted CI run of `DecoderAndPendingAcquireWidenedThroughputBenchmark`, read
-     against `DecoderWorkerCountThroughputBenchmark`'s already-recorded `coupledDecoder` numbers at
-     the same three concurrencies.
+   - **Trusted CI run (2026-08-24): tandem-queueing theory not confirmed, follow-up closed, default
+     stays unchanged.** All three concurrencies completed with zero `PoolAcquirePendingLimitException`
+     failures — the immediate goal (stop the outright rejections) was met. But the tail-latency win
+     did not carry over: at `concurrency=8` the combined config landed between `coupledDecoder` and
+     `widenedDecoder`-alone (p90/p95/p99 still ~5-9% better than coupled, but p50 ~10% worse and
+     slightly behind decoder-widening-alone); at `concurrency=32` it was roughly tied with
+     `coupledDecoder` (p50/p90 marginally better, p95/p99 marginally worse); at `concurrency=128` it
+     was **worse than `coupledDecoder` across every percentile including p50** (roughly +5-9%).
+     Throughput stayed flat around 700-750 ops/s at every concurrency tested — no scaling beyond the
+     8-connection pool, exactly as expected for a physically pool-bound workload.
+   - **Root cause of why the theory didn't hold, from an independently JFR-profiled analysis of this
+     same run** (JDK Mission Control locally, filling the frame-level gap this sandbox's tooling
+     couldn't close — see PR4's entry): `jdk.ThreadPark` stacks show decoder-scheduler threads
+     spending the overwhelming majority of their time blocked in
+     `FluxInputStreamBridge.takeNextSignal`/`ArrayBlockingQueue.take` — i.e. waiting for network
+     bytes, not doing CPU decode work. At `concurrency=32`/`128`, roughly 31 of the 32 widened
+     decoder workers were parked at any given moment (aggregate park time ≈ 30-31 threads
+     continuously parked across the whole recording), while active JVM thread count rose from 34
+     (coupled, 8 workers) to 53 (widened, 32 workers) — 19 extra threads, matching the 19 extra
+     decoder-worker names observed, for no measurable throughput or consistent latency benefit. The
+     "two queues in series, collapse to one" framing was also arithmetically wrong as stated: with
+     `decoderWorkerCount=32`, at most ~32 requests can ever be admitted to the transport layer at
+     once regardless of `concurrency`, so `concurrency=128` never produces anywhere near "120
+     pending acquisitions" — a decoder-scheduler queue still exists upstream of the transport at
+     that concurrency; widening `transportPendingAcquireMaxCount` didn't remove a queue, it just
+     stopped the (much smaller, ~24-request) transport-level queue from overflowing.
+   - **Real takeaway:** `RowDecodingScheduler`'s worker count was never purely a decode-parallelism
+     knob — decode is I/O-wait-dominated, not CPU-bound, so more workers mostly means more threads
+     parked waiting on the same 8 physical connections' worth of network throughput, at a real
+     resource cost (extra JVM/OS threads) or the reasoning above corrects itself. The accidental
+     admission-control role this pool plays (see the earlier entry above) is doing more of the real
+     work than decode parallelism ever was. **Decision, confirmed twice now: do not change the
+     `decoderWorkerCount`/`transportPendingAcquireMaxCount` defaults.** Both stay opt-in escape
+     hatches, not defaults.
+   - **Methodology gaps this run also surfaced** (not yet acted on, logged here so they aren't lost):
+     this benchmark's own Javadoc overstated the "collapses to one effective queue" framing and the
+     120-pending-acquisitions worst case — needs correcting to reflect the ~32-admission ceiling
+     above; JFR recordings are still one-per-fork-overwritten (the same documented JMH limitation as
+     PR4's, not new, but this run's JFR analysis is therefore of the *last* fork only, not all
+     three); the first measurement iteration of every fork ran ~30-40% slower than iterations 2-3
+     even after 5 warmup iterations, a large enough and systematic enough gap to warrant a
+     profiler-free control run before trusting this run's own throughput/allocation numbers as a
+     clean baseline; `TRUE MERGED` histograms are still per-fork, not merged *across* forks (would
+     need the encoded histogram, not just its computed percentiles, persisted and merged offline);
+     `metadata.json` doesn't record the experiment-specific knobs (`decoderWorkerCount`,
+     `transportPendingAcquireMaxCount`, JMH version, profiler list) that made this run interpretable
+     only because they were still visible in source/log output.
+   - **Not started, explicit user guidance (2026-08-24), now further gated on the above:** the
+     longer-term goal of these values auto-sizing themselves relative to each other without a caller
+     ever setting `decoderWorkerCount`/`transportPendingAcquireMaxCount` by hand doesn't have a clear
+     target shape yet, since this run showed widening isn't simply "the more the better" once
+     I/O-wait-dominated decode is accounted for — the actual auto-tuning rule (if one exists) would
+     need to come from the deeper architectural question below, not from this experiment.
+   - **Next, if this line of work continues:** separate architectural question, not a tuning
+     question — should connection acquisition be able to happen without first consuming a blocking
+     decoder-worker slot, so a decoder worker is only assigned once a response stream actually has
+     bytes ready to read? That would let admission control (how many queries may be in flight)
+     and decode-worker sizing (how much CPU-bound decode parallelism is useful) be governed by two
+     separate, purpose-built numbers instead of one number doing both jobs by accident. Not started;
+     needs its own smaller characterization experiment before any implementation, per the same
+     "measure before deciding" gate PR5 itself was built on.
 
 ### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
 
