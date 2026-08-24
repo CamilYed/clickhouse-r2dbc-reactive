@@ -104,10 +104,28 @@ pays that wait as pure added latency with no corresponding allocation cost, and 
 never wider than the connection pool by default. Setting `decoderWorkerCount` higher gives decode
 work more workers to spread across without also widening the physical connection pool itself (which
 would change a different, unrelated tradeoff — see "Is it worth setting `maxConnections` yourself?"
-below). `DecoderWorkerCountThroughputBenchmark` (in `clickhouse-r2dbc-reactive-benchmarks`) measures
-whether this actually shrinks the p90-p99 gap in practice — see that class's own Javadoc and the
-ROADMAP.md Phase 11 PR5 entry for the current state of that measurement; this option existing does
-not by itself mean widening it is recommended for a given workload.
+below).
+
+**Measured (trusted CI run, 2026-08-24) — do not widen this without also reconsidering
+`transportPendingAcquireMaxCount`.** `DecoderWorkerCountThroughputBenchmark` compared this driver
+against itself, `poolSize=8` fixed on both sides, only `decoderWorkerCount` differing (8 vs 32).
+At `concurrency=8` (matching the pool), widening did shrink the tail as hypothesized — p90/p99
+roughly 10-12% better, throughput and GC unchanged. But at `concurrency=32` and `concurrency=128`,
+the widened side produced **zero successful measurements** — every fork, every iteration failed
+with `PoolAcquirePendingLimitException: Pending acquire queue has reached its maximum size of 16`,
+while the coupled (default) side ran cleanly at the same concurrencies. Root cause: decode is
+subscribed via `RowBinaryDecoder.decode`'s `Mono.fromCallable(() ->
+newReader(source, compression)).subscribeOn(reactorScheduler)`, and that's the point where
+`source` — the transport response stream, including the connection acquisition and request send
+that produce it — first gets subscribed to. `RowDecodingScheduler`'s worker count is therefore not
+only a decode-throughput knob; it's incidentally this driver's real admission-control gate on how
+many queries can start touching the connection pool at once. Coupling it to `poolSize` (the
+default) keeps that number safely under Reactor Netty's own pending-acquire-queue limit
+(`2 × maxConnections` by default); widening it removes that incidental protection and, at
+concurrency above the pool size, exposes the pending-acquire-queue limit as a hard failure instead
+of just added latency. **The driver's default stays coupled because of this** — see the ROADMAP.md
+Phase 11 PR5 entry for the full result and the parked follow-up (widening the decoder *and*
+`transportPendingAcquireMaxCount` together, not just the decoder alone).
 
 ### Is it worth setting `maxConnections` yourself?
 
