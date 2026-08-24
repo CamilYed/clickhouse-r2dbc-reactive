@@ -279,27 +279,42 @@ class RowDecodingSchedulerTest {
 
   @Test
   void shouldTerminateAWaitingTaskWhenTheSchedulerIsDisposedBeforeAPermitFreesUp() {
-    // given - only one admission permit; task A holds it and blocks forever (never releases
-    // voluntarily), task B is scheduled behind it and never gets a chance to run before the
-    // scheduler itself is disposed
+    // given
     final RowDecodingScheduler scheduler = RowDecodingScheduler.virtualThreads(1);
+
     final CountDownLatch taskAStarted = new CountDownLatch(1);
+    final CountDownLatch taskATerminated = new CountDownLatch(1);
+    final CountDownLatch neverReleased = new CountDownLatch(1);
+
     final AtomicBoolean taskBRan = new AtomicBoolean(false);
 
     try {
-      // when
+      // when - task A acquires the only permit and blocks interruptibly
       scheduler
           .asReactorScheduler()
           .schedule(
               () -> {
                 taskAStarted.countDown();
-                awaitUninterruptibly(new CountDownLatch(1));
+
+                try {
+                  neverReleased.await();
+                } catch (final InterruptedException e) {
+                  Thread.currentThread().interrupt();
+                } finally {
+                  taskATerminated.countDown();
+                }
               });
+
       await().atMost(Duration.ofSeconds(5)).until(() -> taskAStarted.getCount() == 0);
+
+      // task B is submitted while A owns the only admission permit
       scheduler.asReactorScheduler().schedule(() -> taskBRan.set(true));
+
       scheduler.dispose();
 
-      // then - task B never runs, and disposal itself doesn't hang waiting on task A or task B
+      // then
+      await().atMost(Duration.ofSeconds(5)).until(() -> taskATerminated.getCount() == 0);
+
       await()
           .during(Duration.ofMillis(300))
           .atMost(Duration.ofSeconds(5))
