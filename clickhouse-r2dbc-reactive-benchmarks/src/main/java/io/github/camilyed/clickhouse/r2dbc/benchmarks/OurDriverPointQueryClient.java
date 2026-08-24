@@ -36,7 +36,7 @@ import reactor.core.publisher.Mono;
  * ClientV2PointQueryClient#close()}, which disposes client-v2's {@code Client} — the equivalent
  * pool-owning object on that side.
  *
- * <p>Four constructors, four distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches
+ * <p>Five constructors, five distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches
  * this driver to an explicit pool size for a fair matched-pool comparison; {@link
  * #OurDriverPointQueryClient(double)} instead leaves this driver at its own default pool and slows
  * every query down via {@code sleep(...)} — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s
@@ -49,8 +49,12 @@ import reactor.core.publisher.Mono;
  * #OurDriverPointQueryClient(ExplicitDecoderWorkerCountAndPendingAcquireLimit)} builds on the third
  * by additionally overriding {@link
  * ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_MAX_COUNT} — see that class's
- * Javadoc for why PR5's own trusted run made this fourth scenario necessary. All four share the
- * same query/close logic below, only the SQL text and pool configuration differ.
+ * Javadoc for why PR5's own trusted run made this fourth scenario necessary; {@link
+ * #OurDriverPointQueryClient(VirtualThreadDecoder)} matches the third constructor's shape exactly
+ * (explicit pool size + explicit decoder worker count) but additionally sets {@link
+ * ClickHouseConnectionFactoryProvider#DECODER_USE_VIRTUAL_THREADS} — see {@link
+ * VirtualThreadDecoderThroughputBenchmark}'s Javadoc for why this fifth scenario exists. All five
+ * share the same query/close logic below, only the SQL text and pool configuration differ.
  */
 final class OurDriverPointQueryClient implements PointQueryClient {
 
@@ -85,6 +89,17 @@ final class OurDriverPointQueryClient implements PointQueryClient {
    */
   record ExplicitDecoderWorkerCountAndPendingAcquireLimit(
       int poolSize, int decoderWorkerCount, int pendingAcquireMaxCount) {}
+
+  /**
+   * Pairs an explicit {@code poolSize} with an explicit {@code decoderWorkerCount}, same shape as
+   * {@link ExplicitDecoderWorkerCount} — a distinct type rather than a boolean flag on that record,
+   * per the same "no boolean/flag parameters that silently change behavior" reasoning, so a call
+   * site self-documents "this scenario runs the decoder on virtual threads" rather than reading a
+   * bare {@code true} at the call site. Exists specifically for {@link
+   * VirtualThreadDecoderThroughputBenchmark}'s comparison against {@link
+   * ExplicitDecoderWorkerCount} — see that class's Javadoc.
+   */
+  record VirtualThreadDecoder(int poolSize, int decoderWorkerCount) {}
 
   /**
    * Opens one logical connection against a {@code ConnectionFactory} sized to {@code poolSize}
@@ -145,6 +160,31 @@ final class OurDriverPointQueryClient implements PointQueryClient {
                 .option(
                     ClickHouseConnectionFactoryProvider.TRANSPORT_PENDING_ACQUIRE_MAX_COUNT,
                     explicitLimits.pendingAcquireMaxCount())
+                .build());
+    this.connection = openConnection(factory);
+  }
+
+  /**
+   * Opens one logical connection against a {@code ConnectionFactory} sized to {@link
+   * VirtualThreadDecoder#poolSize()} physical connections, with the decode pool run on JDK 21
+   * virtual threads via {@link ClickHouseConnectionFactoryProvider#DECODER_USE_VIRTUAL_THREADS} and
+   * capped at {@link VirtualThreadDecoder#decoderWorkerCount()} — the virtual-thread counterpart to
+   * {@link #OurDriverPointQueryClient(ExplicitDecoderWorkerCount)}, same worker-count contract,
+   * different thread type. See {@link VirtualThreadDecoderThroughputBenchmark}'s Javadoc for why
+   * this constructor exists.
+   */
+  OurDriverPointQueryClient(final VirtualThreadDecoder virtualThreadDecoder) {
+    this.selectSql = SELECT_BY_ID_SQL;
+    this.factory =
+        ClickHouseConnectionFactory.from(
+            baseOptions()
+                .option(
+                    ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS,
+                    virtualThreadDecoder.poolSize())
+                .option(
+                    ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT,
+                    virtualThreadDecoder.decoderWorkerCount())
+                .option(ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS, true)
                 .build());
     this.connection = openConnection(factory);
   }

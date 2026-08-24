@@ -1,5 +1,12 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
+import java.util.List;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import org.jspecify.annotations.Nullable;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -28,6 +35,8 @@ public final class RowDecodingScheduler {
 
   private static final String THREAD_NAME_PREFIX = "clickhouse-r2dbc-decoder";
 
+  private static final String VIRTUAL_THREAD_NAME_PREFIX = THREAD_NAME_PREFIX + "-vt-";
+
   /**
    * One worker per available processor by default — row decoding is a blocking unit of work per
    * in-flight query, not something that benefits from the 10x-per-core sizing {@link
@@ -43,10 +52,15 @@ public final class RowDecodingScheduler {
 
   private final Scheduler scheduler;
   private final int workerCount;
+  private final @Nullable ExecutorService ownedExecutor;
 
-  private RowDecodingScheduler(final Scheduler scheduler, final int workerCount) {
+  private RowDecodingScheduler(
+      final Scheduler scheduler,
+      final int workerCount,
+      final @Nullable ExecutorService ownedExecutor) {
     this.scheduler = scheduler;
     this.workerCount = workerCount;
+    this.ownedExecutor = ownedExecutor;
   }
 
   /**
@@ -89,7 +103,63 @@ public final class RowDecodingScheduler {
     }
     return new RowDecodingScheduler(
         Schedulers.newBoundedElastic(workerCount, queuedTaskCapacity, THREAD_NAME_PREFIX),
-        workerCount);
+        workerCount,
+        null);
+  }
+
+  /**
+   * An alternative to {@link #withWorkerCount(int)} that runs decode tasks on JDK 21 virtual
+   * threads instead of a bounded platform-thread pool, while preserving the exact same "at most
+   * {@code maxConcurrency} decode tasks in flight at once" contract — see {@link
+   * RowBinaryDecoder#decode}'s Javadoc for why that contract incidentally doubles as this driver's
+   * real admission-control gate on the connection pool, and why {@code maxConcurrency} must still
+   * be sized the same way {@code workerCount} is (typically the resolved {@code
+   * transportMaxConnections}), not left unbounded. Precise wording matters: this bounds how many
+   * decode tasks may actively run {@code command} at once, not how many virtual threads this
+   * scheduler ever creates — a caller that submits far more tasks than {@code maxConcurrency} at
+   * once gets that many additional parked (not running) virtual threads, cheap but not zero-cost.
+   * See {@link AdmissionGatedExecutorService}'s own Javadoc for the exact mechanism, including how
+   * cancellation/interruption of a still-waiting task is handled.
+   *
+   * <p>Motivated by JFR evidence (ROADMAP.md, Phase 11 PR5 follow-up, 2026-08-24) that decode is
+   * I/O-wait-dominated — a worker spends most of its time blocked reading network bytes, not doing
+   * CPU work — which is exactly the shape virtual threads are for: cheap park/unpark, no platform
+   * thread held while parked. This does not raise the throughput ceiling, still capped by the
+   * physical connection pool; it targets the resource cost {@link #withWorkerCount(int)} pays for
+   * every decode worker whether it's parked or not.
+   *
+   * <p><b>Pinning risk</b>: a virtual thread blocked inside a {@code synchronized} block pins to
+   * its carrier platform thread, cancelling out the benefit above for that duration. Checked
+   * against client-v2's actual decode-path source (upstream {@code BinaryStreamReader}/{@code
+   * RowBinaryWithNamesAndTypesFormatReader}, 2026-08-24): the only {@code synchronized} method on
+   * that path, {@code BinaryStreamReader.ArrayValue#asList()}, is a pure in-memory list-view cache
+   * over an already-fully-read array — it never blocks on I/O while holding the monitor. The actual
+   * blocking reads (client-v2's {@code InputStream.read(...)} calls) run directly against the
+   * caller-supplied stream with no {@code BufferedInputStream}/{@code DataInputStream} wrapping in
+   * between, and this driver's own {@code FluxInputStreamBridge} has no {@code synchronized} usage
+   * either — so this driver's decode path is Loom-friendly today. Run with {@code
+   * -Djdk.tracePinnedThreads=full} in any benchmark comparing this against {@link
+   * #withWorkerCount(int)} to catch pinning empirically rather than relying on this analysis alone.
+   *
+   * @param maxConcurrency the maximum number of decode tasks this scheduler ever runs at once; must
+   *     be positive
+   */
+  public static RowDecodingScheduler virtualThreads(final int maxConcurrency) {
+    if (maxConcurrency <= 0) {
+      throw new IllegalArgumentException("maxConcurrency must be positive, got: " + maxConcurrency);
+    }
+    final ExecutorService executorService = admissionGatedVirtualThreadExecutor(maxConcurrency);
+    return new RowDecodingScheduler(
+        Schedulers.fromExecutorService(executorService, VIRTUAL_THREAD_NAME_PREFIX),
+        maxConcurrency,
+        executorService);
+  }
+
+  private static ExecutorService admissionGatedVirtualThreadExecutor(final int maxConcurrency) {
+    final ExecutorService virtualThreadPerTask =
+        Executors.newThreadPerTaskExecutor(
+            Thread.ofVirtual().name(VIRTUAL_THREAD_NAME_PREFIX, 0).factory());
+    return new AdmissionGatedExecutorService(virtualThreadPerTask, new Semaphore(maxConcurrency));
   }
 
   /**
@@ -100,6 +170,16 @@ public final class RowDecodingScheduler {
    */
   public int workerCount() {
     return workerCount;
+  }
+
+  /**
+   * Whether this scheduler runs decode tasks on JDK 21 virtual threads ({@link #virtualThreads})
+   * rather than a bounded platform-thread pool ({@link #create}/{@link #withWorkerCount}/{@link
+   * #defaults}) — see {@link #virtualThreads(int)}'s Javadoc for why a caller would choose one over
+   * the other.
+   */
+  public boolean isVirtualThreadBacked() {
+    return ownedExecutor != null;
   }
 
   /**
@@ -115,10 +195,89 @@ public final class RowDecodingScheduler {
    */
   public void dispose() {
     scheduler.dispose();
+    if (ownedExecutor != null) {
+      ownedExecutor.shutdownNow();
+    }
   }
 
   /** Whether {@link #dispose()} has already been called. */
   public boolean isDisposed() {
     return scheduler.isDisposed();
+  }
+
+  /**
+   * Runs every submitted task on its own virtual thread — the number of virtual threads this
+   * creates is <b>not</b> itself bounded — but only lets {@code maxConcurrency} of them actually
+   * run {@code command} at once — the rest park on a {@link Semaphore} inside their own (cheap)
+   * virtual thread instead of occupying a platform thread while queued. This is the mechanism that
+   * lets {@link #virtualThreads(int)} preserve the same "at most N decode tasks in flight"
+   * admission-control contract {@link #withWorkerCount(int)} provides via a bounded platform-thread
+   * pool — see that method's Javadoc for why that contract matters beyond decode throughput itself.
+   * Precise wording matters here: this is a virtual-thread-per-task executor with bounded
+   * <em>active</em> concurrency, not a bounded pool of virtual threads — a caller that submits far
+   * more tasks than {@code maxConcurrency} at once gets that many additional parked virtual
+   * threads, not a rejection or an unbounded platform-thread queue.
+   *
+   * <p>Waiting on the admission permit is interruptible ({@link Semaphore#acquire()}, not {@link
+   * Semaphore#acquireUninterruptibly()}): a task cancelled or interrupted while still waiting for a
+   * permit must never run {@code command} once one later frees up. {@link
+   * ExecutorService#shutdownNow()} interrupts every running/queued task on the delegate executor,
+   * which is exactly how {@link #dispose()} unblocks every virtual thread parked here instead of
+   * leaving it stuck forever.
+   */
+  private static final class AdmissionGatedExecutorService extends AbstractExecutorService {
+
+    private final ExecutorService delegate;
+    private final Semaphore admission;
+
+    private AdmissionGatedExecutorService(
+        final ExecutorService delegate, final Semaphore admission) {
+      this.delegate = delegate;
+      this.admission = admission;
+    }
+
+    @Override
+    public void execute(final Runnable command) {
+      delegate.execute(
+          () -> {
+            try {
+              admission.acquire();
+            } catch (final InterruptedException e) {
+              Thread.currentThread().interrupt();
+              return;
+            }
+            try {
+              command.run();
+            } finally {
+              admission.release();
+            }
+          });
+    }
+
+    @Override
+    public void shutdown() {
+      delegate.shutdown();
+    }
+
+    @Override
+    public List<Runnable> shutdownNow() {
+      return delegate.shutdownNow();
+    }
+
+    @Override
+    public boolean isShutdown() {
+      return delegate.isShutdown();
+    }
+
+    @Override
+    public boolean isTerminated() {
+      return delegate.isTerminated();
+    }
+
+    @Override
+    public boolean awaitTermination(final long timeout, final TimeUnit unit)
+        throws InterruptedException {
+      return delegate.awaitTermination(timeout, unit);
+    }
   }
 }

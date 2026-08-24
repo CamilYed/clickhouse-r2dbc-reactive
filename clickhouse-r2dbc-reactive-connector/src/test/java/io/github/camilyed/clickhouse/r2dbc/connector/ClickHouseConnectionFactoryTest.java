@@ -516,4 +516,57 @@ class ClickHouseConnectionFactoryTest {
     assertThatThrownBy(() -> ClickHouseConnectionFactory.from(options))
         .isInstanceOf(IllegalArgumentException.class);
   }
+
+  @Test
+  void shouldUsePlatformThreadDecoderByDefault() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then
+    assertThat(factory.decoderUsesVirtualThreads()).isFalse();
+  }
+
+  @Test
+  void shouldUseVirtualThreadDecoderWhenExplicitlyEnabled() {
+    // given - experimental opt-in escape hatch (Phase 11, JDK 21 virtual-thread decoder scheduler
+    // experiment, see ROADMAP.md); not yet a trusted-benchmark-validated default
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, 8)
+            .option(ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS, true)
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then - the threading model changes, the worker-count contract does not
+    assertThat(factory.decoderUsesVirtualThreads()).isTrue();
+    assertThat(factory.decoderWorkerCount()).isEqualTo(8);
+  }
+
+  @Test
+  void shouldStillCoupleTheVirtualThreadDecoderMaxConcurrencyToThePoolSize() {
+    // given
+    final ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.HOST, "localhost")
+            .option(ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS, true)
+            .option(ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT, 12)
+            .build();
+
+    // when
+    final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+
+    // then - an explicit decoderWorkerCount still wins over the pool-size-coupled default, exactly
+    // as it does for the platform-thread scheduler
+    assertThat(factory.decoderUsesVirtualThreads()).isTrue();
+    assertThat(factory.decoderWorkerCount()).isEqualTo(12);
+  }
 }

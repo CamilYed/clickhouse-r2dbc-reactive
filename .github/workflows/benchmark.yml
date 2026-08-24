@@ -96,6 +96,7 @@ on:
           - ClientV2ExecutorAggressivenessBenchmark
           - DecoderWorkerCountThroughputBenchmark
           - DecoderAndPendingAcquireWidenedThroughputBenchmark
+          - VirtualThreadDecoderThroughputBenchmark
           - PoolSizeSweepThroughputBenchmark
           - ConnectionPerOperationThroughputBenchmark
           - BoundedPoolConcurrencyBenchmark
@@ -274,10 +275,19 @@ jobs:
         # sampler can run alongside it, `tail -f --pid` restores the same live-streamed log a plain
         # foreground `| tee` would have given, and the sampler is stopped once Gradle exits either
         # way (success or failure) so it never outlives this step.
+        #
+        # VirtualThreadDecoderThroughputBenchmark gets -Djdk.tracePinnedThreads=full appended
+        # regardless of profile (see build.gradle.kts's jmh.jvmArgsAppend wiring and that class's own
+        # Javadoc) - it's how a trusted run catches JDK 21 virtual-thread pinning empirically, and
+        # cheap enough that there's no reason to withhold it from a fast sanity-check run too.
         run: |
           PROFILER_FLAG=""
           if [ -n "${{ steps.jmh-params.outputs.profilers }}" ]; then
             PROFILER_FLAG="-Pjmh.profilers=${{ steps.jmh-params.outputs.profilers }}"
+          fi
+          JVM_ARGS_FLAG=""
+          if [ "${{ steps.benchmark.outputs.name }}" = "VirtualThreadDecoderThroughputBenchmark" ]; then
+            JVM_ARGS_FLAG="-Pjmh.jvmArgsAppend=-Djdk.tracePinnedThreads=full"
           fi
           if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
             ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
@@ -285,6 +295,7 @@ jobs:
               -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
               -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
               $PROFILER_FLAG \
+              $JVM_ARGS_FLAG \
               >raw-stdout.log 2>&1 &
             GRADLE_PID=$!
             tail -f raw-stdout.log --pid="$GRADLE_PID" &
@@ -302,6 +313,7 @@ jobs:
               -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
               -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
               $PROFILER_FLAG \
+              $JVM_ARGS_FLAG \
               2>&1 | tee raw-stdout.log
           fi
 

@@ -52,13 +52,11 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
 resource-model measurement, root-cause profiling, and one evidence-driven optimization attempt all
 happened, and the optimization attempt (`decoderWorkerCount`) was evaluated and explicitly not
 adopted as a default — see PR5's entry for the full result. Further driver optimization is no
-longer blocked on methodology, but nothing new is queued up from Phase 11 itself beyond the two
-follow-ups PR5 parked: widening the decoder together with an explicit
-`transportPendingAcquireMaxCount` (not just the decoder alone), and reconsidering whether admission
-control belongs on `RowDecodingScheduler` at all. Older items not yet folded into this phase, still
-parked, same reasoning as before: a JDK 21 virtual-thread decoder-scheduler experiment (see
-[roadmap-archive.md's deferred section](engineering/roadmap-archive.md#deferred--performancebenchmark-work-stays-out-of-scope-until-a-proper-benchmark-environment-exists)),
-and [rewriting the decode path off client-v2's blocking
+longer blocked on methodology, but nothing new is queued up from Phase 11 itself beyond the
+architectural admission-control question PR5's follow-up left open (see its entry below), and the
+JDK 21 virtual-thread decoder experiment — now underway, code done 2026-08-24, not yet run on
+trusted CI (see PR5's entry for the pinning-risk source review and what's built). Older items not
+yet folded into this phase, still parked: [rewriting the decode path off client-v2's blocking
 reader](#experiment-idea-not-a-decision--rewrite-the-decode-path-off-client-v2s-blocking-reader) —
 an option flagged during PR3's `RowDecodingScheduler` fix, explicitly not decided or started.
 Response-compression parity and the `@OperationsPerInvocation(4096)` verification, both previously
@@ -440,6 +438,111 @@ each one gated on the previous, no driver optimization before PR5:
      separate, purpose-built numbers instead of one number doing both jobs by accident. Not started;
      needs its own smaller characterization experiment before any implementation, per the same
      "measure before deciding" gate PR5 itself was built on.
+   - **JDK 21 virtual-thread decoder experiment, code done 2026-08-24, not yet run on CI** — a
+     different fix for the same I/O-wait-dominated finding above, motivated directly by it: instead
+     of widening the platform-thread pool further (more parked platform threads, real resource
+     cost, no throughput gain), run decode tasks on JDK 21 virtual threads, which park/unpark
+     cheaply and don't hold a platform thread while blocked. Explicit user instruction: build the
+     variant, and review client-v2's actual decode-path source first to check whether virtual
+     threads make sense there (pinning risk).
+     - **Pinning-risk review, against the actual upstream source** (the `clickhouse-java` repo is a
+       connected folder, resolving an earlier session's "no jar access to check statically"
+       limitation): grepped `RowBinaryWithNamesAndTypesFormatReader.java` and
+       `BinaryStreamReader.java` for `synchronized`. Exactly one hit,
+       `BinaryStreamReader.ArrayValue#asList()` — a pure in-memory list-view cache over an
+       already-fully-read array (`Array.get`/`Array.set` in a loop), never blocks on I/O while
+       holding the monitor. The actual blocking reads (`BinaryStreamReader.readNBytes` →
+       `inputStream.read(buffer, offset, len)`, and the single-byte `input.read()` path) run
+       directly against the caller-supplied `InputStream` with no `BufferedInputStream`/
+       `DataInputStream` wrapping in between (confirmed via `AbstractBinaryFormatReader`'s
+       constructor and `RowBinaryWithNamesAndTypesFormatReader`'s own constructor — the stream this
+       driver passes in, `FluxInputStreamBridge`, is used unwrapped). `FluxInputStreamBridge` itself
+       has zero `synchronized` usage (grep-verified). **Conclusion: this driver's decode path is
+       Loom-friendly today** — no `synchronized` block sits on the hot blocking-read path, on either
+       side of the client-v2/driver boundary.
+     - `RowDecodingScheduler.virtualThreads(maxConcurrency)`: a new factory alongside
+       `withWorkerCount`, same worker-count contract (a caller-visible capacity guarantee, not an
+       implementation detail — `workerCount()` returns `maxConcurrency` for this variant too),
+       different mechanism underneath. Runs every task on its own named virtual thread
+       (`Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name(...))`), gated by a private
+       `AdmissionGatedExecutorService` wrapping a `Semaphore(maxConcurrency)` around task execution —
+       preserves "at most `maxConcurrency` decode tasks running at once" exactly, the same
+       admission-control contract PR5's root-cause finding showed this pool incidentally provides,
+       just with cheap parked virtual threads instead of held platform threads for the rest. New
+       `isVirtualThreadBacked()` accessor. TDD-covered in `RowDecodingSchedulerTest`, including a
+       black-box concurrency-cap proof (`shouldCapConcurrentDecodeTasksAtTheProvidedMaxConcurrencyEvenOnVirtualThreads`
+       — a `CountDownLatch`-gated task set proves via Awaitility that a 4th task never starts while
+       3 are already running with `maxConcurrency=3`, no `Thread.sleep`, no loop/conditional inside
+       the test body, per CLAUDE.md's testing rules).
+     - New R2DBC option `ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS` (default
+       `false`, unchanged behavior) — an experimental, opt-in escape hatch, same shape as
+       `decoderWorkerCount` was for PR5, not yet a trusted-benchmark-validated default. Wired through
+       `ClickHouseConnectionFactory.from`, surfaced in `logEffectiveSettings`'s log line
+       (`decoderUsesVirtualThreads=...`) alongside the other concurrency-relevant settings, and
+       through a package-private `decoderUsesVirtualThreads()` test window, same pattern as
+       `decoderWorkerCount()`. TDD-covered in `ClickHouseConnectionFactoryTest`
+       (`shouldUsePlatformThreadDecoderByDefault`, `shouldUseVirtualThreadDecoderWhenExplicitlyEnabled`,
+       `shouldStillCoupleTheVirtualThreadDecoderMaxConcurrencyToThePoolSize`).
+     - New `VirtualThreadDecoderThroughputBenchmark`: compares `thisDriver` against itself, same
+       `poolSize=8` and `concurrency` 8/32/128 sweep as `DecoderWorkerCountThroughputBenchmark` —
+       only the decoder's thread type differs, worker count held equal (`WORKER_COUNT = POOL_SIZE`)
+       on both sides, deliberately not widened, since this experiment isolates thread type as the
+       one variable, not capacity (that question already has its own benchmark/answer above). New
+       fifth `OurDriverPointQueryClient` constructor
+       (`VirtualThreadDecoder(poolSize, decoderWorkerCount)`), same reasoning as the earlier
+       `ExplicitDecoderWorkerCount*` records for why a distinct type instead of a boolean parameter.
+       Reuses the same `TRUE MERGED` merged-histogram logging as the rest of Phase 11's benchmarks.
+       Wired into `benchmark.yml`'s `workflow_dispatch` dropdown; `build.gradle.kts`'s `jmh` block
+       gained a `-Pjmh.jvmArgsAppend` passthrough (comma-split, same shape as `jmh.profilers`), and
+       `benchmark.yml` appends `-Djdk.tracePinnedThreads=full` automatically whenever this benchmark
+       class is selected (either profile) — a pinned virtual thread prints its full stack to
+       `raw-stdout.log`, so pinning would show up directly in the run's own artifact rather than
+       only as an unexplained latency regression.
+     - **Correctness fix, 2026-08-24, caught before any benchmark run:** an independent review
+       (external LLM-generated implementation notes, cross-checked against the actual code before
+       acting on them) flagged that `AdmissionGatedExecutorService.execute()` originally used
+       `admission.acquireUninterruptibly()` — a task still waiting for a permit when its Reactor
+       subscription is cancelled would ignore that cancellation and could still run once a permit
+       later freed up, since `acquireUninterruptibly()` swallows interrupts entirely. Cancellation
+       propagation is a property this driver treats as load-bearing everywhere else (see
+       `RowBinaryDecoder.decode`'s own cancellation test), so a decoder-scheduler variant that could
+       silently ignore it would have been a real regression, not a cosmetic one. Fixed by switching
+       to interruptible `Semaphore#acquire()`: a task interrupted while waiting for a permit now
+       restores the interrupt flag and returns without ever calling `command.run()`. Since
+       `ExecutorService#shutdownNow()` (what `dispose()` calls on the owned executor) interrupts
+       every running/queued task, this is also what makes `dispose()` actually terminate virtual
+       threads still parked waiting for a permit, rather than leaving them stuck.
+     - Three new black-box tests in `RowDecodingSchedulerTest`, each exercising the fix through the
+       real `Scheduler.schedule(Runnable)`/`Disposable` API (not the private executor directly):
+       `shouldNeverRunACommandThatWasCancelledWhileWaitingForAnAdmissionPermit` (a disposed,
+       still-waiting task must never run even once its permit frees up),
+       `shouldTerminateAWaitingTaskWhenTheSchedulerIsDisposedBeforeAPermitFreesUp` (`dispose()` must
+       not leave a waiting task stuck forever), and
+       `shouldStillReleaseTheAdmissionPermitWhenACommandThrows` (a failing task must never leak
+       admission capacity). All three rely on `Semaphore`'s own documented interrupt-priority
+       behavior (an interrupted waiter never receives a permit, regardless of a concurrent release)
+       rather than on any additional synchronization this class would otherwise need to add just to
+       make the tests deterministic.
+     - New production-path tests in `RowBinaryDecoderTest`, run through the real decode chain
+       (`RowBinaryDecoder.decode` → `RowDecodingScheduler.virtualThreads` → `FluxInputStreamBridge` →
+       client-v2's reader) rather than only synthetic `Runnable` submission:
+       `shouldDecodeEveryRowInOrderThroughAVirtualThreadBackedSchedulerFromFragmentedChunks` (wire
+       bytes delivered one byte at a time, proving the bridge's block/resume cycle works correctly
+       across many fragments on a virtual thread, not just a single chunk) and
+       `shouldReadEveryRowOnAVirtualThreadWhenUsingTheVirtualThreadBackedScheduler` (asserts the
+       thread name observed while reading a row actually starts with the virtual-thread prefix, not
+       just that decoding succeeded).
+     - `RowDecodingScheduler.virtualThreads(int)` and `AdmissionGatedExecutorService`'s own Javadoc
+       corrected to say precisely what's bounded: *active* decode concurrency, not the number of
+       virtual threads created — a caller submitting far more tasks than `maxConcurrency` at once
+       gets that many additional parked (not running) virtual threads, which is cheap but not
+       zero-cost, and is a materially different queueing shape than
+       `Schedulers.newBoundedElastic(workerCount, queuedTaskCapacity, ...)`'s bounded queue.
+     - **Not yet run on trusted CI.** The static pinning-risk review above is source analysis, not a
+       measurement — throughput, every latency percentile, and any `tracePinnedThreads` output still
+       need a real trusted run before this is anything more than "plausible, not yet contradicted."
+       See [connection-pooling.md](docs/operations/connection-pooling.md#an-alternative-fix-for-the-same-finding-decoderusevirtualthreads)
+       for the option's own docs.
 
 ### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
 
