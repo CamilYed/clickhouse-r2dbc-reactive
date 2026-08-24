@@ -36,7 +36,7 @@ import reactor.core.publisher.Mono;
  * ClientV2PointQueryClient#close()}, which disposes client-v2's {@code Client} — the equivalent
  * pool-owning object on that side.
  *
- * <p>Three constructors, three distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches
+ * <p>Four constructors, four distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches
  * this driver to an explicit pool size for a fair matched-pool comparison; {@link
  * #OurDriverPointQueryClient(double)} instead leaves this driver at its own default pool and slows
  * every query down via {@code sleep(...)} — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s
@@ -45,8 +45,12 @@ import reactor.core.publisher.Mono;
  * first constructor, but additionally overrides {@link
  * ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT} independently of it — see {@link
  * DecoderWorkerCountThroughputBenchmark}'s Javadoc for why that third scenario exists (Phase 11
- * PR5, ROADMAP.md). All three share the same query/close logic below, only the SQL text and pool
- * configuration differ.
+ * PR5, ROADMAP.md); {@link
+ * #OurDriverPointQueryClient(ExplicitDecoderWorkerCountAndPendingAcquireLimit)} builds on the third
+ * by additionally overriding {@link
+ * ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_MAX_COUNT} — see that class's
+ * Javadoc for why PR5's own trusted run made this fourth scenario necessary. All four share the
+ * same query/close logic below, only the SQL text and pool configuration differ.
  */
 final class OurDriverPointQueryClient implements PointQueryClient {
 
@@ -66,6 +70,21 @@ final class OurDriverPointQueryClient implements PointQueryClient {
    * disambiguation need on the client-v2 side.
    */
   record ExplicitDecoderWorkerCount(int poolSize, int decoderWorkerCount) {}
+
+  /**
+   * Adds an explicit {@code pendingAcquireMaxCount} on top of {@link ExplicitDecoderWorkerCount}'s
+   * two fields — a third, distinct parameter type (rather than a third {@code int} parameter
+   * grafted onto that record) for the same self-documenting reason that record itself exists: a
+   * call site should say "these three are deliberately different numbers", not leave a reader
+   * counting positional {@code int}s. Exists specifically to test Phase 11 PR5's follow-up
+   * hypothesis (see {@link DecoderAndPendingAcquireWidenedThroughputBenchmark}'s Javadoc): that
+   * widening {@code decoderWorkerCount} alone removed one queue from a tandem pair (decoder queue,
+   * then Reactor Netty's own pending-acquire queue) but left the second queue's default capacity
+   * too small to hold what the first queue used to hold back — so widening both together, not just
+   * the decoder, is the actual fix to test.
+   */
+  record ExplicitDecoderWorkerCountAndPendingAcquireLimit(
+      int poolSize, int decoderWorkerCount, int pendingAcquireMaxCount) {}
 
   /**
    * Opens one logical connection against a {@code ConnectionFactory} sized to {@code poolSize}
@@ -100,6 +119,32 @@ final class OurDriverPointQueryClient implements PointQueryClient {
                 .option(
                     ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT,
                     explicitDecoderWorkerCount.decoderWorkerCount())
+                .build());
+    this.connection = openConnection(factory);
+  }
+
+  /**
+   * Opens one logical connection against a {@code ConnectionFactory} sized to {@link
+   * ExplicitDecoderWorkerCountAndPendingAcquireLimit#poolSize()} physical connections, with both
+   * {@link ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT} and {@link
+   * ClickHouseConnectionFactoryProvider#TRANSPORT_PENDING_ACQUIRE_MAX_COUNT} explicitly overridden
+   * — see {@link ExplicitDecoderWorkerCountAndPendingAcquireLimit}'s own Javadoc for why a caller
+   * would ever need to set both together rather than just the decoder.
+   */
+  OurDriverPointQueryClient(final ExplicitDecoderWorkerCountAndPendingAcquireLimit explicitLimits) {
+    this.selectSql = SELECT_BY_ID_SQL;
+    this.factory =
+        ClickHouseConnectionFactory.from(
+            baseOptions()
+                .option(
+                    ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS,
+                    explicitLimits.poolSize())
+                .option(
+                    ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT,
+                    explicitLimits.decoderWorkerCount())
+                .option(
+                    ClickHouseConnectionFactoryProvider.TRANSPORT_PENDING_ACQUIRE_MAX_COUNT,
+                    explicitLimits.pendingAcquireMaxCount())
                 .build());
     this.connection = openConnection(factory);
   }
