@@ -326,9 +326,18 @@ class RowDecodingSchedulerTest {
 
   @Test
   void shouldStillReleaseTheAdmissionPermitWhenACommandThrows() {
-    // given - only one admission permit; task A holds it and throws instead of completing normally
+    // given - only one admission permit; task A holds it and throws instead of completing normally.
+    // Scheduling a raw, throwing Runnable directly (rather than through a Mono/Flux operator like
+    // production code does via Mono.fromCallable(...).subscribeOn(...), which catches a thrown
+    // exception internally and converts it to an onError signal before it ever reaches the raw
+    // executor) means the exception genuinely becomes an uncaught exception on the scheduler's own
+    // background thread - the default JVM-wide handler is swapped out for the scope of this test so
+    // that expected exception doesn't fail the test process itself, then restored.
     final RowDecodingScheduler scheduler = RowDecodingScheduler.virtualThreads(1);
     final AtomicBoolean taskBRan = new AtomicBoolean(false);
+    final Thread.UncaughtExceptionHandler previousHandler =
+        Thread.getDefaultUncaughtExceptionHandler();
+    Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {});
 
     try {
       // when
@@ -343,6 +352,7 @@ class RowDecodingSchedulerTest {
       // then - the permit still gets released, so task B (submitted after) can still run
       await().atMost(Duration.ofSeconds(5)).untilTrue(taskBRan);
     } finally {
+      Thread.setDefaultUncaughtExceptionHandler(previousHandler);
       scheduler.dispose();
     }
   }
