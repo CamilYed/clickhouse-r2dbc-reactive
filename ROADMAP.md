@@ -54,8 +54,9 @@ happened, and the optimization attempt (`decoderWorkerCount`) was evaluated and 
 adopted as a default — see PR5's entry for the full result. Further driver optimization is no
 longer blocked on methodology, but nothing new is queued up from Phase 11 itself beyond the
 architectural admission-control question PR5's follow-up left open (see its entry below), and the
-JDK 21 virtual-thread decoder experiment — now underway, code done 2026-08-24, not yet run on
-trusted CI (see PR5's entry for the pinning-risk source review and what's built). Older items not
+JDK 21 virtual-thread decoder experiment — trusted run completed 2026-08-24: no pinning, tied
+throughput, ~45% more allocation than the platform-thread decoder at matched concurrency, not
+adopted as a default (see PR5's entry for the full result). Older items not
 yet folded into this phase, still parked: [rewriting the decode path off client-v2's blocking
 reader](#experiment-idea-not-a-decision--rewrite-the-decode-path-off-client-v2s-blocking-reader) —
 an option flagged during PR3's `RowDecodingScheduler` fix, explicitly not decided or started.
@@ -538,11 +539,84 @@ each one gated on the previous, no driver optimization before PR5:
        gets that many additional parked (not running) virtual threads, which is cheap but not
        zero-cost, and is a materially different queueing shape than
        `Schedulers.newBoundedElastic(workerCount, queuedTaskCapacity, ...)`'s bounded queue.
-     - **Not yet run on trusted CI.** The static pinning-risk review above is source analysis, not a
-       measurement — throughput, every latency percentile, and any `tracePinnedThreads` output still
-       need a real trusted run before this is anything more than "plausible, not yet contradicted."
+     - **Trusted-run result, 2026-08-24 (`poolSize=8`, `concurrency` 8/32/128, 3 forks, 5 warmup
+       iterations, `-Djdk.tracePinnedThreads=full`):**
+       - **Throughput: tied at every concurrency level.** `platformThreadDecoder` 810–837 ops/s vs
+         `virtualThreadDecoder` 804–826 ops/s, with ~30% error bars on both sides — the difference is
+         well inside measurement noise. Expected, in hindsight: both variants are admission-gated to
+         the same `maxConcurrency` (tied to `poolSize`), which is exactly the property that makes the
+         result barely move across the 8/32/128 sweep on either side too — virtual threads' actual
+         advantage (cheap concurrency *beyond* what a platform-thread pool could hold) never gets
+         exercised when both sides are capped at the same number.
+       - **Allocation: virtual threads cost ~45–48% more per op** (28.2–28.7 KB/op vs 19.2–19.4 KB/op,
+         consistent across all three concurrency levels), with correspondingly more GC activity
+         (53–62 vs 47–51 GC cycles, 228–310ms vs 190–250ms GC time). Consistent with the real cost of
+         `Executors.newThreadPerTaskExecutor` creating a fresh virtual thread per decode task, instead
+         of reusing threads from a fixed platform pool.
+       - **Pinning: none.** `jfr print --events jdk.VirtualThreadPinned` against all six
+         `profile.jfr` recordings (both variants, all three concurrency levels) returned zero events —
+         confirms the static pinning-risk review above empirically, not just by source inspection.
+       - **Verdict: not adopted as a default.** At matched admission-gated concurrency, this
+         implementation trades a real, measured allocation/GC cost for no throughput benefit. Safe
+         (no pinning), but not worth it in its current shape. The scenario where virtual threads could
+         still plausibly help — logical concurrency swept *past* the platform-thread-pool size while
+         platform threads stay capped at `poolSize` (test matrix "C" from the reviewed hints doc,
+         §16) — was not run; left as a follow-up if this line of work continues, not started because
+         nothing in this result motivates it yet.
        See [connection-pooling.md](docs/operations/connection-pooling.md#an-alternative-fix-for-the-same-finding-decoderusevirtualthreads)
        for the option's own docs.
+
+### `FluxInputStreamBridge` queue/copy overhead — measured, ruled out as a bottleneck (2026-08-24)
+
+A reviewed external hints doc (external LLM-generated implementation notes on
+`FluxInputStreamBridge`, cross-checked against the actual source before acting on them — same
+due-diligence pattern as the virtual-thread experiment above) argued that `ArrayBlockingQueue.take()`
+showing up in JFR mixes two very different costs: real queue/coalescing/copy overhead (removable)
+versus legitimate waiting for the next network chunk (not removable by any queue implementation).
+It proposed a step-by-step plan starting with a zero-copy multi-buffer read (dropping the current
+`coalesce()` path's `ArrayList` + merged-`ByteBuffer` allocation + full-byte copy) before touching
+anything else, specifically warning not to build a faster queue first without measuring which cost
+actually dominates.
+
+New `FluxInputStreamBridgeMicrobenchmark` (`clickhouse-r2dbc-reactive-benchmarks`, no ClickHouse
+container, no production code touched) measured the *current* implementation directly, isolating
+pure CPU cost from network wait:
+
+- **`producerAhead`** (every chunk already queued before the first `read()` — `Flux.fromIterable`
+  emits synchronously up to the bridge's initial demand): a consistent **~40–50 ns/chunk** across
+  every chunk-size/response-size combination (e.g. 1024 B × 1024 chunks: 41.5us/op → 40.5ns/chunk;
+  4096 B × 256 chunks: 10.1us/op → 39.6ns/chunk). This is the actual, current CPU cost of the
+  queue/coalescing/copy path this hints doc's zero-copy step would remove.
+- Compared against the **~8–12us/chunk** figure `FluxInputStreamBridge`'s own "Chunk coalescing"
+  Javadoc cites from real `StreamingScanBenchmark` instrumentation — a **~200x gap**. Extrapolated
+  to a 1M-row scan (~3545 chunks per that same instrumentation), the *entire* queue/coalescing/copy
+  cost is ~150–180us out of a ~94,000–131,000us total operation — even a hypothetical 100%
+  elimination of that cost (zero-copy's realistic upper bound) would be immeasurable against the
+  total, and nowhere close to explaining the still-unresolved fork-to-fork 1M variance from
+  [docs/performance/results.md](docs/performance/results.md#why-the-1m-number-wont-sit-still) — see
+  task list item "Confirm chunk-handoff hypothesis for StreamingScanBenchmark regression": this
+  result rules out the *queue/copy* portion of that hypothesis specifically, not chunk handoff or
+  cross-thread wait timing in general, which remains open.
+- **`consumerAheadNetworkDelayed`** (a dedicated background thread trickling chunks with an intended
+  10us gap, so `read()`'s `queue.take()` genuinely blocks between chunks) has a methodology caveat
+  worth recording honestly: the actual measured gap came out to **~75–80us/chunk**, not the
+  requested 10us, consistently across every configuration — `LockSupport.parkNanos`'s real
+  resolution on the (shared, virtualized) GitHub-hosted CI runner used for this run is coarser than
+  requested, not a property of the bridge. The scenario still qualitatively confirms `queue.take()`
+  dominates once a producer is slower than the consumer, but its absolute numbers aren't precise
+  enough to compare quantitatively against the 8–12us production figure the way `producerAhead`'s
+  numbers are.
+
+**Verdict: this is the hints doc's own "Possible result C"** (*"neither changes real ClickHouse
+benchmark... queue overhead was not the real bottleneck. Focus on: waiting for network, decoder
+worker scheduling, blocking client-v2 reader, admission control."*) — confirmed directly from the
+baseline measurement alone, without needing to build the proposed zero-copy variant at all: a ~200x
+gap between the removable cost and the cost the doc itself cites as the real bottleneck is decisive.
+**Not building the zero-copy/SPSC-queue candidate** — the plan's steps 4 onward (zero-copy read,
+`StreamSignal.Data` allocation removal, SPSC ring buffer, spin/park wait strategy) are not worth the
+implementation and correctness-testing cost (see the doc's own required race/cancellation test list)
+for a ceiling this small. `FluxInputStreamBridgeMicrobenchmark` stays in the repo as the
+baseline measurement and as a decisive negative result, not as unused scaffolding.
 
 ### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
 
