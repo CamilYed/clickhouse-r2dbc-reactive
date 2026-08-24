@@ -357,6 +357,24 @@ each one gated on the previous, no driver optimization before PR5:
      concurrency=8 win at 32/128 too without the outright failures — and, more fundamentally,
      whether admission control belongs on `RowDecodingScheduler` at all or should be its own
      explicit mechanism, since today it's an accident of where `subscribeOn` happens to sit.
+     Working theory for *why* this might work, not yet verified: today's shape is two queues in
+     series (the decoder's bounded-elastic queue, then Reactor Netty's own pending-acquire queue),
+     and tandem queueing is a known way to compound tail latency beyond what either queue alone
+     would produce at the same throughput — matching the shape of the observed symptom (p50 tied,
+     only p90-p99 diverges). If confirmed, widening the decoder collapses it back to one queue
+     (the physical connection pool, which is the real, unavoidable bottleneck either way).
+   - Two requirements for whoever picks this up next (explicit user guidance, 2026-08-24): (1) log
+     the effective values — resolved `decoderWorkerCount`, `transportMaxConnections`,
+     `transportPendingAcquireMaxCount`/`transportPendingAcquireTimeout`, and whatever Reactor Netty
+     itself resolved them to when left at its own defaults — at factory construction, so a user
+     debugging a tail-latency or pending-acquire-queue problem in production doesn't have to
+     already know this whole investigation to find the numbers in play; (2) the longer-term goal is
+     for these to size themselves correctly from `transportMaxConnections` (and from each other)
+     without a user ever having to set `decoderWorkerCount` or `transportPendingAcquireMaxCount` by
+     hand — today's explicit options are an escape hatch for this investigation, not the intended
+     end state. If the tandem-queueing theory above holds, auto-deriving
+     `transportPendingAcquireMaxCount` alongside any widened `decoderWorkerCount` (rather than
+     asking a caller to size both) is probably how that end state actually looks.
 
 ### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
 
