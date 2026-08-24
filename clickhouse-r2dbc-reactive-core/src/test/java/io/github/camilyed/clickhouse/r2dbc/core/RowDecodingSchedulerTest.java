@@ -332,12 +332,20 @@ class RowDecodingSchedulerTest {
     // exception internally and converts it to an onError signal before it ever reaches the raw
     // executor) means the exception genuinely becomes an uncaught exception on the scheduler's own
     // background thread - the default JVM-wide handler is swapped out for the scope of this test so
-    // that expected exception doesn't fail the test process itself, then restored.
+    // that expected exception doesn't fail the test process itself, then restored. The restore must
+    // wait for uncaughtExceptionHandled (not just for task B to have run): task B's permit is
+    // released inside AdmissionGatedExecutorService's own finally block, which runs *before* the
+    // exception finishes unwinding out to the thread's uncaught-exception dispatch - restoring the
+    // real handler as soon as task B ran raced that dispatch and lost under load (a real build
+    // failure), since nothing otherwise guarantees task A's own uncaught-exception handling has
+    // already happened by the time task B's flag flips.
     final RowDecodingScheduler scheduler = RowDecodingScheduler.virtualThreads(1);
     final AtomicBoolean taskBRan = new AtomicBoolean(false);
+    final CountDownLatch uncaughtExceptionHandled = new CountDownLatch(1);
     final Thread.UncaughtExceptionHandler previousHandler =
         Thread.getDefaultUncaughtExceptionHandler();
-    Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {});
+    Thread.setDefaultUncaughtExceptionHandler(
+        (thread, throwable) -> uncaughtExceptionHandled.countDown());
 
     try {
       // when
@@ -351,6 +359,8 @@ class RowDecodingSchedulerTest {
 
       // then - the permit still gets released, so task B (submitted after) can still run
       await().atMost(Duration.ofSeconds(5)).untilTrue(taskBRan);
+      // and - only now is it safe to restore the real handler
+      await().atMost(Duration.ofSeconds(5)).until(() -> uncaughtExceptionHandled.getCount() == 0);
     } finally {
       Thread.setDefaultUncaughtExceptionHandler(previousHandler);
       scheduler.dispose();
