@@ -281,9 +281,49 @@ each one gated on the previous, no driver optimization before PR5:
      `workflow_dispatch` dropdown, not the weekly schedule (same reasoning as PR3's manual-only
      additions).
    - Next: an actual `trusted` CI run to produce real JFR/merged-histogram/pile-up numbers.
-5. **PR5 — one evidence-driven optimization**, only if PR4's profiling points at something
-   specific, followed by an exact-same-config trusted re-run to confirm the fix actually moved the
-   number.
+5. **PR5 — one evidence-driven optimization, only if PR4's profiling points at something
+   specific.** PR4's first real trusted run (2026-08-24) did: p90-p99 per-query latency for
+   `thisDriver` ran 15-25% behind `clientV2` at every tested concurrency (8/32/128), consistently
+   across all 3 forks per tier — while p50 stayed tied (thisDriver even slightly ahead at
+   concurrency=32/128) and `gc.time` stayed equal between drivers (201-255ms vs 221-246ms across
+   the whole run) despite `thisDriver` allocating ~3.3x less per query throughout. That combination
+   rules out GC pauses as the tail-latency cause and points at decode-worker queueing instead: this
+   driver's `RowDecodingScheduler` is fixed at exactly `transportMaxConnections` workers (see
+   [connection-pooling.md](docs/operations/connection-pooling.md#the-decode-worker-pool-tracks-this-pools-size-not-the-cpu-core-count)),
+   so a query whose decode has to wait for a free worker pays that wait as pure added latency with
+   no corresponding allocation cost — exactly the observed signature. (The 6 `.jfr` files this run
+   produced weren't usable for a frame-level confirmation: no JDK with the `jfr` CLI tool, no sudo,
+   and no verified Python JFR parser were available in the sandbox that did this analysis — a real
+   tooling gap, not a data gap; they remain available for anyone with JDK Mission Control to inspect
+   directly.)
+   - **Code done 2026-08-24, not yet re-run/interpreted on CI.** Added `decoderWorkerCount`
+     (`ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT`) — an explicit R2DBC option
+     overriding `RowDecodingScheduler`'s worker count independently of `transportMaxConnections`,
+     defaulting to `null` (unchanged, pool-coupled behavior) when not set; see
+     [connection-pooling.md](docs/operations/connection-pooling.md#widening-the-decode-pool-beyond-the-connection-pool-decoderworkercount)
+     for the full option and TDD-covered in `ClickHouseConnectionFactoryTest`
+     (`shouldSizeTheDecoderSchedulerToAnExplicitDecoderWorkerCountEvenWhenLargerThanThePool`,
+     `shouldRejectANonPositiveDecoderWorkerCount`).
+   - New `DecoderWorkerCountThroughputBenchmark`: compares `thisDriver` against itself — `poolSize`
+     fixed at 8 on both sides (matching the headline benchmark), `concurrency` sweeping 8/32/128 —
+     only `decoderWorkerCount` differs: `CoupledDecoderState` leaves it at the default (8, today's
+     behavior); `WidenedDecoderState` sets it to 32 (4x the pool) via the new
+     `OurDriverPointQueryClient.ExplicitDecoderWorkerCount` constructor. Reuses the merged-
+     HdrHistogram-per-fork logging from `PublicApiMatchedPoolThroughputBenchmark` (the `TRUE
+     MERGED` log line) since the p90-p99 comparison this class exists to make is exactly what that
+     logging makes trustworthy at `forks=3`. Wired into `benchmark.yml`'s `workflow_dispatch`
+     dropdown, manual-only (same reasoning as PR3's additions).
+   - **This is the "measure it" half of PR5, not yet the optimization decision.** If widening the
+     decoder measurably shrinks the p90-p99 gap without hurting throughput or p50, that is the
+     evidence needed to decide whether decoupling the decoder from the connection pool by default
+     (not just as an opt-in benchmark knob) is worth pursuing as a real driver change. If it
+     doesn't move the tail at all, decode-worker queueing is ruled out as the explanation just as
+     usefully, and a different hypothesis (still without JFR frame-level data) would need to be
+     found before trying again.
+   - Next: an actual `trusted` CI run of `DecoderWorkerCountThroughputBenchmark`, then — per this
+     PR's own gate — a driver-change decision made from that result, followed by an exact-same-
+     config trusted re-run of `PublicApiMatchedPoolThroughputBenchmark` to confirm any resulting
+     fix actually moved the number.
 
 ### Experiment idea, not a decision — rewrite the decode path off client-v2's blocking reader
 

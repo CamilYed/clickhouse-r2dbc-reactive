@@ -94,6 +94,7 @@ on:
           - PublicApiMatchedPoolThroughputBenchmark
           - DefaultPoolSlowQueryThroughputBenchmark
           - ClientV2ExecutorAggressivenessBenchmark
+          - DecoderWorkerCountThroughputBenchmark
           - PoolSizeSweepThroughputBenchmark
           - ConnectionPerOperationThroughputBenchmark
           - BoundedPoolConcurrencyBenchmark

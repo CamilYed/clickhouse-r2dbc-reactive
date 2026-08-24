@@ -36,12 +36,17 @@ import reactor.core.publisher.Mono;
  * ClientV2PointQueryClient#close()}, which disposes client-v2's {@code Client} — the equivalent
  * pool-owning object on that side.
  *
- * <p>Two constructors, two distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches this
- * driver to an explicit pool size for a fair matched-pool comparison; {@link
+ * <p>Three constructors, three distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches
+ * this driver to an explicit pool size for a fair matched-pool comparison; {@link
  * #OurDriverPointQueryClient(double)} instead leaves this driver at its own default pool and slows
  * every query down via {@code sleep(...)} — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s
- * Javadoc for why that second scenario exists. Both share the same query/close logic below, only
- * the SQL text and pool configuration differ.
+ * Javadoc for why that second scenario exists; {@link
+ * #OurDriverPointQueryClient(ExplicitDecoderWorkerCount)} matches an explicit pool size like the
+ * first constructor, but additionally overrides {@link
+ * ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT} independently of it — see {@link
+ * DecoderWorkerCountThroughputBenchmark}'s Javadoc for why that third scenario exists (Phase 11
+ * PR5, ROADMAP.md). All three share the same query/close logic below, only the SQL text and pool
+ * configuration differ.
  */
 final class OurDriverPointQueryClient implements PointQueryClient {
 
@@ -53,6 +58,16 @@ final class OurDriverPointQueryClient implements PointQueryClient {
   private final String selectSql;
 
   /**
+   * Pairs an explicit {@code poolSize} with an explicit {@code decoderWorkerCount} independent of
+   * it — a distinct parameter type (rather than a second {@code int} parameter on {@link
+   * #OurDriverPointQueryClient(int)}) so a call site self-documents "these two are deliberately
+   * different numbers", per the same "no boolean/flag parameters that silently change behavior"
+   * reasoning {@link ClientV2PointQueryClient.FixedExecutorPoolSize} already follows for a similar
+   * disambiguation need on the client-v2 side.
+   */
+  record ExplicitDecoderWorkerCount(int poolSize, int decoderWorkerCount) {}
+
+  /**
    * Opens one logical connection against a {@code ConnectionFactory} sized to {@code poolSize}
    * physical connections.
    */
@@ -62,6 +77,29 @@ final class OurDriverPointQueryClient implements PointQueryClient {
         ClickHouseConnectionFactory.from(
             baseOptions()
                 .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, poolSize)
+                .build());
+    this.connection = openConnection(factory);
+  }
+
+  /**
+   * Opens one logical connection against a {@code ConnectionFactory} sized to {@link
+   * ExplicitDecoderWorkerCount#poolSize()} physical connections, with {@link
+   * ClickHouseConnectionFactoryProvider#DECODER_WORKER_COUNT} explicitly set to {@link
+   * ExplicitDecoderWorkerCount#decoderWorkerCount()} instead of the default (which would otherwise
+   * couple it to {@code poolSize}) — see that option's own Javadoc for why a caller would ever want
+   * the two to differ.
+   */
+  OurDriverPointQueryClient(final ExplicitDecoderWorkerCount explicitDecoderWorkerCount) {
+    this.selectSql = SELECT_BY_ID_SQL;
+    this.factory =
+        ClickHouseConnectionFactory.from(
+            baseOptions()
+                .option(
+                    ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS,
+                    explicitDecoderWorkerCount.poolSize())
+                .option(
+                    ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT,
+                    explicitDecoderWorkerCount.decoderWorkerCount())
                 .build());
     this.connection = openConnection(factory);
   }
