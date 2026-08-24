@@ -94,7 +94,7 @@ public class DefaultPoolSlowQueryThroughputBenchmark {
   private long[] ids;
   private final AtomicLong idCursor = new AtomicLong();
 
-  private OurDriverPointQueryClient ourDriverClient;
+  private OurDriverPointQueryClient thisDriverClient;
   private ClientV2PointQueryClient clientV2Client;
 
   /**
@@ -107,30 +107,30 @@ public class DefaultPoolSlowQueryThroughputBenchmark {
     PointQueryTable.seed(ROWS);
     ids = PointQueryTable.deterministicIds(ROWS, ID_POOL_SIZE, ID_SEED);
 
-    ourDriverClient = new OurDriverPointQueryClient(sleepSeconds);
+    thisDriverClient = new OurDriverPointQueryClient(sleepSeconds);
     clientV2Client = new ClientV2PointQueryClient(sleepSeconds);
 
     LOG.info(
-        "Default pools: ourDriver ~{} (Reactor Netty's max(availableProcessors,8)*2 on this"
+        "Default pools: thisDriver ~{} (Reactor Netty's max(availableProcessors,8)*2 on this"
             + " runner), client-v2 10 (its own fixed default) - sleepSeconds={}",
         Math.max(Runtime.getRuntime().availableProcessors(), 8) * 2,
         sleepSeconds);
 
-    ourDriverClient.prewarm(ids, PREWARM_CALLS);
+    thisDriverClient.prewarm(ids, PREWARM_CALLS);
     clientV2Client.prewarm(ids, PREWARM_CALLS);
   }
 
   /** Closes both clients' connections/pools at the end of the trial. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
-    ourDriverClient.close();
+    thisDriverClient.close();
     clientV2Client.close();
   }
 
   /** This driver, through the public R2DBC SPI, left at its own default pool size. */
   @Benchmark
-  public long ourDriver() {
-    return runBatch(ourDriverClient);
+  public long thisDriver() {
+    return runBatch(thisDriverClient);
   }
 
   /** client-v2, through its public async API, left at its own default pool size. */

@@ -115,7 +115,7 @@ public class AggregationBenchmark {
    * blackhole-consuming every decoded group row.
    */
   @Benchmark
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(AGGREGATION_SQL)).asByteArray().map(ByteBuffer::wrap);
     final long rowCount =

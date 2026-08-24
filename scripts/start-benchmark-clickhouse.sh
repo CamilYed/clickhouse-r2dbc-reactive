@@ -4,7 +4,7 @@ set -euo pipefail
 # Starts a single, long-lived ClickHouse container for "trusted" benchmark runs - see
 # CLAUDE_REPRESENTATIVE_BENCHMARK_PLAN.md section 2.5 / section 5: without this, each JMH fork
 # starts its own separate Testcontainers-managed ClickHouse process (see BenchmarkEnvironment's
-# Javadoc), so ourDriver and clientV2 can end up compared against two different server instances -
+# Javadoc), so thisDriver and clientV2 can end up compared against two different server instances -
 # even same image, same dataset, server startup state/page cache/Docker scheduling can still differ
 # between them. With this script, every fork instead points at the one server started here.
 #

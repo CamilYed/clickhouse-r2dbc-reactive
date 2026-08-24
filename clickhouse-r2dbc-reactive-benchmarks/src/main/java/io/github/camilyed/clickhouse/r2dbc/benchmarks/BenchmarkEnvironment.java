@@ -43,7 +43,7 @@ import org.testcontainers.images.builder.Transferable;
  * Set {@code BENCH_CLICKHOUSE_URL} (plus optionally {@code BENCH_CLICKHOUSE_USER}/{@code
  * BENCH_CLICKHOUSE_PASSWORD}) to point every JMH fork at one already-running, pinned ClickHouse
  * server instead of each fork starting its own Testcontainers container - see {@code
- * CLAUDE_REPRESENTATIVE_BENCHMARK_PLAN.md} section 2.5: comparing {@code ourDriver} against one
+ * CLAUDE_REPRESENTATIVE_BENCHMARK_PLAN.md} section 2.5: comparing {@code thisDriver} against one
  * server process and {@code clientV2} against a different one (even same image, same dataset) lets
  * server startup state, page cache, and Docker/CPU scheduling differ between the two methods being
  * compared - noise a "trusted" headline benchmark shouldn't carry. {@code

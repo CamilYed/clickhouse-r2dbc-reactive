@@ -128,7 +128,7 @@ GitHub Actions workflow + a Python analysis script) is CI/tooling infrastructure
 iteration itself — it doesn't need an exception to the standing "performance work waits for a
 proper environment" rule, it's the prerequisite that rule has been naming all along. Actual
 benchmark re-runs stay deferred until this pipeline exists and its results are validated stable.
-Non-negotiable constraint: `ourDriver` and client-v2 run in the same job, on the same VM, against
+Non-negotiable constraint: `thisDriver` and client-v2 run in the same job, on the same VM, against
 the same ClickHouse process, every time — never separate CI jobs, which would compare two machines
 under two different sets of noise, not two drivers. Full design (trust model for cloud numbers,
 staged rollout, JMH JSON as source of truth):
@@ -162,7 +162,7 @@ each one gated on the previous, no driver optimization before PR5:
    CPU / RSS / GC count-time capture to a trusted-run profiling mode (JFR or `/proc` metrics on the
    Linux runner) — the open question is whether client-v2's throughput edge is bought with
    materially more platform threads than this driver's bounded, non-blocking pipeline uses.
-   Separate `ourDriver`/`client-v2` JMH `@State` so a fork measuring one implementation doesn't
+   Separate `thisDriver`/`client-v2` JMH `@State` so a fork measuring one implementation doesn't
    also initialize/prewarm the other — matters once thread/RSS counts are measured per-process, not
    just for hygiene. Fix `OurDriverPointQueryClient`'s benchmark-only lifecycle leak (it retains
    only the logical `Connection`, never disposes the owning `ClickHouseConnectionFactory`'s
@@ -177,12 +177,12 @@ each one gated on the previous, no driver optimization before PR5:
    first pass — see the class's own Javadoc for why 128 isn't in scope yet. The first `trusted` run
    (2026-08-23) surfaced a real bug rather than the intended comparison: `RowDecodingScheduler`
    defaulted to one worker per CPU core, completely independent of `transportMaxConnections`, so on
-   the 4-core CI runner `ourDriver` was capped at 4-way decode concurrency regardless of its much
+   the 4-core CI runner `thisDriver` was capped at 4-way decode concurrency regardless of its much
    larger connection pool — that run's numbers weren't published; fixed by sizing
    `RowDecodingScheduler` to the resolved connection pool size instead (see
    [connection-pooling.md](docs/operations/connection-pooling.md#the-decode-worker-pool-tracks-this-pools-size-not-the-cpu-core-count)).
    **Re-run confirmed the fix**: at concurrency=8 (below both pools' capacity) the two drivers tie;
-   at concurrency=32, `ourDriver`'s 16-connection default pool now correctly beats client-v2's
+   at concurrency=32, `thisDriver`'s 16-connection default pool now correctly beats client-v2's
    10-connection default by ~2x — see
    [results.md](docs/performance/results.md#default-pool-slow-query-this-drivers-larger-default-pool-wins-once-its-actually-used-2026-08-23)
    for the full numbers. Still planned: a client-v2
@@ -201,7 +201,7 @@ each one gated on the previous, no driver optimization before PR5:
    calculation (persist a mergeable histogram per iteration/fork, merge post-run instead of
    averaging already-computed percentiles). Re-run `BoundedPoolConcurrencyBenchmark` now that it
    also has `.useAsyncRequests(true)` fixed. Finish `MixedWorkloadRapidRefreshCancelBenchmark`'s
-   incomplete `ourDriver` run and build its no-cancellation
+   incomplete `thisDriver` run and build its no-cancellation
    `MixedWorkloadRapidRefreshPileUpBenchmark` companion.
 5. **PR5 — one evidence-driven optimization**, only if PR4's profiling points at something
    specific, followed by an exact-same-config trusted re-run to confirm the fix actually moved the
