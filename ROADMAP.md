@@ -158,15 +158,24 @@ each one gated on the previous, no driver optimization before PR5:
    concurrency scenario is still where this driver wins most decisively" line corrected to
    reflect the current allocation-only advantage. Response-compression fairness reconfirmed
    already symmetric (both sides default to LZ4) — not reopened, no fix needed.
-2. **PR2 — resource-model measurement (code, no driver optimization).** Add thread count / process
-   CPU / RSS / GC count-time capture to a trusted-run profiling mode (JFR or `/proc` metrics on the
-   Linux runner) — the open question is whether client-v2's throughput edge is bought with
-   materially more platform threads than this driver's bounded, non-blocking pipeline uses.
-   Separate `thisDriver`/`client-v2` JMH `@State` so a fork measuring one implementation doesn't
-   also initialize/prewarm the other — matters once thread/RSS counts are measured per-process, not
-   just for hygiene. Fix `OurDriverPointQueryClient`'s benchmark-only lifecycle leak (it retains
-   only the logical `Connection`, never disposes the owning `ClickHouseConnectionFactory`'s
-   transport pool/decoder scheduler).
+2. **PR2 — resource-model measurement (code, no driver optimization). Done 2026-08-24, not yet
+   re-run/interpreted on CI.** The open question is whether client-v2's throughput edge is bought
+   with materially more platform threads than this driver's bounded, non-blocking pipeline uses.
+   `PublicApiMatchedPoolThroughputBenchmark` now splits `ThisDriverState`/`ClientV2State` into
+   separate `@State(Scope.Benchmark)` classes, so a fork running one `@Benchmark` method never
+   constructs, prewarms, or holds open the other side's client/pool/threads — matters once
+   thread/RSS counts are measured per-process, not just for hygiene. Fixed
+   `OurDriverPointQueryClient`'s benchmark-only lifecycle leak: it retained only the logical
+   `Connection` and never disposed the owning `ClickHouseConnectionFactory`, so the transport pool
+   and `RowDecodingScheduler` outlived every trial. The trusted CI profile now also runs JMH's own
+   `-prof hs_thr` (per-fork thread counts) alongside `-prof gc`, plus a background `/proc` sampler
+   (`scripts/benchmarks/sample-resources.sh`) for whole-run RSS/thread coverage, surfaced as an
+   optional section in `analyze.py`'s `summary.md` when present. The sampler is whole-run, not
+   per-driver/per-concurrency-tier (see its own header comment for why splitting that further is
+   still open), and `hs_thr`'s own secondary-metric output isn't parsed into `summary.md` yet — its
+   exact `results.json` key names need confirming against a real CI run before that parsing code is
+   written, consistent with this project's "don't publish a number we haven't verified" practice.
+   Next: an actual `trusted` CI run to produce real numbers and confirm the `hs_thr` key names.
 3. **PR3 — control experiments (code). `DefaultPoolSlowQueryThroughputBenchmark` done, verified
    post-fix**, the rest planned. Every matched-pool benchmark artificially equalizes both sides'
    connection pools — this new class instead leaves each driver at its own out-of-the-box default

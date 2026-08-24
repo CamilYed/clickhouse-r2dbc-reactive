@@ -3,7 +3,6 @@ package io.github.camilyed.clickhouse.r2dbc.benchmarks;
 import io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactory;
 import io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseConnectionFactoryProvider;
 import io.r2dbc.spi.Connection;
-import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.Parameters;
 import java.math.BigDecimal;
@@ -30,6 +29,13 @@ import reactor.core.publisher.Mono;
  * established this exact reuse-one-connection shape for the same reason. Documented explicitly, per
  * the plan's own instruction not to silently change benchmark semantics from its skeleton.
  *
+ * <p>{@link #close()} disposes both the logical {@link Connection} and the owning {@link
+ * ClickHouseConnectionFactory} — the factory, not the connection, is what actually owns the Reactor
+ * Netty transport pool and the {@code RowDecodingScheduler} worker pool, so closing only the
+ * connection leaves both running for the lifetime of the JVM. Mirrors {@link
+ * ClientV2PointQueryClient#close()}, which disposes client-v2's {@code Client} — the equivalent
+ * pool-owning object on that side.
+ *
  * <p>Two constructors, two distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches this
  * driver to an explicit pool size for a fair matched-pool comparison; {@link
  * #OurDriverPointQueryClient(double)} instead leaves this driver at its own default pool and slows
@@ -42,6 +48,7 @@ final class OurDriverPointQueryClient implements PointQueryClient {
   private static final String SELECT_BY_ID_SQL =
       "SELECT label, amount FROM " + PointQueryTable.NAME + " WHERE id = {id:UInt64}";
 
+  private final ClickHouseConnectionFactory factory;
   private final Connection connection;
   private final String selectSql;
 
@@ -51,11 +58,12 @@ final class OurDriverPointQueryClient implements PointQueryClient {
    */
   OurDriverPointQueryClient(final int poolSize) {
     this.selectSql = SELECT_BY_ID_SQL;
-    this.connection =
-        openConnection(
+    this.factory =
+        ClickHouseConnectionFactory.from(
             baseOptions()
                 .option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, poolSize)
                 .build());
+    this.connection = openConnection(factory);
   }
 
   /**
@@ -74,7 +82,8 @@ final class OurDriverPointQueryClient implements PointQueryClient {
             + ") FROM "
             + PointQueryTable.NAME
             + " WHERE id = {id:UInt64}";
-    this.connection = openConnection(baseOptions().build());
+    this.factory = ClickHouseConnectionFactory.from(baseOptions().build());
+    this.connection = openConnection(factory);
   }
 
   private static ConnectionFactoryOptions.Builder baseOptions() {
@@ -85,8 +94,7 @@ final class OurDriverPointQueryClient implements PointQueryClient {
         .option(ConnectionFactoryOptions.PASSWORD, BenchmarkEnvironment.password());
   }
 
-  private static Connection openConnection(final ConnectionFactoryOptions options) {
-    final ConnectionFactory factory = ClickHouseConnectionFactory.from(options);
+  private static Connection openConnection(final ClickHouseConnectionFactory factory) {
     return Mono.from(factory.create()).block(Duration.ofSeconds(10));
   }
 
@@ -107,5 +115,6 @@ final class OurDriverPointQueryClient implements PointQueryClient {
   @Override
   public void close() {
     Mono.from(connection.close()).block(Duration.ofSeconds(10));
+    factory.dispose();
   }
 }
