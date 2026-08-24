@@ -33,9 +33,18 @@ import reactor.core.publisher.FluxSink;
  * cost no queue implementation can remove) — see this bridge's own "Chunk coalescing" Javadoc
  * section for the production numbers ({@code ~285-293} rows/chunk, {@code ~8-12}us/chunk) this
  * benchmark exists to decompose further. This class measures the <em>current</em>, production
- * implementation only (no zero-copy/SPSC-queue variant yet) under both extremes the doc calls out
- * as needing separate measurement, so a later zero-copy candidate has an honest baseline to beat on
- * both:
+ * implementation only under both extremes the doc calls out as needing separate measurement:
+ *
+ * <p><b>Result (2026-08-24, see ROADMAP.md's own entry for the full write-up): decisive negative.
+ * {@link #producerAhead} measured a consistent ~40-50 ns/chunk pure CPU cost for the current
+ * queue/coalescing/copy path — roughly 200x smaller than the ~8-12us/chunk production figure above.
+ * At 1M rows (~3545 chunks), that's ~150-180us of removable cost out of a ~94,000-131,000us total
+ * operation. The doc's proposed zero-copy/SPSC-queue candidate was never built</b> — a ~200x gap
+ * between the removable cost and the actual bottleneck is decisive on its own, matching the doc's
+ * own "Possible result C" (queue overhead was not the real bottleneck; focus elsewhere) without
+ * needing to implement and correctness-test a replacement to find that out.
+ *
+ * <p>The two scenarios:
  *
  * <ul>
  *   <li>{@link #producerAhead} — every chunk is handed to {@link FluxInputStreamBridge} before the
@@ -44,19 +53,21 @@ import reactor.core.publisher.FluxSink;
  *       ever empty here, so this scenario exposes queue/coalescing/copy overhead with network wait
  *       driven as close to zero as this harness can get it.
  *   <li>{@link #consumerAheadNetworkDelayed} — a dedicated producer thread trickles chunks out with
- *       a fixed {@link #NETWORK_DELAY_NANOS} gap between them (roughly the same order of magnitude
- *       as the {@code ~8-12}us/chunk production figure above), so {@code
+ *       an intended {@link #NETWORK_DELAY_NANOS} gap between them, so {@code
  *       FluxInputStreamBridge.read}'s {@code queue.take()} genuinely blocks waiting between most
- *       chunks — this scenario shows whether a queue/copy change moves the needle at all once
- *       waiting dominates, per the hints doc's own warning not to expect it to.
+ *       chunks. Qualitatively confirms {@code queue.take()} dominates once a producer is slower
+ *       than the consumer, but its absolute numbers are a methodology caveat, not a precise
+ *       measurement: the actual measured gap on a GitHub-hosted CI runner came out to {@code
+ *       ~75-80}us/chunk, not the requested 10us — {@code LockSupport.parkNanos}'s real resolution
+ *       on that (shared, virtualized) hardware is coarser than requested. Not worth chasing further
+ *       given {@link #producerAhead}'s result already answers the question this class exists to
+ *       answer.
  * </ul>
  *
  * <p>{@link #chunkSizeBytes} and {@link #totalResponseBytes} are swept independently so both "many
  * small chunks" and "few large chunks" shapes are covered, including the degenerate single-chunk
  * case ({@code chunkSizeBytes == totalResponseBytes}) where {@link FluxInputStreamBridge}'s
- * coalescing path never has a second buffer to merge at all — a useful floor/control case for the
- * A/B comparison a zero-copy candidate will need once it exists (see ROADMAP.md's Phase 11
- * follow-up entry for that plan; not started here — this class changes no production behavior).
+ * coalescing path never has a second buffer to merge at all.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
