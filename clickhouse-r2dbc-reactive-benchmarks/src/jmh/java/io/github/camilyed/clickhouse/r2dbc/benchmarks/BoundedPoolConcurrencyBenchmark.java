@@ -134,7 +134,7 @@ public class BoundedPoolConcurrencyBenchmark {
    * {@code @Benchmark} invocation is "issue and await all {@link #concurrency} logical queries."
    */
   @Benchmark
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final long completed =
         Flux.range(0, concurrency)
             .flatMap(ignored -> singlePointQuery(), concurrency)

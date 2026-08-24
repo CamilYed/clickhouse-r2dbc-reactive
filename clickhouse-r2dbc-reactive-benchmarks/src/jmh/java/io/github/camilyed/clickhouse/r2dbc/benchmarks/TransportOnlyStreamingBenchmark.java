@@ -86,7 +86,7 @@ public class TransportOnlyStreamingBenchmark {
 
   /** This driver: sums response chunk lengths, no {@code RowBinaryDecoder} involved. */
   @Benchmark
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final long totalBytes =
         ourTransport
             .query(ClickHouseQuery.of(SELECT_ALL_SQL))

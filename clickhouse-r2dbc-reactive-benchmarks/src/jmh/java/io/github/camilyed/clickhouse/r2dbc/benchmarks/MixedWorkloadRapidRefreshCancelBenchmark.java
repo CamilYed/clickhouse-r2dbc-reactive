@@ -140,8 +140,8 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
   private RowDecodingScheduler decodingScheduler;
-  private final AtomicLong ourDriverIssued = new AtomicLong();
-  private final AtomicLong ourDriverCompletions = new AtomicLong();
+  private final AtomicLong thisDriverIssued = new AtomicLong();
+  private final AtomicLong thisDriverCompletions = new AtomicLong();
   private final AtomicLong clientV2Issued = new AtomicLong();
   private final AtomicLong clientV2Completions = new AtomicLong();
 
@@ -195,7 +195,8 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
   /** Logs and resets each side's refresh-survival count once per measurement iteration. */
   @TearDown(Level.Iteration)
   public void tearDownIteration() {
-    logSurvivalRate("ourDriver", ourDriverCompletions.getAndSet(0), ourDriverIssued.getAndSet(0));
+    logSurvivalRate(
+        "thisDriver", thisDriverCompletions.getAndSet(0), thisDriverIssued.getAndSet(0));
     logSurvivalRate("clientV2", clientV2Completions.getAndSet(0), clientV2Issued.getAndSet(0));
   }
 
@@ -204,12 +205,12 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
    * switchMap} — real cancellation reaches {@link ClickHouseHttpTransport}.
    */
   @Benchmark
-  public long ourDriver() {
+  public long thisDriver() {
     return Flux.range(0, users)
         .flatMap(
             user ->
                 userRefreshLoop(
-                    user, this::ourDriverHeavyQuery, ourDriverIssued, ourDriverCompletions),
+                    user, this::thisDriverHeavyQuery, thisDriverIssued, thisDriverCompletions),
             users)
         .then(Mono.just(0L))
         .block(Duration.ofSeconds(120));
@@ -267,7 +268,7 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
    * decode work directly on one of them (as {@code decodeRows} would) risks stalling every other
    * user's in-flight query, not just the one being decoded.
    */
-  private Mono<Boolean> ourDriverHeavyQuery(final String sql) {
+  private Mono<Boolean> thisDriverHeavyQuery(final String sql) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(sql)).asByteArray().map(ByteBuffer::wrap);
     return RowBinaryDecoder.decode(body, decodingScheduler, ResponseCompression.NONE)

@@ -77,7 +77,7 @@ public class TrivialQueryBenchmark {
    * shortcut, since this benchmark's source is a live network response, not an in-memory one.
    */
   @Benchmark
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body =
         ourTransport.query(ClickHouseQuery.of(SELECT_1_SQL)).asByteArray().map(ByteBuffer::wrap);
     final DecodedRow row =

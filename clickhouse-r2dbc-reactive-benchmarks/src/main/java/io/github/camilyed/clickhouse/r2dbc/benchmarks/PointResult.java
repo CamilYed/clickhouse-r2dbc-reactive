@@ -3,7 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.benchmarks;
 import java.math.BigDecimal;
 
 /**
- * The application-level object both {@code ourDriver} and {@code clientV2} must decode a point
+ * The application-level object both {@code thisDriver} and {@code clientV2} must decode a point
  * query into for a fair headline benchmark comparison - see {@code
  * CLAUDE_REPRESENTATIVE_BENCHMARK_PLAN.md} section 2.2. Earlier benchmarks in this module let each
  * side consume its result differently (this driver counting a {@code DecodedRow}, client-v2 pulling

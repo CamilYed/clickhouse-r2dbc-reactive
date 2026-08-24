@@ -117,7 +117,7 @@ public class PointQueryBenchmark {
    * decode cost separately — see {@code TransportOnlyStreamingBenchmark}.
    */
   @Benchmark
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final long id = nextId();
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
@@ -154,7 +154,7 @@ public class PointQueryBenchmark {
 
   /**
    * Advances through the pre-generated {@link #ids} pool — deterministic and, across separate JMH
-   * forks running {@link #ourDriver} and {@link #clientV2} from the same {@link #ID_SEED}, the
+   * forks running {@link #thisDriver} and {@link #clientV2} from the same {@link #ID_SEED}, the
    * identical sequence for both. No RNG call in the hot path.
    */
   private long nextId() {

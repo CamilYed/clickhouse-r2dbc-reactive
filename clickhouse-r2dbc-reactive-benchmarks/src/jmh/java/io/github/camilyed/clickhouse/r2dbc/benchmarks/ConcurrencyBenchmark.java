@@ -112,14 +112,14 @@ public class ConcurrencyBenchmark {
    * the shared {@link #decodingScheduler}), not the scheduler-free {@link
    * RowBinaryDecoder#decodeRows} test/benchmark shortcut. {@link ClickHouseHttpTransport} and its
    * underlying Reactor Netty client are safe to share and call concurrently from multiple threads
-   * (no per-call mutable state; every {@link #ourDriver} invocation builds its own {@link Flux}
+   * (no per-call mutable state; every {@link #thisDriver} invocation builds its own {@link Flux}
    * from scratch), and {@link RowDecodingScheduler} is likewise safe for concurrent use by design,
    * so no additional synchronization is introduced here beyond what {@link #nextId()} already
    * provides.
    */
   @Benchmark
   @Threads(8)
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final long id = nextId();
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
@@ -136,7 +136,7 @@ public class ConcurrencyBenchmark {
    * Client#query} call against the shared {@link #clientV2} instance — client-v2's {@link Client}
    * is documented as thread-safe for concurrent {@code query} calls, backed by its own internal
    * connection pool sized by its defaults (not explicitly configured here, matching {@link
-   * #ourDriver} leaving Reactor Netty's pool at its default too — a same-resources comparison, not
+   * #thisDriver} leaving Reactor Netty's pool at its default too — a same-resources comparison, not
    * a pool-size-tuned one).
    */
   @Benchmark

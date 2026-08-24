@@ -6,6 +6,14 @@ retracted/single-fork data sinks toward the bottom. See [index.md](index.md) for
 warning and environment these numbers were measured under, and [methodology.md](methodology.md)
 for what each benchmark class actually exercises.
 
+> [!NOTE]
+> **2026-08-24 — the `ourDriver` benchmark label was renamed to `thisDriver`** (task #270; the
+> Python-side raw key changed too, and its display label is now `r2dbc-reactive` — see
+> `scripts/benchmarks/analyze.py`'s `DRIVER_LABELS`). Every occurrence of `ourDriver` below is left
+> exactly as it was measured and reported at the time — it's a literal record of what that CI run's
+> JMH output and this page's own analysis actually said, not a live label — so it is **not**
+> rewritten retroactively. Only benchmark runs from this point forward will show `thisDriver`.
+
 ## Default pool, slow query — this driver's larger default pool wins once it's actually used (2026-08-23)
 
 The fixed, trustworthy re-run of the scenario retracted earlier the same day (see [Open
@@ -341,9 +349,8 @@ a wash until a multi-fork run says otherwise in either direction.
 - **Widen the concurrency/pool-size matrix** — `BoundedPoolConcurrencyBenchmark` and
   `PublicApiMatchedPoolThroughputBenchmark` currently test one pool size (8) and three concurrency
   levels (8/32/128); a real scalability sweep would cover more of both.
-- **Rename the `ourDriver` label to something more sensible** across every benchmark method,
-  `analyze.py`'s `DRIVER_LABELS`, and every table on this page — flagged 2026-08-23. The blocker
-  (waiting on trustworthy `DefaultPoolSlowQueryThroughputBenchmark` numbers) is now resolved — see
-  [the results section above](#default-pool-slow-query-this-drivers-larger-default-pool-wins-once-its-actually-used-2026-08-23) —
-  but the rename itself is still not started; still deliberately not bundled into that fix's PR to
-  keep the two changes independently reviewable.
+- ~~**Rename the `ourDriver` label to something more sensible**~~ — done 2026-08-24 (task #270):
+  every `@Benchmark` method/field/log line across the JMH sources now uses `thisDriver`, and
+  `analyze.py`'s raw key and display label (`r2dbc-reactive`) match. Historical tables on this page
+  that were measured and published before the rename keep the `ourDriver` name they were actually
+  reported under — see the note at the top of this page.

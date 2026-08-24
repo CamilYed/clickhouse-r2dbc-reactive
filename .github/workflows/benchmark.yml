@@ -7,7 +7,7 @@ name: Cloud benchmark pipeline
 # Which benchmark class runs is selectable (workflow_dispatch `benchmark` input, defaults to
 # PublicApiMatchedPoolThroughputBenchmark) - see docs/PERFORMANCE.md's local numbers for why that
 # one is the default: poolSize=8, concurrency=8/32/128, the same parameters this workflow's cloud
-# numbers are meant to compare against. ourDriver and client-v2 always run in this one job, against
+# numbers are meant to compare against. thisDriver and client-v2 always run in this one job, against
 # this one ClickHouse container, on this one runner - never split into separate jobs (see the
 # roadmap section's non-negotiable constraint: splitting them would compare two different machines
 # under two different sets of noise, not two drivers).
@@ -20,7 +20,7 @@ name: Cloud benchmark pipeline
 # see the "Analyze results" step below.
 #
 # Trust model: don't trust an absolute number from a single noisy shared runner - trust the
-# ourDriver/client-v2 ratio, repeated across several runs (see scripts/benchmarks/analyze.py's
+# thisDriver/client-v2 ratio, repeated across several runs (see scripts/benchmarks/analyze.py's
 # summary.md header and the roadmap section for the full rationale).
 #
 # Two profiles:

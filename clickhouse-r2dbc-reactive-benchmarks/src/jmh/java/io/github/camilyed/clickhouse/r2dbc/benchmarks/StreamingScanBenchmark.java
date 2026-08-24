@@ -80,7 +80,7 @@ public class StreamingScanBenchmark {
   private ClickHouseHttpTransport ourTransport;
   private Client clientV2;
   private RowDecodingScheduler decodingScheduler;
-  private Histogram ourDriverTtfr;
+  private Histogram thisDriverTtfr;
   private Histogram clientV2Ttfr;
 
   /** Starts the shared container, seeds {@link PointQueryTable}, resets both TTFR histograms. */
@@ -101,7 +101,7 @@ public class StreamingScanBenchmark {
             .setPassword(BenchmarkEnvironment.password())
             .setDefaultDatabase("default")
             .build();
-    ourDriverTtfr = new Histogram(1, TTFR_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
+    thisDriverTtfr = new Histogram(1, TTFR_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
     clientV2Ttfr = new Histogram(1, TTFR_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
   }
 
@@ -113,7 +113,7 @@ public class StreamingScanBenchmark {
   public void tearDownTrial() {
     clientV2.close();
     decodingScheduler.dispose();
-    logTtfr("ourDriver", ourDriverTtfr);
+    logTtfr("thisDriver", thisDriverTtfr);
     logTtfr("clientV2", clientV2Ttfr);
   }
 
@@ -121,7 +121,7 @@ public class StreamingScanBenchmark {
    * This driver: streams every row via {@link RowBinaryDecoder#decode} — the real production decode
    * path (off the Netty event loop, via {@link #decodingScheduler}), not the scheduler-free {@link
    * RowBinaryDecoder#decodeRows} test/benchmark shortcut — timing the gap between subscribe and the
-   * first emitted row into {@link #ourDriverTtfr}, then draining the rest of the stream (this
+   * first emitted row into {@link #thisDriverTtfr}, then draining the rest of the stream (this
    * method's own JMH-measured latency is effectively time-to-last-row).
    *
    * <p>The first-row check is a plain array-backed flag read-then-set, not an {@code AtomicLong}
@@ -136,7 +136,7 @@ public class StreamingScanBenchmark {
    * only after the whole stream has completed.
    */
   @Benchmark
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final long startNanos = System.nanoTime();
     final long[] firstRowNanos = {-1L};
     final Flux<ByteBuffer> body =
@@ -153,7 +153,7 @@ public class StreamingScanBenchmark {
                 })
             .count()
             .block(Duration.ofSeconds(60));
-    recordTtfr(ourDriverTtfr, startNanos, firstRowNanos[0]);
+    recordTtfr(thisDriverTtfr, startNanos, firstRowNanos[0]);
     blackhole.consume(rowCount);
   }
 

@@ -46,8 +46,8 @@ import reactor.core.publisher.Mono;
  * actually calls.
  *
  * <p>Built specifically to measure the 2026-08-19 NOOP-observability-fast-path fix (see
- * docs/PERFORMANCE.md's "second-opinion review" section): {@link #ourDriverNoopObservation} and
- * {@link #ourDriverEnabledObservation} run the identical query over two connections that differ in
+ * docs/PERFORMANCE.md's "second-opinion review" section): {@link #thisDriverNoopObservation} and
+ * {@link #thisDriverEnabledObservation} run the identical query over two connections that differ in
  * exactly one thing — whether {@code ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER} is
  * configured — so the delta between them isolates {@code QueryObservation}'s fingerprinting/
  * timestamping/counting cost from every other variable (network, decode, JIT warmup) instead of
@@ -119,7 +119,7 @@ public class PublicApiPointQueryBenchmark {
    * NoopQueryObservation}/{@code decodePlain} fast path added 2026-08-19.
    */
   @Benchmark
-  public void ourDriverNoopObservation(final Blackhole blackhole) {
+  public void thisDriverNoopObservation(final Blackhole blackhole) {
     runOurDriverQuery(ourConnectionNoopObservation, blackhole);
   }
 
@@ -129,7 +129,7 @@ public class PublicApiPointQueryBenchmark {
    * nothing-overridden listener is the right control here.
    */
   @Benchmark
-  public void ourDriverEnabledObservation(final Blackhole blackhole) {
+  public void thisDriverEnabledObservation(final Blackhole blackhole) {
     runOurDriverQuery(ourConnectionEnabledObservation, blackhole);
   }
 

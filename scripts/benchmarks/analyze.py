@@ -21,7 +21,7 @@ ClickHouse - it only reads three inputs already sitting on disk:
 
 Produces, in --out-dir:
   - summary.md         - one readable report: environment header, then one table per concurrency
-                          tier (throughput ops/s, ourDriver/clientV2 ratio, p50/p90/p95/p99 latency,
+                          tier (throughput ops/s, thisDriver/clientV2 ratio, p50/p90/p95/p99 latency,
                           bytes/op allocation when -prof gc data is present).
   - throughput.png      \
   - latency-p99.png      | the three charts the roadmap plan asks for - not a dozen.
@@ -46,18 +46,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # PublicApiMatchedPoolThroughputBenchmark.logLatencySummary's SLF4J log line, e.g.:
-#   ourDriver per-query latency (us, n=4096): mean=123.4, p50=100, p90=200, p95=250, p99=400, p99.9=600, max=1200
+#   thisDriver per-query latency (us, n=4096): mean=123.4, p50=100, p90=200, p95=250, p99=400, p99.9=600, max=1200
 # slf4j-simple prefixes it with "[thread] LEVEL logger - ", which this pattern ignores by
 # matching only the part after the last " - " (kept liberal on purpose: the exact SLF4J prefix
 # format isn't a contract this script should be coupled to).
 LATENCY_LINE = re.compile(
-    r"(?P<driver>ourDriver|clientV2) per-query latency .*?n=(?P<n>\d+)\):"
+    r"(?P<driver>thisDriver|clientV2) per-query latency .*?n=(?P<n>\d+)\):"
     r" mean=(?P<mean>[\d.]+), p50=(?P<p50>\d+), p90=(?P<p90>\d+), p95=(?P<p95>\d+),"
     r" p99=(?P<p99>\d+), p99\.9=(?P<p999>\d+), max=(?P<max>\d+)"
 )
 
-DRIVER_LABELS = {"ourDriver": "ourDriver", "clientV2": "client-v2"}
-BAR_COLORS = {"ourDriver": "#2f6fed", "clientV2": "#e8813a"}
+DRIVER_LABELS = {"thisDriver": "r2dbc-reactive", "clientV2": "client-v2"}
+BAR_COLORS = {"thisDriver": "#2f6fed", "clientV2": "#e8813a"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,7 +75,7 @@ def load_json(path: Path) -> object:
 
 
 def method_name(benchmark_fqn: str) -> str:
-    """'io.github...PublicApiMatchedPoolThroughputBenchmark.ourDriver' -> 'ourDriver'."""
+    """'io.github...PublicApiMatchedPoolThroughputBenchmark.thisDriver' -> 'thisDriver'."""
     return benchmark_fqn.rsplit(".", 1)[-1]
 
 
@@ -108,7 +108,7 @@ def extract_latency_rows(stdout_text: str) -> dict[str, list[dict]]:
     fork-by-fork, method-by-method, iteration-by-iteration; @Param sweeps run as a full set of
     forks per concurrency value before moving to the next, matching the order results.json lists
     them in - see the run loop assumption documented in build_report)."""
-    rows: dict[str, list[dict]] = {"ourDriver": [], "clientV2": []}
+    rows: dict[str, list[dict]] = {"thisDriver": [], "clientV2": []}
     for match in LATENCY_LINE.finditer(stdout_text):
         d = match.groupdict()
         rows[d["driver"]].append(
@@ -135,7 +135,7 @@ def average_latency_per_concurrency(
     (benchmark method, @Param combination) already in run order, and each entry's own
     measurementIterations count says how many latency lines belong to it - that's the anchor,
     since the latency log itself carries no concurrency value."""
-    cursors = {"ourDriver": 0, "clientV2": 0}
+    cursors = {"thisDriver": 0, "clientV2": 0}
     out: dict[int, dict[str, dict]] = {}
     for entry in results:
         driver = method_name(entry["benchmark"])
@@ -188,7 +188,7 @@ def build_report(
     lines.append("")
     lines.append(
         "> Per the pipeline's trust model (roadmap-archive.md Phase 10): don't trust an absolute "
-        "number from a single run on a shared runner - trust the ourDriver/client-v2 ratio, "
+        "number from a single run on a shared runner - trust the r2dbc-reactive/client-v2 ratio, "
         "repeated across several runs."
     )
     lines.append("")
@@ -214,7 +214,7 @@ def build_report(
         lines.append("|---|---|---|---|---|---|---|---|")
         tier = throughput[concurrency]
         tier_latency = latency.get(concurrency, {})
-        for driver in ("ourDriver", "clientV2"):
+        for driver in ("thisDriver", "clientV2"):
             if driver not in tier:
                 continue
             t = tier[driver]
@@ -229,10 +229,10 @@ def build_report(
                 f"{'±' + format(t['error'], '.1f') if t['error'] is not None else 'n/a'} | "
                 f"{p50} | {p90} | {p95} | {p99} | {alloc} |"
             )
-        if "ourDriver" in tier and "clientV2" in tier and tier["clientV2"]["score"] > 0:
-            ratio = tier["ourDriver"]["score"] / tier["clientV2"]["score"]
+        if "thisDriver" in tier and "clientV2" in tier and tier["clientV2"]["score"] > 0:
+            ratio = tier["thisDriver"]["score"] / tier["clientV2"]["score"]
             lines.append("")
-            lines.append(f"ourDriver/client-v2 throughput ratio: **{ratio:.2f}**")
+            lines.append(f"r2dbc-reactive/client-v2 throughput ratio: **{ratio:.2f}**")
         lines.append("")
 
     return "\n".join(lines)

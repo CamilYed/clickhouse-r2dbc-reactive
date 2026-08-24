@@ -62,10 +62,10 @@ import reactor.core.publisher.Mono;
  *
  * <h2>What the logged per-query latency means</h2>
  *
- * {@link #ourDriverLatencyRecorder}/{@link #clientV2LatencyRecorder} record each individual query's
- * wall-clock latency (subscribe to mapped {@link PointResult}), reset and logged once per JMH
- * measurement iteration via {@link Recorder#getIntervalHistogram()} — this is the number to read
- * for "how long does one query take", not JMH's own {@code Score}/{@code Error}, which only
+ * {@link #thisDriverLatencyRecorder}/{@link #clientV2LatencyRecorder} record each individual
+ * query's wall-clock latency (subscribe to mapped {@link PointResult}), reset and logged once per
+ * JMH measurement iteration via {@link Recorder#getIntervalHistogram()} — this is the number to
+ * read for "how long does one query take", not JMH's own {@code Score}/{@code Error}, which only
  * describes the aggregate throughput of the whole sustained workload.
  */
 @State(Scope.Benchmark)
@@ -105,10 +105,10 @@ public class PublicApiMatchedPoolThroughputBenchmark {
   private long[] ids;
   private final AtomicLong idCursor = new AtomicLong();
 
-  private OurDriverPointQueryClient ourDriverClient;
+  private OurDriverPointQueryClient thisDriverClient;
   private ClientV2PointQueryClient clientV2Client;
 
-  private Recorder ourDriverLatencyRecorder;
+  private Recorder thisDriverLatencyRecorder;
   private Recorder clientV2LatencyRecorder;
 
   /**
@@ -123,35 +123,35 @@ public class PublicApiMatchedPoolThroughputBenchmark {
     PointQueryTable.seed(ROWS);
     ids = PointQueryTable.deterministicIds(ROWS, ID_POOL_SIZE, ID_SEED);
 
-    ourDriverClient = new OurDriverPointQueryClient(poolSize);
+    thisDriverClient = new OurDriverPointQueryClient(poolSize);
     clientV2Client = new ClientV2PointQueryClient(poolSize);
 
-    ourDriverClient.prewarm(ids, PREWARM_CALLS);
+    thisDriverClient.prewarm(ids, PREWARM_CALLS);
     clientV2Client.prewarm(ids, PREWARM_CALLS);
 
-    ourDriverLatencyRecorder = new Recorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
+    thisDriverLatencyRecorder = new Recorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
     clientV2LatencyRecorder = new Recorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
   }
 
   /** Closes both clients' connections/pools at the end of the trial. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
-    ourDriverClient.close();
+    thisDriverClient.close();
     clientV2Client.close();
   }
 
   /** Logs and resets each side's per-query latency distribution once per measurement iteration. */
   @TearDown(Level.Iteration)
   public void tearDownIteration() {
-    logLatencySummary("ourDriver", ourDriverLatencyRecorder.getIntervalHistogram());
+    logLatencySummary("thisDriver", thisDriverLatencyRecorder.getIntervalHistogram());
     logLatencySummary("clientV2", clientV2LatencyRecorder.getIntervalHistogram());
   }
 
   /** This driver, through the public R2DBC SPI only - see {@link OurDriverPointQueryClient}. */
   @Benchmark
   @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
-  public long ourDriver() {
-    return runWorkload(ourDriverClient, ourDriverLatencyRecorder);
+  public long thisDriver() {
+    return runWorkload(thisDriverClient, thisDriverLatencyRecorder);
   }
 
   /** client-v2, through its public async API only - see {@link ClientV2PointQueryClient}. */

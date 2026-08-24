@@ -129,12 +129,12 @@ public class MatchedPoolThreadsConcurrencyBenchmark {
    * scheduler-free {@link RowBinaryDecoder#decodeRows} test/benchmark shortcut this class used
    * before its own scheduler-fairness gap was found (see {@link ConcurrencyBenchmark}'s Javadoc for
    * the same fix and why the previously "3-fork confirmed" numbers here need re-running) —
-   * otherwise identical calling shape to {@link ConcurrencyBenchmark#ourDriver}, only the pool size
-   * changed.
+   * otherwise identical calling shape to {@link ConcurrencyBenchmark#thisDriver}, only the pool
+   * size changed.
    */
   @Benchmark
   @Threads(8)
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final long id = nextId();
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));

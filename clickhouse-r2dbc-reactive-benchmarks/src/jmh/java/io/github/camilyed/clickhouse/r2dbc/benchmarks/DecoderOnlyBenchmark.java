@@ -45,7 +45,7 @@ import reactor.core.publisher.SynchronousSink;
  * cover.
  *
  * <p>Once H1 (the {@code LinkedHashMap} copy) was confirmed dominant and removed as a variable
- * ({@link #ourDriverCompactRow}), a real but smaller residual gap against {@link #clientV2}
+ * ({@link #thisDriverCompactRow}), a real but smaller residual gap against {@link #clientV2}
  * remained. {@link #compactRowDirectLoop} and {@link #compactRowFluxNoBridge} are a small factorial
  * matrix isolating where that residual actually lives — bridge vs. Reactor vs. the row object
  * itself — one dimension changed at a time, rather than lumping it all under "bridge overhead": see
@@ -62,7 +62,7 @@ public class DecoderOnlyBenchmark {
 
   /**
    * Mirrors {@code RowBinaryDecoder.RESPONSE_CHUNK_DEMAND} (a private constant there) so {@link
-   * #ourDriverWithoutMapCopy} feeds {@link FluxInputStreamBridge} identically to production — kept
+   * #thisDriverWithoutMapCopy} feeds {@link FluxInputStreamBridge} identically to production — kept
    * in sync manually since there's no shared constant to reference across modules; revisit if that
    * value ever changes. Currently {@code 16} — see that constant's Javadoc for the chunk-coalescing
    * follow-up that raised it from {@code 4}.
@@ -103,7 +103,7 @@ public class DecoderOnlyBenchmark {
    * This driver's production decode path, {@link RowBinaryDecoder#decodeRows}, over captured bytes.
    */
   @Benchmark
-  public void ourDriver(final Blackhole blackhole) {
+  public void thisDriver(final Blackhole blackhole) {
     final Flux<ByteBuffer> body = Flux.just(ByteBuffer.wrap(capturedResponseBytes));
     final long rowCount =
         RowBinaryDecoder.decodeRows(body, ResponseCompression.NONE)
@@ -113,12 +113,12 @@ public class DecoderOnlyBenchmark {
   }
 
   /**
-   * Diagnostic-only — never used in production. Identical to {@link #ourDriver} in every respect
+   * Diagnostic-only — never used in production. Identical to {@link #thisDriver} in every respect
    * (same {@link FluxInputStreamBridge}, same reader settings, same {@code Flux.generate} per-row
    * emission shape) except the final {@code new LinkedHashMap<>(reader.next())} copy is skipped:
    * {@code reader.next()} is still called (client-v2's own per-row cost is still paid, unchanged),
    * but nothing is copied out of it — a constant is emitted downstream instead. A single-variable
-   * change against {@link #ourDriver}, added specifically so H1's cost can be measured directly
+   * change against {@link #thisDriver}, added specifically so H1's cost can be measured directly
    * rather than inferred by subtracting client-v2's baseline from this driver's total, which folds
    * in every other difference between the two paths (the bridge's own queue/{@code StreamSignal}
    * machinery, {@code Flux.generate}'s state, the reader subclass) along with the map copy — see
@@ -126,7 +126,7 @@ public class DecoderOnlyBenchmark {
    * rigorous enough to attribute a bytes/row number to H1.
    */
   @Benchmark
-  public void ourDriverWithoutMapCopy(final Blackhole blackhole) {
+  public void thisDriverWithoutMapCopy(final Blackhole blackhole) {
     final RowBinaryWithNamesAndTypesFormatReader reader =
         new RowBinaryWithNamesAndTypesFormatReader(
             FluxInputStreamBridge.subscribeTo(
@@ -158,7 +158,7 @@ public class DecoderOnlyBenchmark {
    * ListDecodingRowBinaryReader#nextRowValues} / {@link RowBinaryDecoder}): a compact {@code
    * Object[]} snapshot per row, built here from the same three typed getters {@link #clientV2}
    * calls ({@code getLong}/{@code getString}/{@code getBigDecimal}), never touching {@code
-   * RecordWrapper.entrySet()} at all. Unlike {@link #ourDriverWithoutMapCopy} (which discards each
+   * RecordWrapper.entrySet()} at all. Unlike {@link #thisDriverWithoutMapCopy} (which discards each
    * row untouched — useful for isolating H1's cost, but not a fair comparison against {@link
    * #clientV2}, which does real per-value work), this method does the same per-column extraction
    * {@link #clientV2} does and retains a real per-row object (an {@code Object[]}, blackholed same
@@ -174,7 +174,7 @@ public class DecoderOnlyBenchmark {
    * follow-up.
    */
   @Benchmark
-  public void ourDriverCompactRow(final Blackhole blackhole) {
+  public void thisDriverCompactRow(final Blackhole blackhole) {
     final RowBinaryWithNamesAndTypesFormatReader reader =
         new RowBinaryWithNamesAndTypesFormatReader(
             FluxInputStreamBridge.subscribeTo(
@@ -204,14 +204,14 @@ public class DecoderOnlyBenchmark {
   }
 
   /**
-   * H2 isolation matrix, step A: same compact-row value extraction as {@link #ourDriverCompactRow},
-   * but over a plain {@code ByteArrayInputStream} with a direct {@code while} loop — no {@link
-   * FluxInputStreamBridge}, no {@code Flux.generate}, no Reactor at all. This is exactly {@link
-   * #clientV2}'s own transport shape, but building the same retained {@code Object[]} row {@link
-   * #ourDriverCompactRow} does. Comparing this against {@link #clientV2} isolates the cost of
-   * building/blackholing the row object itself, independent of any Reactor or bridge machinery —
-   * see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section, the H2 factorial breakdown
-   * (H2a–H2d).
+   * H2 isolation matrix, step A: same compact-row value extraction as {@link
+   * #thisDriverCompactRow}, but over a plain {@code ByteArrayInputStream} with a direct {@code
+   * while} loop — no {@link FluxInputStreamBridge}, no {@code Flux.generate}, no Reactor at all.
+   * This is exactly {@link #clientV2}'s own transport shape, but building the same retained {@code
+   * Object[]} row {@link #thisDriverCompactRow} does. Comparing this against {@link #clientV2}
+   * isolates the cost of building/blackholing the row object itself, independent of any Reactor or
+   * bridge machinery — see docs/PERFORMANCE.md's Phase 5 "Optimization phase" section, the H2
+   * factorial breakdown (H2a–H2d).
    */
   @Benchmark
   public void compactRowDirectLoop(final Blackhole blackhole) throws Exception {
@@ -239,7 +239,7 @@ public class DecoderOnlyBenchmark {
    * FluxInputStreamBridge}), but driven through {@code Flux.generate} instead of a plain {@code
    * while} loop — isolating Reactor's own per-row emission machinery ({@code SynchronousSink},
    * generator state) from the bridge. {@link #compactRowDirectLoop} vs this method isolates H2b
-   * (Reactor/{@code Flux.generate} overhead); this method vs {@link #ourDriverCompactRow} isolates
+   * (Reactor/{@code Flux.generate} overhead); this method vs {@link #thisDriverCompactRow} isolates
    * H2a ({@link FluxInputStreamBridge} overhead) — see docs/PERFORMANCE.md's Phase 5 "Optimization
    * phase" section for the full H2a–H2d breakdown this factorial matrix is designed to answer.
    */
