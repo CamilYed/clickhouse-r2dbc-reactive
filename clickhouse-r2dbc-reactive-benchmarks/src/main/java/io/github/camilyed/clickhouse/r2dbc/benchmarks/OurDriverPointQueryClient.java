@@ -86,7 +86,13 @@ final class OurDriverPointQueryClient implements PointQueryClient {
     this.connection = openConnection(factory);
   }
 
-  private static ConnectionFactoryOptions.Builder baseOptions() {
+  /**
+   * Package-private, not {@code private}: shared with {@link
+   * OurDriverConnectionPerOperationPointQueryClient}, which needs the same base options for its own
+   * {@code factory.create()}-per-query variant — see that class's Javadoc for why it exists
+   * alongside this one instead of as a third constructor here.
+   */
+  static ConnectionFactoryOptions.Builder baseOptions() {
     return ConnectionFactoryOptions.builder()
         .option(ConnectionFactoryOptions.HOST, BenchmarkEnvironment.host())
         .option(ConnectionFactoryOptions.PORT, BenchmarkEnvironment.port())
