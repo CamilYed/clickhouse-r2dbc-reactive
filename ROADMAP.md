@@ -158,24 +158,28 @@ each one gated on the previous, no driver optimization before PR5:
    concurrency scenario is still where this driver wins most decisively" line corrected to
    reflect the current allocation-only advantage. Response-compression fairness reconfirmed
    already symmetric (both sides default to LZ4) — not reopened, no fix needed.
-2. **PR2 — resource-model measurement (code, no driver optimization). Done 2026-08-24, not yet
-   re-run/interpreted on CI.** The open question is whether client-v2's throughput edge is bought
-   with materially more platform threads than this driver's bounded, non-blocking pipeline uses.
+2. **PR2 — resource-model measurement (code, no driver optimization). Done 2026-08-24; first real
+   `trusted` CI run (2026-08-24) caught a real bug, fixed in PR4 — see that entry.** The open
+   question is whether client-v2's throughput edge is bought with materially more platform threads
+   than this driver's bounded, non-blocking pipeline uses.
    `PublicApiMatchedPoolThroughputBenchmark` now splits `ThisDriverState`/`ClientV2State` into
    separate `@State(Scope.Benchmark)` classes, so a fork running one `@Benchmark` method never
    constructs, prewarms, or holds open the other side's client/pool/threads — matters once
    thread/RSS counts are measured per-process, not just for hygiene. Fixed
    `OurDriverPointQueryClient`'s benchmark-only lifecycle leak: it retained only the logical
    `Connection` and never disposed the owning `ClickHouseConnectionFactory`, so the transport pool
-   and `RowDecodingScheduler` outlived every trial. The trusted CI profile now also runs JMH's own
-   `-prof hs_thr` (per-fork thread counts) alongside `-prof gc`, plus a background `/proc` sampler
-   (`scripts/benchmarks/sample-resources.sh`) for whole-run RSS/thread coverage, surfaced as an
-   optional section in `analyze.py`'s `summary.md` when present. The sampler is whole-run, not
-   per-driver/per-concurrency-tier (see its own header comment for why splitting that further is
-   still open), and `hs_thr`'s own secondary-metric output isn't parsed into `summary.md` yet — its
-   exact `results.json` key names need confirming against a real CI run before that parsing code is
-   written, consistent with this project's "don't publish a number we haven't verified" practice.
-   Next: an actual `trusted` CI run to produce real numbers and confirm the `hs_thr` key names.
+   and `RowDecodingScheduler` outlived every trial. The trusted CI profile also runs a background
+   `/proc` sampler (`scripts/benchmarks/sample-resources.sh`) for whole-run RSS/thread coverage,
+   surfaced as an optional section in `analyze.py`'s `summary.md` when present — the sampler is
+   whole-run, not per-driver/per-concurrency-tier (see its own header comment for why splitting
+   that further is still open). **Originally also added `-prof hs_thr` for per-fork thread counts —
+   the first real `trusted` CI run of this code (2026-08-24) failed outright with
+   `ClassNotFoundException: hs_thr`: JMH 1.37 has no built-in HotSpot thread-count profiler under
+   that or any other name (confirmed by reading `org.openjdk.jmh.profile.ProfilerFactory`'s
+   source).** That was a bug introduced here and never actually exercised until that failure —
+   removed in PR4, whose entry below has the fix and the corrected profiler list. The `/proc`
+   sampler remains the only thread-count source in this pipeline. Next: an actual `trusted` CI run
+   of PR4's corrected profiler list to produce real numbers.
 3. **PR3 — control experiments (code). `DefaultPoolSlowQueryThroughputBenchmark` done, verified
    post-fix**, the rest planned. Every matched-pool benchmark artificially equalizes both sides'
    connection pools — this new class instead leaves each driver at its own out-of-the-box default
@@ -226,13 +230,26 @@ each one gated on the previous, no driver optimization before PR5:
    CI runs to produce real numbers for all three.
 4. **PR4 — root-cause the throughput/latency gap (profiling only, no driver changes). Code done
    2026-08-24, not yet re-run/interpreted on CI.**
+   - **Fixed PR2's `-prof hs_thr` bug, found by the first real `trusted` CI run of this pipeline
+     (2026-08-24).** That run failed outright: `Profilers failed to initialize...
+     java.lang.ClassNotFoundException: hs_thr`. Confirmed by reading JMH 1.37's
+     `org.openjdk.jmh.profile.ProfilerFactory` source: its `BUILT_IN` map has no `hs_thr` entry —
+     the registered built-in profiler IDs in this JMH version are `async, cl, comp, gc, jfr, stack,
+     perf, perfnorm, perfasm, mempool, xperfasm, dtraceasm, pauses, safepoints, perfc2c`, none of
+     which is a HotSpot thread-count profiler under any name. `hs_thr` was simply never a valid
+     profiler in JMH 1.37 — PR2's assumption was wrong and this had never actually been exercised
+     until this run. Removed from `benchmark.yml`'s trusted profile rather than replaced: no JMH
+     1.37 built-in covers per-fork thread counts, so `scripts/benchmarks/sample-resources.sh`'s
+     `/proc` sampler (whole-run, not per-fork) remains the only thread-count source in this
+     pipeline.
    - **Scoped down to JFR only, not JFR/async-profiler both.** async-profiler needs a downloaded
      native agent jar, which this project's sandboxed development environment has no network path
      to fetch or verify; JFR ships in the JDK itself and needs no extra artifact, so it's what's
      wired in. Revisit async-profiler later only if JFR's output turns out not to be enough.
-   - The trusted CI profile now also runs JMH's own `-prof jfr:dir=/tmp/jfr-output` alongside
-     `gc,hs_thr`, on `PublicApiMatchedPoolThroughputBenchmark` at concurrency=8/32/128, both
-     drivers — a first look at `FluxInputStreamBridge`'s cross-thread handoff (the leading suspect
+   - The trusted CI profile now runs JMH's own `-prof jfr:dir=/tmp/jfr-output` alongside `gc` (not
+     `hs_thr` — see above), on `PublicApiMatchedPoolThroughputBenchmark` at concurrency=8/32/128,
+     both drivers — a first look at `FluxInputStreamBridge`'s cross-thread handoff (the leading
+     suspect
      — the same mechanism was already root-caused once at streaming-scan scale, see
      [results.md](docs/performance/results.md#full-table-scan-found-partially-fixed-and-the-fixs-own-measurement-is-unstable-at-1m))
      vs. Reactor operator overhead vs. row mapping vs. LZ4 decode vs. connection acquisition. **Known
