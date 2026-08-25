@@ -275,7 +275,6 @@ public final class RowDecodingScheduler {
 
     @Override
     public void shutdown() {
-      disposed = true;
       delegate.shutdown();
     }
 
