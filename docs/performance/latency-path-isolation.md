@@ -67,7 +67,7 @@ source, not that earlier, since-superseded shape.
 | Variant | What it changes | Status |
 | --- | --- | --- |
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
-| **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | Not started |
+| **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Built, not yet run** — `LatencyPathVariantBBenchmark` (see below) |
 | **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | Not started |
 | **D — benchmark-local `BinaryInput` adapter (optional, only after A/B/C)** | Minimal `read()`/`readFully(...)` adapter removing the blocking-`InputStream` boundary for only the types this benchmark needs | Not started |
 
@@ -116,6 +116,60 @@ confirms the class runs clean first), add `-Pjmh.warmupIterations=5 -Pjmh.iterat
 -Pjmh.forks=3` (~13m47s) and `-Pjmh.threads=8 -Pjmh.forks=3`, all `BUILD SUCCESSFUL`, no `-prof`/leak
 warnings. Full result table above. Next: Variant B/C, then the hypothesis-ranking table — the
 tail-latency finding flagged above is the most concrete open thread Variant A surfaced.
+
+## Variant B — built, not yet run
+
+`LatencyPathVariantBBenchmark` and `ZeroCopyByteBufInputStreamBridge`
+(`clickhouse-r2dbc-reactive-benchmarks/src/jmh/.../LatencyPathVariantBBenchmark.java` and
+`.../src/main/.../ZeroCopyByteBufInputStreamBridge.java`), built on `feature/314-latency-path-isolation`
+per the recommendation above. Not yet compiled/run — this sandbox has no JDK 21/Gradle network
+access, same limitation as every other class in this ladder; needs a run on your machine before any
+number here can be trusted.
+
+**Design, and three deliberate departures from Variant A worth knowing before reading numbers:**
+
+- **Self-contained A/B pair, not a cross-run comparison.** Both `copyPath*` and `zeroCopyPath*`
+  `@Benchmark` methods live in *this one class*, share the same `ourTransport` instance and the same
+  client-v2 reader call, and differ only in which `InputStream` bridge feeds the reader —
+  `core.FluxInputStreamBridge` (the production copy) vs. `ZeroCopyByteBufInputStreamBridge` (the
+  prototype). Comparing this class's own two halves against each other isolates the one variable in
+  question; comparing this class's numbers against Variant A's separately-run class would not — two
+  independent JMH invocations carry run-to-run noise Variant A's own retracted tail-latency finding
+  already showed is real.
+- **Response compression forced to `NONE`, not the production `LZ4` default.** `core.ClickHouseLz4InputStream`
+  (the LZ4 unwrapper) is package-private in `core`; reusing it from the benchmarks module would mean
+  widening core's visibility purely for a benchmark, which this pass's "no production code changes"
+  scope rules out. Decompression is itself a copy — a separate question from the one this variant
+  isolates — so running both paths uncompressed keeps the comparison clean. Applies identically to
+  both `copyPath*` and `zeroCopyPath*`, so it doesn't bias the A-vs-B comparison within this class,
+  but it does mean this class's absolute numbers aren't directly comparable to Variant A's (which run
+  under LZ4).
+- **`SELECT 1` and point only, no streaming.** Variant A's deficit showed up on `SELECT 1`/point, not
+  streaming (which already favored this driver) — so streaming isn't needed to test this hypothesis,
+  and skipping it also avoids needing `ZeroCopyByteBufInputStreamBridge`'s one disclosed, unclosed
+  gap: a narrow race where Reactor can deliver a further chunk during `close()`'s hard-cancel cleanup
+  sweep (see that class's own Javadoc). Both scenarios here always read to natural completion, never
+  early-cancel, so that gap isn't exercised.
+
+**Before trusting any run**, verify no leak with:
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantBBenchmark \
+  -Pjmh.jvmArgsAppend=-Dio.netty.leakDetection.level=paranoid,-Dio.netty.leakDetection.targetRecords=25,-Dio.netty.customResourceLeakDetector=io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector
+```
+
+then, once that comes back clean, the same sanity-then-trusted-3-fork sequence Variant A used:
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=LatencyPathVariantBBenchmark
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantBBenchmark -Pjmh.threads=1 -Pjmh.forks=3
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantBBenchmark -Pjmh.threads=8 -Pjmh.forks=3
+```
 
 ## A/B/C/D result table
 
