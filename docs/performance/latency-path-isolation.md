@@ -71,7 +71,7 @@ source, not that earlier, since-superseded shape.
 | **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | Not started |
 | **D — benchmark-local `BinaryInput` adapter (optional, only after A/B/C)** | Minimal `read()`/`readFully(...)` adapter removing the blocking-`InputStream` boundary for only the types this benchmark needs | Not started |
 
-## Variant A — built, not yet run
+## Variant A — built, single-fork sanity run done, trusted runs still pending
 
 `LatencyPathVariantABenchmark` (`clickhouse-r2dbc-reactive-benchmarks/src/jmh/java/.../LatencyPathVariantABenchmark.java`),
 new class rather than an edit to `TrivialQueryBenchmark`/`PointQueryBenchmark`/`StreamingScanBenchmark`:
@@ -112,24 +112,38 @@ confirms the class runs clean first), add `-Pjmh.warmupIterations=5 -Pjmh.iterat
 (`jmh.iterations` also newly wired alongside `jmh.threads` above — the build file's own defaults are
 1 warmup / 3 measurement iterations, 1 fork).
 
-**Not yet run** — same disclosed sandbox limitation as every other benchmark in this repo: no
-network access for the Gradle wrapper distribution or a JDK 21 toolchain in this environment. Needs
-a real run (concurrency=1 and concurrency=8, 3 forks each per this project's own "multi-fork numbers
-are the ones worth acting on" standard) before its numbers go in the result table below.
+**Sanity run done (2026-08-25, single fork, ~4m36s, `BUILD SUCCESSFUL`)** — confirms the class
+compiles and runs clean end to end against both drivers, all six `@Benchmark` methods produced
+samples, no `-prof`/leak warnings. Numbers are in the result table above, explicitly labeled
+single-fork/not-yet-trusted. Still needed: the actual 3-fork `-t 1` and `-t 8` runs per this
+project's own "multi-fork numbers are the ones worth acting on" standard — same disclosed sandbox
+limitation as the rest of this repo (no Gradle-wrapper network access here), so those runs happen on
+the user's machine, not in this session.
 
 ## A/B/C/D result table
 
-Not populated yet — Variant A hasn't been run, and B/C/D aren't built. Fill in once each variant has
-a trusted (3-fork) run at both concurrency levels:
+**Single-fork, single-warmup-iteration sanity run only (2026-08-25, no `-Pjmh.threads` passed, so
+JMH's own default of 1 thread — coincidentally the plan's `-t 1` concurrency level).** Per this
+project's own confidence standard (see [index.md](index.md#-tip)), a single-fork number is a first
+signal, not something to act on — the 3-fork `-t 1`/`-t 8` runs are still needed before drawing any
+conclusion. Recorded here so the shape is visible while the trusted runs are pending, not as a
+result to build a decision on.
 
-| Variant | Scenario | Concurrency | `thisDriver` mean (µs) | p99 (µs) | vs. Variant A | vs. client-v2 |
-| --- | --- | --- | --- | --- | --- | --- |
-| A | SELECT 1 | 1 | — | — | — | — |
-| A | SELECT 1 | 8 | — | — | — | — |
-| A | point | 1 | — | — | — | — |
-| A | point | 8 | — | — | — | — |
-| A | stream 10k | 1 | — | — | — | — |
-| A | stream 10k | 8 | — | — | — | — |
+| Variant | Scenario | Concurrency | `thisDriver` mean (µs) | client-v2 mean (µs) | `thisDriver` p99 (µs) | client-v2 p99 (µs) | thisDriver vs. client-v2 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A | SELECT 1 | 1 (single-fork) | 635.2 ± 2.2 | 609.6 ± 3.9 | 887.8 | 859.4 | ~4.2% slower |
+| A | SELECT 1 | 8 | — | — | — | — | — |
+| A | point | 1 (single-fork) | 1239.2 ± 4.9 | 1162.8 ± 3.9 | 1804.3 | 1800.7 | ~6.6% slower |
+| A | point | 8 | — | — | — | — | — |
+| A | stream 10k | 1 (single-fork) | 4227.3 ± 27.8 | 4441.4 ± 31.1 | 5595.5 | 6209.4 | ~4.8% **faster** |
+| A | stream 10k | 8 | — | — | — | — | — |
+
+Directionally consistent with the mega sweep's headline ("Protocol floor ... essentially tied to
+~8% slower", "Full table scan ... 11–12% lower latency") even at this small a scale and single fork
+— not a new finding on its own, a sanity check that this class reproduces the known shape before
+trusting it for the harder A/B/C/D comparison. Full JMH output (including every percentile) is in
+`build/results/jmh/results.json` on the machine that ran it, not committed to git per this project's
+convention.
 
 ## Hypothesis-ranking decision table
 
