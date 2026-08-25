@@ -797,6 +797,55 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
   point-query/`SELECT 1` deficit the mega sweep shows, not yet profiled. Build a microbenchmark
   around `Connection.createStatement(sql)`/bind/execute-preparation and profile allocation before
   reaching for a cache — explicitly not a global unbounded SQL cache.
+- **Formal latency-path-isolation plan (2026-08-25), supersedes the three informal bullets above
+  with a disciplined A/B/C/D benchmark ladder.** A second, more rigorous ChatGPT-authored brief
+  ("CLAUDE_LATENCY_PATH_ISOLATION") formalizes exactly the three items above into one controlled
+  experiment instead of three separate ad-hoc investigations. Explicitly diagnostic-only — **no
+  production code changes** in this pass, not even client-v2 modifications beyond a
+  benchmark-local, non-published, minimal-type-coverage adapter (Variant D). Plan, condensed:
+  - **Variant A** — exact current production path (`ClickHouseHttpTransport` →
+    `response.body().asByteArray().map(ByteBuffer::wrap)` → `FluxInputStreamBridge` →
+    `RowDecodingScheduler` → client-v2's blocking RowBinary reader → `DecodedRow`), faithfully
+    reproduced, not simplified. Baseline.
+  - **Variant B** — same path, but avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy only if ownership
+    can be proven correct (no use-after-release, no leak, correct cancel/error/full-consumption
+    cleanup, verified under `-Dio.netty.leakDetection.level=paranoid`). Never naively retain
+    `ByteBuf.nioBuffer()` past `onNext`.
+  - **Variant C** — the most important one: prototype transport response acquisition/subscription
+    starting *before* decoder-scheduler admission, instead of today's
+    `Mono.fromCallable(() -> newReader(source, compression)).subscribeOn(decoderScheduler)` (which
+    means `RowDecodingScheduler` gates transport admission too, not just decode). Must not buffer
+    the whole response, block the event loop, or change cancellation/connection-reuse/pool-size/
+    decoder/compression. If genuinely impossible without a major redesign, document exactly why
+    instead of forcing it.
+  - **Variant D** (optional, only after A/B/C) — a benchmark-local `BinaryInput` interface
+    (`read()`/`readFully(...)`) adapting only the minimum client-v2 `BinaryStreamReader` source
+    needed to remove the blocking-`InputStream` boundary, supporting only the types the benchmark
+    actually needs (UInt64/String/Float64/Decimal/Nullable) — not full type coverage, not a
+    published fork, not upstream-modifying. Stop if the measured gain is negligible; do not evolve
+    into a full decoder.
+  - **Scenarios**: `SELECT 1`, single-row point lookup, 10k-row stream — deliberately *not* the
+    1M-row scan the mega sweep already covers, since fixed per-query overhead is exactly what a
+    large scan amortizes away.
+  - **Concurrency**: start at `pool=8`, `concurrency=1` (isolates fixed overhead, minimal queueing)
+    and `concurrency=8` (full matched-pool utilization) before touching 32/128 (introduces queueing
+    that can hide a ~100µs fixed cost).
+  - **Explicitly out of scope for this pass**: virtual-thread decoder default, decoder worker
+    widening, pending-acquire tuning, `ArrayBlockingQueue`/SPSC replacement,
+    `FluxInputStreamBridge` coalescing rewrite, response compression defaults, default pool size, a
+    full custom RowBinary decoder, and the Spring Boot macrobenchmark above — separate questions,
+    not this one.
+  - **Deliverable**: exact pipeline diagram from source, exact subscription/scheduling boundary
+    locations, A/B/C/D result table (clean 3-fork/5-warmup/5-measurement runs, no JFR, plus a
+    separate 1-fork JFR diagnostic run), a hypothesis-ranking decision table (byte-copy /
+    scheduler-admission-placement / InputStream-adaptation / fixed-statement-setup — keep/reject
+    each with the measured delta), and **exactly one** recommended next production change (or an
+    explicit "no production change justified yet"). Falls back to profiling
+    `ClickHouseStatement`/`ClickHouseQuery` construction (the third informal bullet above) only if
+    A/B/C/D don't explain the gap.
+  - **Status: planned, not started.** Waiting on the user's go-ahead once the current macrobench PR
+    (`feature/305-phase12-macrobench-pr1`) is merged — do not begin implementation before that
+    signal.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,
