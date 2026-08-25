@@ -3,12 +3,17 @@ package io.github.camilyed.clickhouse.r2dbc.core;
 import com.clickhouse.client.api.data_formats.RowBinaryWithNamesAndTypesFormatReader;
 import com.clickhouse.client.api.data_formats.internal.BinaryStreamReader;
 import com.clickhouse.client.api.internal.ServerSettings;
-import com.clickhouse.client.api.metadata.TableSchema;
 import com.clickhouse.client.api.query.QuerySettings;
 import com.clickhouse.data.ClickHouseColumn;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.SequenceInputStream;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SynchronousSink;
@@ -24,10 +29,20 @@ import reactor.core.scheduler.Scheduler;
  * the subscription — see that method's Javadoc for exactly why "whichever thread happens to
  * request" is not good enough here.
  *
- * <p>Uses {@link ListDecodingRowBinaryReader} rather than the base reader directly, so {@code
- * Array}/{@code Nested} columns decode as plain {@code List}s instead of client-v2's {@code
- * .internal} {@code ArrayValue} — see that class's Javadoc for why this is safe and narrowly
- * scoped. Every other column type is unaffected.
+ * <p>Parses the {@code RowBinaryWithNamesAndTypes} header exactly once (see {@link
+ * RowBinaryHeader}) and resolves every column via {@link NativeColumnTypeResolver} before choosing
+ * which {@link RowBinaryReader} decodes the rows: {@link NativeRowBinaryReader} when every column
+ * resolves natively, {@link EmptyRowBinaryReader} when the response never sent a header at all
+ * (e.g. a DDL statement), or — when at least one column falls outside {@link
+ * NativeColumnTypeResolver}'s supported set — {@link ListDecodingRowBinaryReader}, fed a {@link
+ * SequenceInputStream} replaying the already-consumed header bytes ({@link
+ * RowBinaryHeader#rawBytes()}) followed by the rest of the body, so it re-parses the header itself
+ * exactly as it always has. This fallback path is therefore byte-for-byte identical in behavior to
+ * decoding through client-v2 alone; the header replay is the only overhead it pays for having been
+ * peeked at first. {@link ListDecodingRowBinaryReader} decodes {@code Array}/{@code Nested} columns
+ * as plain {@code List}s instead of client-v2's {@code .internal} {@code ArrayValue} — see that
+ * class's Javadoc for why this is safe and narrowly scoped. Every other column type not natively
+ * covered is unaffected, decoding exactly as client-v2 always has.
  *
  * <p>Each row is snapshotted into a compact {@link DecodedRow} the moment it's read, via {@link
  * ListDecodingRowBinaryReader#nextRowValues()}, rather than handed out as client-v2's own {@code
@@ -121,7 +136,7 @@ public final class RowBinaryDecoder {
         .map(
             reader ->
                 new DecodedResult(
-                    columnsOf(reader),
+                    reader.columns(),
                     Flux.generate(
                             () -> reader,
                             RowBinaryDecoder::emitNextRow,
@@ -129,26 +144,36 @@ public final class RowBinaryDecoder {
                         .subscribeOn(reactorScheduler)));
   }
 
-  private static List<ColumnDescriptor> columnsOf(final ListDecodingRowBinaryReader reader) {
-    // A genuinely empty response body (e.g. a DDL statement, which never sends the
-    // RowBinaryWithNamesAndTypes header at all) leaves the reader's schema null rather than an
-    // empty TableSchema — reader.getSchema().getColumns() would NPE for that case otherwise.
-    final TableSchema schema = reader.getSchema();
-    if (schema == null) {
-      return List.of();
-    }
-    return schema.getColumns().stream().map(RowBinaryDecoder::toColumnDescriptor).toList();
-  }
-
-  private static ColumnDescriptor toColumnDescriptor(final ClickHouseColumn column) {
-    return new ColumnDescriptor(column.getColumnName(), column.getOriginalTypeName());
-  }
-
-  private static ListDecodingRowBinaryReader newReader(
+  /**
+   * Reads the {@code RowBinaryWithNamesAndTypes} header once and picks which {@link
+   * RowBinaryReader} decodes the rows that follow — see this class's own Javadoc for the
+   * native/fallback/empty decision this makes.
+   */
+  private static RowBinaryReader newReader(
       final Flux<ByteBuffer> source, final ResponseCompression compression) {
     final InputStream body = FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND);
+    final InputStream decompressed =
+        compression == ResponseCompression.LZ4 ? new ClickHouseLz4InputStream(body) : body;
+    final RowBinaryHeader header;
+    try {
+      header = RowBinaryHeader.readFrom(decompressed);
+    } catch (final IOException e) {
+      throw new UncheckedIOException(e);
+    }
+    if (!header.present()) {
+      return new EmptyRowBinaryReader(decompressed);
+    }
+    final Optional<List<ColumnPlan>> plans = resolveAllOrNone(header.columns());
+    if (plans.isPresent()) {
+      return new NativeRowBinaryReader(
+          decompressed,
+          toColumnDescriptors(header.columns()),
+          plans.get().toArray(new ColumnPlan[0]));
+    }
+    final InputStream replayed =
+        new SequenceInputStream(new ByteArrayInputStream(header.rawBytes()), decompressed);
     return new ListDecodingRowBinaryReader(
-        compression == ResponseCompression.LZ4 ? new ClickHouseLz4InputStream(body) : body,
+        replayed,
         new QuerySettings()
             .setUseTimeZone("UTC")
             // Matches ClickHouseHttpTransport#JSON_AS_STRING_QUERY_PARAM, sent unconditionally on
@@ -160,8 +185,33 @@ public final class RowBinaryDecoder {
         new BinaryStreamReader.DefaultByteBufferAllocator());
   }
 
-  private static ListDecodingRowBinaryReader emitNextRow(
-      final ListDecodingRowBinaryReader reader, final SynchronousSink<DecodedRow> sink) {
+  /**
+   * {@link Optional#empty()} the moment any column doesn't resolve — {@link RowBinaryDecoder} needs
+   * an all-or-nothing answer for the whole result, not a per-column mix, since {@link
+   * NativeRowBinaryReader} has no fallback path of its own for a single unsupported column.
+   */
+  private static Optional<List<ColumnPlan>> resolveAllOrNone(final List<ClickHouseColumn> columns) {
+    final List<ColumnPlan> plans = new ArrayList<>(columns.size());
+    for (final ClickHouseColumn column : columns) {
+      final Optional<ColumnPlan> plan = NativeColumnTypeResolver.resolve(column);
+      if (plan.isEmpty()) {
+        return Optional.empty();
+      }
+      plans.add(plan.get());
+    }
+    return Optional.of(plans);
+  }
+
+  private static List<ColumnDescriptor> toColumnDescriptors(final List<ClickHouseColumn> columns) {
+    return columns.stream().map(RowBinaryDecoder::toColumnDescriptor).toList();
+  }
+
+  private static ColumnDescriptor toColumnDescriptor(final ClickHouseColumn column) {
+    return new ColumnDescriptor(column.getColumnName(), column.getOriginalTypeName());
+  }
+
+  private static RowBinaryReader emitNextRow(
+      final RowBinaryReader reader, final SynchronousSink<DecodedRow> sink) {
     if (reader.hasNext()) {
       sink.next(new DecodedRow(reader.nextRowValues()));
     } else {
@@ -176,9 +226,8 @@ public final class RowBinaryDecoder {
    * (see {@code reactor.core.publisher.FluxGenerate.GenerateSubscription#cleanup}, which calls the
    * supplied {@code Consumer<S>} on every one of those paths, not just normal completion). Without
    * this, {@link #decode}/{@link #decodeRows}' 2-arg {@code Flux.generate} overload used before
-   * this method existed silently discarded the reader state on cancellation instead — {@link
-   * ListDecodingRowBinaryReader} (inherited from client-v2's {@code AbstractBinaryFormatReader})
-   * already implements {@code close()} as {@code input.close()}, i.e. {@link
+   * this method existed silently discarded the reader state on cancellation instead — every {@link
+   * RowBinaryReader} implementation's {@code close()} ultimately reaches {@link
    * FluxInputStreamBridge#close()}; that path was simply never reached when a caller cancelled
    * mid-stream (e.g. an R2DBC consumer that stops reading rows early) rather than letting the
    * sequence complete or error naturally. Left the connection merely idle rather than explicitly
@@ -190,7 +239,7 @@ public final class RowBinaryDecoder {
    * necessarily been observed as fully received, and hard-cancelling unconditionally in that case
    * would needlessly forfeit the underlying transport's connection-pool reuse.
    */
-  private static void closeReader(final ListDecodingRowBinaryReader reader) {
+  private static void closeReader(final RowBinaryReader reader) {
     try {
       reader.close();
     } catch (final Exception e) {

@@ -40,7 +40,8 @@ import org.jspecify.annotations.Nullable;
  * serves. A {@code null} value (a {@code Nullable(Enum8)} column with no row set) is left as {@code
  * null} rather than the literal string {@code "null"}.
  */
-final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormatReader {
+final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormatReader
+    implements RowBinaryReader {
 
   // Both fixed for the lifetime of this reader once the header is parsed - see columns()/
   // listHints()'s Javadoc for why caching them here, instead of recomputing per row, is safe.
@@ -57,7 +58,7 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
 
   @Override
   protected boolean readRecord(final Object[] values) throws IOException {
-    final List<ClickHouseColumn> columns = columns();
+    final List<ClickHouseColumn> columns = clickHouseColumns();
     if (columns.isEmpty()) {
       return false;
     }
@@ -88,13 +89,29 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
    * decode contract requires. See docs/PERFORMANCE.md's "second-opinion review" section (finding 4)
    * for how this was found.
    */
-  private List<ClickHouseColumn> columns() {
+  private List<ClickHouseColumn> clickHouseColumns() {
     List<ClickHouseColumn> columns = cachedColumns;
     if (columns == null) {
       columns = getSchema().getColumns();
       cachedColumns = columns;
     }
     return columns;
+  }
+
+  /**
+   * This result's column schema, in wire order — {@link RowBinaryReader}'s contract. This reader is
+   * only ever constructed (see {@link RowBinaryDecoder}) once {@link RowBinaryHeader#present()} is
+   * known {@code true}, so {@link #getSchema()} is guaranteed non-null here.
+   */
+  @Override
+  public List<ColumnDescriptor> columns() {
+    return clickHouseColumns().stream()
+        .map(ListDecodingRowBinaryReader::toColumnDescriptor)
+        .toList();
+  }
+
+  private static ColumnDescriptor toColumnDescriptor(final ClickHouseColumn column) {
+    return new ColumnDescriptor(column.getColumnName(), column.getOriginalTypeName());
   }
 
   /**
@@ -172,7 +189,8 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
    * because exactly one dedicated worker thread ever drives this reader (see {@link
    * FluxInputStreamBridge}'s own Javadoc for why).
    */
-  Object[] nextRowValues() {
+  @Override
+  public Object[] nextRowValues() {
     next();
     return currentRecord.clone();
   }

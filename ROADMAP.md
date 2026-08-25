@@ -846,10 +846,30 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
   - **Status: Variant D confirms a real per-row/per-column reader-layer cost at 10k-row scale
     (~21.6% faster, ~79x combined error, cross-checked) — the strongest lead in the ladder.
     `point`'s earlier single-row "win" retracted (sign-flipped on a second trusted `-t8` run, same
-    fate as Variant C). Network-free `RowBinaryReaderTypeMatrixBenchmark` built, awaiting run, to
-    find which type(s) it comes from (2026-08-25).** No production change yet — still "no
-    production change justified yet" per the plan's own allowed outcome, pending network-free
-    confirmation, profiler, and a maintenance-cost estimate before any decoder is even a candidate.
+    fate as Variant C).** Production decision (2026-08-25): rather than continue benchmarking
+    (network-free type matrix, profiler, maintenance-cost estimate), `stream10k`'s decisive,
+    cross-validated result was taken as sufficient grounds to implement a real native
+    `RowBinaryWithNamesAndTypes` decoder directly in `core`, scoped to a safe, incremental rollout:
+    `NativeRowBinaryReader` decodes ClickHouse's scalar types natively (`Int8`-`Int64`/`UInt8`-`UInt64`,
+    `Float32`/`64`, `Bool`, `String`, `FixedString(n)`, `Decimal(P,S)`/`32`/`64`/`128`/`256`, and
+    `Nullable(T)` wrapping any of those — semantics cross-checked byte-for-byte against client-v2's
+    own `BinaryStreamReader`), while `RowBinaryDecoder` parses the `RowBinaryWithNamesAndTypes`
+    header exactly once and falls back to the existing, unmodified `ListDecodingRowBinaryReader`
+    (fed a `SequenceInputStream` replaying the already-consumed header bytes) for any result
+    containing even one column outside that native set — `Int128`/`UInt128`/`Int256`/`UInt256`,
+    `Date*`/`DateTime*`/`Time*`, `Interval*`, `IPv4`/`IPv6`, `UUID`, `Enum8`/`16`, `Array`, `Map`,
+    `Tuple`, `Nested`, `LowCardinality`, `JSON`, `Variant`/`Dynamic`, geo types,
+    `AggregateFunction`/`SimpleAggregateFunction`, `QBit`, `BFloat16` all still decode exactly as
+    before, byte-for-byte identical to today's production path. `EmptyRowBinaryReader` handles the
+    DDL/no-header-at-all case the same way it always has. Implemented test-first (`RowBinaryWireFormat`,
+    `ColumnDecoder`/`ScalarColumnDecoder`/`DecimalColumnDecoder`/`FixedStringColumnDecoder`,
+    `NativeColumnTypeResolver`, `RowBinaryHeader`, `NativeRowBinaryReader`, `EmptyRowBinaryReader` each
+    with dedicated unit tests, plus `RowBinaryDecoderTest` extended with native-path,
+    mixed-native-plus-unsupported fallback, `Nullable`, and no-header end-to-end cases). Not yet
+    compiled/run in this sandbox (JDK 11 only, no network) — pending the user's own
+    `./gradlew spotlessApply spotlessCheck clean build`, which also re-runs
+    `RealWorldTableAgainstRealClickHouseTest` as the regression net for every type not natively
+    covered.
     `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted

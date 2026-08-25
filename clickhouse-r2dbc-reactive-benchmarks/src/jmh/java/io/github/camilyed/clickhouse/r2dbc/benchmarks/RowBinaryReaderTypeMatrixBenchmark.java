@@ -83,8 +83,8 @@ public class RowBinaryReaderTypeMatrixBenchmark {
   /**
    * Starts the shared container, seeds {@link PointQueryTable}, captures each shape's exact wire
    * bytes once over a real connection, verifies both readers decode identical values for every
-   * shape (see class Javadoc), then disposes that connection — no network use inside any {@code
-   * @Benchmark} method below.
+   * shape (see class Javadoc), then disposes that connection — no network use inside any
+   * {@code @Benchmark} method below.
    */
   @Setup(Level.Trial)
   public void setUpTrial() throws IOException {
@@ -306,8 +306,8 @@ public class RowBinaryReaderTypeMatrixBenchmark {
     }
   }
 
-  private static RowBinaryWithNamesAndTypesFormatReader openClientV2Reader(
-      final InputStream input) throws IOException {
+  private static RowBinaryWithNamesAndTypesFormatReader openClientV2Reader(final InputStream input)
+      throws IOException {
     return new RowBinaryWithNamesAndTypesFormatReader(
         input,
         new QuerySettings().setUseTimeZone("UTC"),

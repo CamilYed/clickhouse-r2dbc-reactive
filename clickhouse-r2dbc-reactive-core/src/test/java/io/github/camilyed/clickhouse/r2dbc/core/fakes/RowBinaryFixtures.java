@@ -75,7 +75,13 @@ public final class RowBinaryFixtures {
         new String[] {"status"}, new String[] {"Enum8('a' = 1, 'b' = 2)"}, new byte[] {0x02});
   }
 
-  private static byte[] rowBinaryWithNamesAndTypes(
+  /**
+   * General-purpose builder for any column/type/row-bytes combination — used directly by tests that
+   * need a wire fixture this class has no bespoke named method for yet (e.g. native scalar types,
+   * {@code Nullable} wrapping, or a mix of supported/unsupported types to exercise a fallback
+   * path), instead of growing a bespoke method per case.
+   */
+  public static byte[] rowBinaryWithNamesAndTypes(
       final String[] columnNames, final String[] columnTypes, final byte[] rowBytes) {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     try {
@@ -91,6 +97,18 @@ public final class RowBinaryFixtures {
       throw new UncheckedIOException(e);
     }
     return out.toByteArray();
+  }
+
+  /**
+   * Same header as {@link #rowBinaryWithNamesAndTypes(String[], String[], byte[])}, multiple rows.
+   */
+  public static byte[] rowBinaryWithNamesAndTypes(
+      final String[] columnNames, final String[] columnTypes, final byte[]... rows) {
+    final ByteArrayOutputStream allRows = new ByteArrayOutputStream();
+    for (final byte[] row : rows) {
+      allRows.writeBytes(row);
+    }
+    return rowBinaryWithNamesAndTypes(columnNames, columnTypes, allRows.toByteArray());
   }
 
   private static void writeString(final ByteArrayOutputStream out, final String value)
