@@ -68,7 +68,7 @@ source, not that earlier, since-superseded shape.
 | --- | --- | --- |
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
 | **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Settled — real payoff too small to matter.** Ownership proven correct (leak-clean real-HTTP run); real-HTTP timing inconclusive (≤1.3%, sign-flipping); network-free microbenchmark isolated the true cost: 15-35ns/call at production response sizes, negligible against a ~600-1150µs round trip. Not the source of Variant A's deficit — not adopted. See below. |
-| **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | Not started |
+| **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | Not started — now the only remaining hypothesis (GC, the copy, and construction cost all ruled out; see task #309 below) |
 | **D — benchmark-local `BinaryInput` adapter (optional, only after A/B/C)** | Minimal `read()`/`readFully(...)` adapter removing the blocking-`InputStream` boundary for only the types this benchmark needs | Not started |
 
 ## Variant A — built, trusted 3-fork runs done at both concurrency levels
@@ -409,14 +409,72 @@ direction between `SELECT 1` and `point`, nowhere near the ~4-5% deficit it was 
 That verdict retracts this recommendation's premise, not just its conclusion — the same discipline
 applied to the earlier tail-latency finding.
 
-**Updated recommendation:** build **Variant C** next (transport-acquisition-before-decoder-admission
-prototype) — the hypothesis this section previously deprioritized, now the better-supported one by
-elimination: GC is ruled out (earlier `-prof gc` run), and the copy is now ruled out (Variant B,
-above). Before committing to Variant C specifically, it's also worth weighing task #309 (profiling
-`ClickHouseStatement`/`ClickHouseQuery` construction) as a cheaper, more targeted check — a small
-fixed per-request object-construction cost is at least as plausible a source of a flat ~4-5% mean
-deficit on tiny queries as an admission-gate ordering effect, and is far quicker to isolate than
-building Variant C's prototype.
+**Updated recommendation, superseded again (2026-08-25):** this section then recommended weighing
+task #309 (profiling `ClickHouseStatement`/`ClickHouseQuery` construction) before committing to
+Variant C, as a cheaper, more targeted check. Task #309 is now done (see below) and also rejected —
+construction cost is 20-150x too small to explain the deficit. **Variant C is now the only remaining
+hypothesis from this investigation's original candidate list — build it next.**
+
+## Task #309 — query/statement construction overhead: rejected, 20-150x too small
+
+`QueryConstructionMicrobenchmark`
+(`clickhouse-r2dbc-reactive-benchmarks/src/jmh/java/.../QueryConstructionMicrobenchmark.java`),
+single-fork sanity run (2026-08-25, `-Pjmh.forks=1`, `SampleTime`, ~3m20s) — no leak-detection wiring
+needed, no `ByteBuf` involved. Measures exactly what `LatencyPathVariantABenchmark`'s
+`thisDriverSelect1`/`thisDriverPoint` methods build per call — `ClickHouseQuery.of(sql)` (+
+`.withParameters(...)` for the point shape) — plus, separately, `ClickHouseQuery.parameterNamesIn`,
+the SQL placeholder scan a real `ClickHouseStatement` performs once at construction.
+
+**Scoping note, found while writing this section:** `LatencyPathVariantABenchmark`'s benchmark
+methods call `ourTransport.query(...)`/`ClickHouseQuery.of(...)` directly, bypassing
+`ClickHouseStatement` entirely (see that class's `thisDriverSelect1`/`thisDriverPoint` source) — so
+`parameterNamesInPointSql` below is not actually on Variant A's measured hot path. Included anyway,
+for completeness, since it's real cost a caller going through the public R2DBC `Statement` API (the
+way this driver is actually used) does pay once per statement.
+
+| Benchmark | Mean | p50 | p99 | p99.9 | p100 |
+| --- | --- | --- | --- | --- | --- |
+| `uuidGeneration` (1 thread) | 121.8 ± 7.1 ns | 84 ns | 167 ns | 333 ns | 462,336 ns |
+| `uuidGenerationContended` (`@Threads(8)`) | 2207.2 ± 18.1 ns | 500 ns | 71,168 ns | 203,008 ns | 1,099,776 ns |
+| `parameterNamesInPointSql` (not on Variant A's hot path — see above) | 137.1 ± 3.2 ns | 125 ns | 250 ns | 333 ns | 437,760 ns |
+| `queryOfSelect1` | 157.9 ± 8.7 ns | 125 ns | 209 ns | 375 ns | 420,864 ns |
+| `queryOfPointWithParameters` | 1522.8 ± 50.1 ns | 125 ns | 120,448 ns | 132,864 ns | 453,120 ns |
+
+**Verdict: rejected, decisively, by 1-2 orders of magnitude.** Against the trusted 3-fork deficits
+recorded above (Variant A section):
+
+| Scenario | Concurrency | Deficit to explain | Measured construction cost | Ratio |
+| --- | --- | --- | --- | --- |
+| SELECT 1 | 1 | 24.3µs (4.2%) | 0.158µs (`queryOfSelect1`) | ~150x too small |
+| SELECT 1 | 8 | 70.4µs (4.9%) | ~2.24µs (`queryOfSelect1` + contended-UUID delta) | ~31x too small |
+| point | 1 | 30.3µs (2.6%) | 1.523µs (`queryOfPointWithParameters`) | ~20x too small |
+| point | 8 | 102.9µs (4.9%) | ~3.6µs (`queryOfPointWithParameters` + contended-UUID delta) | ~29x too small |
+
+Even the most generous framing — crediting the *entire* mean UUID-generation slowdown observed under
+8-way contention (121.8ns → 2207.2ns, ~18x, from the JDK's single-lock-guarded shared `SecureRandom`)
+as extra cost paid only at `-t8` — leaves construction 29-31x too small to explain the `-t8` deficit,
+and the gap is wider still at `-t1` where there's no contention. Same shape as Variant B's verdict: a
+real, measurable cost, orders of magnitude too small to be the deficit's source.
+
+**Secondary finding, flagged not chased:** `queryOfPointWithParameters`'s tail is far fatter than
+`queryOfSelect1`'s at the same percentile — p99 120.4µs vs. `queryOfSelect1`'s 209ns (`queryOfSelect1`
+doesn't reach 100µs-scale until p99.99). Single-fork signal only, same Blackhole-mode caveat the JMH
+banner warns about — but the shape is consistent with `withParameters(...)`'s extra allocations
+(`LinkedHashMap`, per-value encoding, `Map.copyOf`) triggering minor GC roughly 100x more often than
+the allocation-free `SELECT 1` path. A tail-latency (p99+) question, not the flat-mean-deficit
+question this task exists to answer — worth a note for anyone chasing P99 later, out of scope here.
+
+**`uuidGenerationContended` also corroborates against a contention-driven explanation more broadly:**
+if the shared-lock contention behind `UUID.randomUUID()` were a meaningful driver of Variant A's
+deficit, the deficit should widen materially between `-t1` and `-t8` beyond what eight-way
+pool/connection contention (already known to be present, see Variant A's own sample-count note above)
+would produce alone. It does widen (point: 2.6%→4.9%; SELECT 1: 4.2%→4.9%), but by single-digit-µs
+amounts fully explainable by that already-known pool contention — not by the tens-of-µs a real
+UUID-lock bottleneck would need to contribute at 8x load.
+
+**Task #309 done. Elimination list complete:** GC ruled out (`-prof gc`), the `asByteArray()` copy
+ruled out (Variant B), and fixed query/statement construction cost ruled out (this task). **Variant C
+is the only remaining hypothesis from this investigation's original candidate list.**
 
 ## Hypothesis-ranking decision table
 
