@@ -117,7 +117,7 @@ confirms the class runs clean first), add `-Pjmh.warmupIterations=5 -Pjmh.iterat
 warnings. Full result table above. Next: Variant B/C, then the hypothesis-ranking table — the
 tail-latency finding flagged above is the most concrete open thread Variant A surfaced.
 
-## Variant B — built; single-fork sanity run shows no meaningful difference (untrusted)
+## Variant B — trusted 3-fork `-t1` run confirms: copy avoidance does not explain the deficit
 
 `LatencyPathVariantBBenchmark` and `ZeroCopyByteBufInputStreamBridge`
 (`clickhouse-r2dbc-reactive-benchmarks/src/jmh/.../LatencyPathVariantBBenchmark.java` and
@@ -148,10 +148,36 @@ to act on" per this project's own standard — the same standard that already ca
 this ladder produced), but this tempers the Variant A recommendation's confidence rather than
 confirming it.
 
+**Trusted 3-fork `-t1` run (2026-08-25), leak-clean (user confirmed no leak lines) — confirms the
+single-fork signal, and settles the direction**: `copyPathPoint` 1140.9 ± 1.95 µs vs.
+`zeroCopyPathPoint` 1155.5 ± 2.44 µs — zero-copy is **~1.3% slower**, a difference clearly outside
+both sides' error bars this time (combined error ~4.4 µs vs. a 14.6 µs gap). `copyPathSelect1` 592.4
+± 1.43 µs vs. `zeroCopyPathSelect1` 586.8 ± 1.27 µs — zero-copy is ~0.9% faster, also outside error
+bars but tiny and in the *opposite* direction from point.
+
+Two scenarios, both statistically real at 3 forks, pointing opposite ways, both under ~1.5% — this
+is not the signature of a ~4-5% fixed-overhead source being removed. **The `asByteArray()` copy does
+not explain Variant A's deficit.** Worth noting for calibration: this run's own absolute numbers
+(point ~1141µs, SELECT1 ~592µs) are meaningfully lower than the single-fork run's (~1358µs/~815µs)
+for both `copyPath*` and `zeroCopyPath*` alike — a reminder that comparing *across* separate JMH
+invocations is exactly the trap this class's self-contained-pair design exists to avoid; only the
+within-run `copyPath*`-vs-`zeroCopyPath*` comparison above is meaningful.
+
+**Verdict on the copy-avoidance hypothesis: not supported.** Two independent runs (1-fork sanity,
+3-fork trusted `-t1`) agree the effect is at most ~1%, inconsistent in direction, and doesn't survive
+outside error bars in the single-fork pass at all. This retracts the Variant A recommendation's
+premise, the same way the earlier tail-latency finding was retracted — evidence changed the
+conclusion, so the doc says so rather than defending the original guess. The `-t8` trusted run is
+still worth collecting for completeness (matches Variant A's own two-concurrency-level protocol,
+and would catch anything only visible under matched-pool contention), but shouldn't be expected to
+reverse this.
+
 | Variant | Scenario | Concurrency | copy path mean (µs) | zero-copy mean (µs) | copy path p99 (µs) | zero-copy p99 (µs) | zero-copy vs. copy |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | B | SELECT 1 | 1 (single-fork, untrusted) | 815.2 ± 3.3 | 813.0 ± 3.4 | 1472.5 | 1454.1 | ~0.3% faster (noise-level) |
 | B | point | 1 (single-fork, untrusted) | 1357.7 ± 5.3 | 1351.9 ± 4.8 | 2038.2 | 2009.1 | ~0.4% faster (noise-level) |
+| B | SELECT 1 | 1 (**3-fork, trusted**) | 592.4 ± 1.43 | 586.8 ± 1.27 | 801.8 | 778.2 | ~0.9% faster |
+| B | point | 1 (**3-fork, trusted**) | 1140.9 ± 1.95 | 1155.5 ± 2.44 | 1388.8 | 1417.2 | ~1.3% **slower** |
 
 **Design, and three deliberate departures from Variant A worth knowing before reading numbers:**
 
@@ -265,16 +291,23 @@ from ~17% (at `-t 1`) to ~9–12% (at `-t 8`, two runs) but stays positive both 
 (every percentile) is in `build/results/jmh/results.json` on the machine that ran it, not committed
 to git per this project's convention.
 
-**Recommendation for the next step (2026-08-25):** build **Variant B** (avoid the `ByteBuf`→
-`byte[]`→`ByteBuffer` copy) next, not Variant C. The retraction above removes the only evidence that
-pointed at Variant C's admission-gate-ordering hypothesis; what's left — a small, flat, GC-independent
-mean deficit on the two scenarios with the smallest response bodies (`SELECT 1`, `point`), each
-still one HTTP round trip through the exact copy Variant B targets — is a better match for a fixed
-per-chunk/per-request cost than for a queueing effect, which would be expected to show up mainly
-under contention and at the tail, not as a flat mean offset already present at `-t 1`. Variant C
-stays next after B, not dropped — its target (transport acquisition happening inside the
-already-admission-gated callable) is real and verified against source regardless of this benchmark's
-numbers — just not the best-supported next experiment right now.
+**Recommendation for the next step, superseded (2026-08-25):** this section originally recommended
+building Variant B (avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy) over Variant C, reasoning that a
+flat, GC-independent mean deficit on the smallest-response scenarios was a better match for a fixed
+per-request copy cost than for a queueing effect. Variant B is now built and run (single-fork +
+3-fork trusted `-t1`, see above): the copy-avoidance effect measured out at ≤1.3%, inconsistent in
+direction between `SELECT 1` and `point`, nowhere near the ~4-5% deficit it was meant to explain.
+That verdict retracts this recommendation's premise, not just its conclusion — the same discipline
+applied to the earlier tail-latency finding.
+
+**Updated recommendation:** build **Variant C** next (transport-acquisition-before-decoder-admission
+prototype) — the hypothesis this section previously deprioritized, now the better-supported one by
+elimination: GC is ruled out (earlier `-prof gc` run), and the copy is now ruled out (Variant B,
+above). Before committing to Variant C specifically, it's also worth weighing task #309 (profiling
+`ClickHouseStatement`/`ClickHouseQuery` construction) as a cheaper, more targeted check — a small
+fixed per-request object-construction cost is at least as plausible a source of a flat ~4-5% mean
+deficit on tiny queries as an admission-gate ordering effect, and is far quicker to isolate than
+building Variant C's prototype.
 
 ## Hypothesis-ranking decision table
 
