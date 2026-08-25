@@ -131,19 +131,30 @@ result to build a decision on.
 
 | Variant | Scenario | Concurrency | `thisDriver` mean (µs) | client-v2 mean (µs) | `thisDriver` p99 (µs) | client-v2 p99 (µs) | thisDriver vs. client-v2 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| A | SELECT 1 | 1 (single-fork) | 635.2 ± 2.2 | 609.6 ± 3.9 | 887.8 | 859.4 | ~4.2% slower |
+| A | SELECT 1 | 1 (single-fork, untrusted) | 635.2 ± 2.2 | 609.6 ± 3.9 | 887.8 | 859.4 | ~4.2% slower |
+| A | SELECT 1 | 1 (**3-fork, trusted**) | 607.1 ± 0.9 | 582.8 ± 0.8 | 843.8 | 794.6 | ~4.2% slower |
 | A | SELECT 1 | 8 | — | — | — | — | — |
-| A | point | 1 (single-fork) | 1239.2 ± 4.9 | 1162.8 ± 3.9 | 1804.3 | 1800.7 | ~6.6% slower |
+| A | point | 1 (single-fork, untrusted) | 1239.2 ± 4.9 | 1162.8 ± 3.9 | 1804.3 | 1800.7 | ~6.6% slower |
+| A | point | 1 (**3-fork, trusted**) | 1173.6 ± 2.1 | 1143.3 ± 1.5 | 1462.3 | 1447.9 | ~2.6% slower |
 | A | point | 8 | — | — | — | — | — |
-| A | stream 10k | 1 (single-fork) | 4227.3 ± 27.8 | 4441.4 ± 31.1 | 5595.5 | 6209.4 | ~4.8% **faster** |
+| A | stream 10k | 1 (single-fork, untrusted) | 4227.3 ± 27.8 | 4441.4 ± 31.1 | 5595.5 | 6209.4 | ~4.8% faster |
+| A | stream 10k | 1 (**3-fork, trusted**) | 4213.9 ± 15.7 | 5080.5 ± 25.2 | 5595.1 | 7651.3 | ~17.1% **faster** |
 | A | stream 10k | 8 | — | — | — | — | — |
 
+Concurrency=8 rows still pending — the `-Pjmh.threads=8 -Pjmh.forks=3` run's output hasn't come back
+yet (the pasted 2026-08-25 run was `-Pjmh.threads=1 -Pjmh.forks=3` only, ~13m47s: sample counts
+~76–154k are roughly 3x the single-fork sanity run's ~24–49k, consistent with 3 forks at 1 thread,
+not 8 — an 8-thread run against an 8-connection pool would be expected to move sample counts by much
+more than 3x if it actually achieved 8-way concurrency).
+
 Directionally consistent with the mega sweep's headline ("Protocol floor ... essentially tied to
-~8% slower", "Full table scan ... 11–12% lower latency") even at this small a scale and single fork
-— not a new finding on its own, a sanity check that this class reproduces the known shape before
-trusting it for the harder A/B/C/D comparison. Full JMH output (including every percentile) is in
-`build/results/jmh/results.json` on the machine that ran it, not committed to git per this project's
-convention.
+~8% slower", "Full table scan ... 11–12% lower latency"), and the trusted 3-fork numbers sharpen the
+picture: `SELECT 1` and `point` sit at a small, stable ~2–4% deficit (tighter error bars than the
+single-fork run, not a different direction), while `stream 10k`'s advantage is larger than the
+single-fork run suggested — 17.1% faster mean, 27% faster p99 — and larger than the mega sweep's
+10k-row tier (~11–12%), worth noting once B/C/D narrow down why. Full JMH output (every percentile)
+is in `build/results/jmh/results.json` on the machine that ran it, not committed to git per this
+project's convention.
 
 ## Hypothesis-ranking decision table
 
