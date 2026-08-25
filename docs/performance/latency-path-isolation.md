@@ -179,6 +179,42 @@ reverse this.
 | B | SELECT 1 | 1 (**3-fork, trusted**) | 592.4 ± 1.43 | 586.8 ± 1.27 | 801.8 | 778.2 | ~0.9% faster |
 | B | point | 1 (**3-fork, trusted**) | 1140.9 ± 1.95 | 1155.5 ± 2.44 | 1388.8 | 1417.2 | ~1.3% **slower** |
 
+### Network-free follow-up: is the ≤1.3% real, or this machine's noise floor?
+
+Fair question raised mid-investigation: both runs above were on the same MacBook — is "no meaningful
+difference" actually "there's a real effect, buried under this machine's Docker Desktop/network noise
+floor"? And would CI look different? Reasoning it through: CI isn't necessarily cleaner — it trades
+Mac Docker Desktop's virtualization overhead for cloud multi-tenancy jitter, a different noise source,
+not a quieter one. The mean-level round trip here is dominated by hundreds of µs of
+network/HTTP/Docker cost; the copy in question is a `memcpy` of tens to low hundreds of bytes, which
+should cost nanoseconds. Rerunning the same network-bound benchmark on a different machine doesn't
+answer whether the effect is real — it just samples a different noise floor.
+
+`ZeroCopyByteBufInputStreamBridgeMicrobenchmark`
+(`clickhouse-r2dbc-reactive-benchmarks/src/jmh/.../ZeroCopyByteBufInputStreamBridgeMicrobenchmark.java`)
+removes the noise floor entirely instead: no container, no HTTP, no client-v2 reader, no scheduler
+hand-off — just the `asByteArray()`-equivalent copy step in isolation, the same way
+`FluxInputStreamBridgeMicrobenchmark` isolated that bridge's own queue/coalescing cost from network
+wait and found it decisively negligible (~40-50ns/chunk, ~200x smaller than the production per-chunk
+figure). `copyPath`/`zeroCopyPath` each build a fresh `ByteBuf` per invocation (allocation cost
+common to both, cancels out of the comparison) and sweep `responseBytes` from 64 bytes (below real
+`SELECT 1`/point response sizes) up through 64 KB.
+
+**How to run** (leak-detection first, then the usual sanity/3-fork sequence):
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=ZeroCopyByteBufInputStreamBridgeMicrobenchmark \
+  -Pjmh.jvmArgsAppend=-Dio.netty.leakDetection.level=paranoid,-Dio.netty.leakDetection.targetRecords=25,-Dio.netty.customResourceLeakDetector=io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=ZeroCopyByteBufInputStreamBridgeMicrobenchmark -Pjmh.forks=3
+```
+
+Not yet run — built following the user's choice ("zbuduj benchmark bez sieci") to settle the
+copy-cost question independent of which machine runs it, rather than rerunning the network-bound
+benchmark on CI.
+
 **Design, and three deliberate departures from Variant A worth knowing before reading numbers:**
 
 - **Self-contained A/B pair, not a cross-run comparison.** Both `copyPath*` and `zeroCopyPath*`
