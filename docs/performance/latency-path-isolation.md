@@ -143,27 +143,57 @@ the `-t 1` 3-fork run's, not the ~8x a fully unblocked 8-way fan-out would give 
 both sides converging on the shared 8-connection pool as the actual bottleneck once concurrency
 matches pool size, exactly what "matched-pool" concurrency is supposed to show.
 
-**Notable tail-latency finding at `-t 8`, not yet investigated — flag for the hypothesis-ranking
-table:** `thisDriver`'s p100 (max) is dramatically worse than client-v2's at full pool saturation,
-on both scenarios that showed it — `point` 104,988µs vs 38,207µs (~2.7x), `stream 10k` 126,484µs vs
-16,450µs (~7.7x) — even though `stream 10k`'s p99 and mean are competitive or better. Mean/p99 alone
-would have hidden this; only the max column surfaces it. Plausible candidate explanations, not yet
-distinguished: (a) the `RowDecodingScheduler` admission gate queueing a request behind a slow
-neighbor once all `POOL_SIZE` permits are held (the exact "decoder scheduler doubles as transport
-admission control" mechanism Variant C targets), (b) GC pause outlier (no `-prof gc` run yet), (c)
-JIT/Blackhole/JVM-warmup artifact per JMH's own printed caveat above. Needs a profiler run
-(`-Pjmh.profilers=gc`, maybe `-lprof` for lock/stack profiling) and a negative-control comparison
-(e.g. does `PublicApiMatchedPoolThroughputBenchmark`'s existing matched-pool data show the same
-max-latency asymmetry, or is this specific to this class/scenario?) before attributing it to any one
-cause — exactly the kind of thing this project's own JMH banner above warns against assuming.
+**Tail-latency "finding" above, retracted (2026-08-25) — did not reproduce.** A second, independent
+3-fork `-t 8` run (`-Pjmh.profilers=gc`, ~14m04s) gives p100 numbers that don't just differ in
+magnitude but **flip which driver has the worse tail**: `point` p100 45,613µs (`thisDriver`) vs
+41,877µs (`clientV2`) — now only ~9% apart, not 2.7x — and `stream 10k` p100 17,269µs (`thisDriver`,
+now the *better* one) vs 56,033µs (`clientV2`, now the *worse* one) — a complete reversal from the
+first run's 126,484µs vs 16,450µs. p99 for `stream 10k` flips too (run 1: `thisDriver` 3.2% worse;
+run 2: `thisDriver` 8.4% better). This is exactly the "don't assume the numbers tell you what you
+want them to tell" trap JMH's own banner warns about: p99.9/p100 rest on very few samples out of
+hundreds of thousands, and are far noisier run-to-run than the mean — the first run's asymmetry was
+most likely ordinary tail noise (a slow JIT/GC/scheduler moment landing on one side that run), not a
+reproducible architectural effect. Retracted as a lead; not pursuing it further without a
+purpose-built low-noise percentile methodology (e.g. this project's own merged-HdrHistogram approach
+from Phase 11 PR4) if it resurfaces.
+
+**GC ruled out for the stable mean-level gap.** The `-prof gc` run confirms the already-established
+finding — `thisDriver` allocates far less per op (`point`: 18.4 KB vs 89.6 KB; `SELECT 1`: 15.8 KB
+vs 87.4 KB; `stream 10k`: 2.53 MB vs 4.58 MB) — but GC *time* is comparable or, for `point`, actually
+higher for `thisDriver` (416ms vs 272ms total across 9 iterations) despite the much lower allocation
+rate. Spread across ~330k ops that's roughly +1.3µs/op of extra GC time at most, far smaller than the
+observed ~90µs mean gap — GC is not the explanation for `point`/`SELECT 1`'s small, stable mean
+deficit.
+
+**What did reproduce, consistently, across both independent `-t 8` runs (this is the real signal):**
+`SELECT 1` and `point` sit at a stable ~4–5% mean deficit both times (run 1: 4.9%/4.9%; run 2:
+4.9%/4.0%) — flat, not growing with the profiler attached, and not explained by GC. `stream 10k`'s
+mean advantage is consistently positive both times (run 1: 9.3% faster; run 2: 12.3% faster) — same
+direction, some magnitude variance. A flat, load-independent-looking small deficit on the two
+fast/small-response scenarios is a different shape than a queueing/admission-ordering effect would
+produce (which should show up more at the tail and grow with contention, not as a stable mean
+offset) — this points more toward **fixed per-request overhead somewhere in the pipeline** (a
+per-chunk copy, or fixed statement/query construction cost) than toward the admission-gate-ordering
+hypothesis Variant C specifically targets.
 
 Directionally consistent with the mega sweep's headline ("Protocol floor ... essentially tied to
 ~8% slower", "Full table scan ... 11–12% lower latency") at concurrency=1; at concurrency=8 the
-`SELECT 1`/`point` deficit holds steady at ~5% (not worsening much under load), and `stream 10k`'s
-mean advantage narrows from 17.1% (at `-t 1`) to 9.3% (at `-t 8`) while its p99 actually flips to
-~3.2% worse — worth folding into the hypothesis-ranking table once B/C are built, alongside the
-p100 finding above. Full JMH output (every percentile) is in `build/results/jmh/results.json` on the
-machine that ran it, not committed to git per this project's convention.
+`SELECT 1`/`point` deficit holds steady at ~4–5% (not worsening much under load, and reproduced
+across two independent 3-fork runs — see above), and `stream 10k`'s mean advantage narrows somewhat
+from ~17% (at `-t 1`) to ~9–12% (at `-t 8`, two runs) but stays positive both times. Full JMH output
+(every percentile) is in `build/results/jmh/results.json` on the machine that ran it, not committed
+to git per this project's convention.
+
+**Recommendation for the next step (2026-08-25):** build **Variant B** (avoid the `ByteBuf`→
+`byte[]`→`ByteBuffer` copy) next, not Variant C. The retraction above removes the only evidence that
+pointed at Variant C's admission-gate-ordering hypothesis; what's left — a small, flat, GC-independent
+mean deficit on the two scenarios with the smallest response bodies (`SELECT 1`, `point`), each
+still one HTTP round trip through the exact copy Variant B targets — is a better match for a fixed
+per-chunk/per-request cost than for a queueing effect, which would be expected to show up mainly
+under contention and at the tail, not as a flat mean offset already present at `-t 1`. Variant C
+stays next after B, not dropped — its target (transport acquisition happening inside the
+already-admission-gated callable) is real and verified against source regardless of this benchmark's
+numbers — just not the best-supported next experiment right now.
 
 ## Hypothesis-ranking decision table
 
