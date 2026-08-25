@@ -33,21 +33,22 @@ import reactor.core.scheduler.Scheduler;
  * decodes a result — every {@code decode}/{@code decodeRows} overload here defaults to {@link
  * RowBinaryDecoderMode#CLICKHOUSE} when not given one explicitly, this driver's long-standing,
  * zero-added-overhead default: {@link ListDecodingRowBinaryReader} constructed directly on the
- * (decompressed) body, the header parsed exactly once, by client-v2 itself, exactly as before {@link
- * NativeRowBinaryReader} existed. {@link RowBinaryDecoderMode#NATIVE} instead parses the {@code
- * RowBinaryWithNamesAndTypes} header itself first (see {@link RowBinaryHeader}) and resolves every
- * column via {@link NativeColumnTypeResolver} before choosing which reader decodes the rows: {@link
- * NativeRowBinaryReader} when every column resolves natively, {@link EmptyRowBinaryReader} when the
- * response never sent a header at all (e.g. a DDL statement), or — when at least one column falls
- * outside {@link NativeColumnTypeResolver}'s supported set — {@link ListDecodingRowBinaryReader}, fed
- * a {@link SequenceInputStream} replaying the already-consumed header bytes ({@link
- * RowBinaryHeader#rawBytes()}) followed by the rest of the body, so it re-parses the header itself
- * exactly as it always has. This fallback path is therefore byte-for-byte identical in behavior to
- * {@link RowBinaryDecoderMode#CLICKHOUSE}; the header replay is the only overhead it pays for having
- * been peeked at first. {@link ListDecodingRowBinaryReader} decodes {@code Array}/{@code Nested}
- * columns as plain {@code List}s instead of client-v2's {@code .internal} {@code ArrayValue} — see
- * that class's Javadoc for why this is safe and narrowly scoped. Every other column type not
- * natively covered is unaffected in either mode, decoding exactly as client-v2 always has.
+ * (decompressed) body, the header parsed exactly once, by client-v2 itself, exactly as before
+ * {@link NativeRowBinaryReader} existed. {@link RowBinaryDecoderMode#NATIVE} instead parses the
+ * {@code RowBinaryWithNamesAndTypes} header itself first (see {@link RowBinaryHeader}) and resolves
+ * every column via {@link NativeColumnTypeResolver} before choosing which reader decodes the rows:
+ * {@link NativeRowBinaryReader} when every column resolves natively, {@link EmptyRowBinaryReader}
+ * when the response never sent a header at all (e.g. a DDL statement), or — when at least one
+ * column falls outside {@link NativeColumnTypeResolver}'s supported set — {@link
+ * ListDecodingRowBinaryReader}, fed a {@link SequenceInputStream} replaying the already-consumed
+ * header bytes ({@link RowBinaryHeader#rawBytes()}) followed by the rest of the body, so it
+ * re-parses the header itself exactly as it always has. This fallback path is therefore
+ * byte-for-byte identical in behavior to {@link RowBinaryDecoderMode#CLICKHOUSE}; the header replay
+ * is the only overhead it pays for having been peeked at first. {@link ListDecodingRowBinaryReader}
+ * decodes {@code Array}/{@code Nested} columns as plain {@code List}s instead of client-v2's {@code
+ * .internal} {@code ArrayValue} — see that class's Javadoc for why this is safe and narrowly
+ * scoped. Every other column type not natively covered is unaffected in either mode, decoding
+ * exactly as client-v2 always has.
  *
  * <p>Each row is snapshotted into a compact {@link DecodedRow} the moment it's read, via {@link
  * ListDecodingRowBinaryReader#nextRowValues()}, rather than handed out as client-v2's own {@code
@@ -143,7 +144,8 @@ public final class RowBinaryDecoder {
    * ResponseCompression}'s Javadoc.
    *
    * <p>Decodes via {@link RowBinaryDecoderMode#CLICKHOUSE} — see the {@link #decode(Flux,
-   * RowDecodingScheduler, ResponseCompression, RowBinaryDecoderMode)} overload to choose explicitly.
+   * RowDecodingScheduler, ResponseCompression, RowBinaryDecoderMode)} overload to choose
+   * explicitly.
    */
   public static Mono<DecodedResult> decode(
       final Flux<ByteBuffer> source,
@@ -152,7 +154,10 @@ public final class RowBinaryDecoder {
     return decode(source, scheduler, compression, RowBinaryDecoderMode.CLICKHOUSE);
   }
 
-  /** Same as {@link #decode(Flux, RowDecodingScheduler, ResponseCompression)}, with an explicit {@code mode}. */
+  /**
+   * Same as {@link #decode(Flux, RowDecodingScheduler, ResponseCompression)}, with an explicit
+   * {@code mode}.
+   */
   public static Mono<DecodedResult> decode(
       final Flux<ByteBuffer> source,
       final RowDecodingScheduler scheduler,
@@ -174,8 +179,8 @@ public final class RowBinaryDecoder {
 
   /**
    * Builds the reader for one response body, per {@code mode} — see this class's own Javadoc for
-   * exactly what {@link RowBinaryDecoderMode#CLICKHOUSE} vs {@link RowBinaryDecoderMode#NATIVE} each
-   * do.
+   * exactly what {@link RowBinaryDecoderMode#CLICKHOUSE} vs {@link RowBinaryDecoderMode#NATIVE}
+   * each do.
    */
   private static RowBinaryReader newReader(
       final Flux<ByteBuffer> source,
@@ -192,9 +197,9 @@ public final class RowBinaryDecoder {
   /**
    * {@link RowBinaryDecoderMode#CLICKHOUSE}: construct {@link ListDecodingRowBinaryReader} directly
    * on {@code decompressed} with no pre-parsing of our own — exactly this driver's behavior before
-   * {@link RowBinaryDecoderMode#NATIVE} existed, header included; client-v2's own constructor parses
-   * it, catching an {@link java.io.EOFException} on the very first byte to signal "no header at all"
-   * (a DDL statement) rather than {@code core} checking for that case itself.
+   * {@link RowBinaryDecoderMode#NATIVE} existed, header included; client-v2's own constructor
+   * parses it, catching an {@link java.io.EOFException} on the very first byte to signal "no header
+   * at all" (a DDL statement) rather than {@code core} checking for that case itself.
    */
   private static ListDecodingRowBinaryReader newClickHouseReader(final InputStream decompressed) {
     return new ListDecodingRowBinaryReader(
@@ -202,9 +207,9 @@ public final class RowBinaryDecoder {
   }
 
   /**
-   * {@link RowBinaryDecoderMode#NATIVE}: read the {@code RowBinaryWithNamesAndTypes} header once and
-   * pick which {@link RowBinaryReader} decodes the rows that follow — see this class's own Javadoc
-   * for the native/fallback/empty decision this makes.
+   * {@link RowBinaryDecoderMode#NATIVE}: read the {@code RowBinaryWithNamesAndTypes} header once
+   * and pick which {@link RowBinaryReader} decodes the rows that follow — see this class's own
+   * Javadoc for the native/fallback/empty decision this makes.
    */
   private static RowBinaryReader newNativeOrFallbackReader(final InputStream decompressed) {
     final RowBinaryHeader header;

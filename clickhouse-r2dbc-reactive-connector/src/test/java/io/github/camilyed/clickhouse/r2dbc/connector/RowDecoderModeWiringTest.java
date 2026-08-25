@@ -14,9 +14,9 @@ import reactor.core.publisher.Mono;
 
 /**
  * Proves {@link ClickHouseConnectionFactoryProvider#ROW_DECODER} is actually read and wired end to
- * end — built from {@link ConnectionFactoryOptions} through to a real query running against a {@link
- * ControlledClickHouseServer} — not just accepted and ignored, for both {@code "clickhouse"} (the
- * default) and {@code "native"}.
+ * end — built from {@link ConnectionFactoryOptions} through to a real query running against a
+ * {@link ControlledClickHouseServer} — not just accepted and ignored, for both {@code "clickhouse"}
+ * (the default) and {@code "native"}.
  */
 class RowDecoderModeWiringTest {
 

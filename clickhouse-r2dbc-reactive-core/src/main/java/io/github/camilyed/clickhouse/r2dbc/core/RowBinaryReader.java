@@ -38,8 +38,8 @@ sealed interface RowBinaryReader
    * broadest possible one. {@link NativeRowBinaryReader} and {@link EmptyRowBinaryReader} only ever
    * throw {@link IOException} directly; {@link ListDecodingRowBinaryReader} inherits client-v2's
    * {@code AbstractBinaryFormatReader.close() throws Exception} (it only ever calls {@code
-   * InputStream.close()} internally, so this is not a real widening in practice) and narrows it back
-   * down to {@link IOException} itself — see that class's own {@code close()} override.
+   * InputStream.close()} internally, so this is not a real widening in practice) and narrows it
+   * back down to {@link IOException} itself — see that class's own {@code close()} override.
    */
   void close() throws IOException;
 }

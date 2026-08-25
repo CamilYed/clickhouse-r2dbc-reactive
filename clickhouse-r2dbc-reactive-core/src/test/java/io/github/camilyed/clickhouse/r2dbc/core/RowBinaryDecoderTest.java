@@ -211,7 +211,8 @@ class RowBinaryDecoderTest {
 
     // when / then
     StepVerifier.create(
-            RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE))
+            RowBinaryDecoder.decodeRows(
+                source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE))
         .verifyComplete();
   }
 

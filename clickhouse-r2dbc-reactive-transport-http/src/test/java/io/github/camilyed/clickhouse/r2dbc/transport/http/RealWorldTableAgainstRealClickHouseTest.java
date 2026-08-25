@@ -4,6 +4,7 @@ import static io.github.camilyed.clickhouse.r2dbc.testkit.assertions.ClickHouseR
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
 
+import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.abilities.RealClickHouseQueryAbility;
 import java.net.InetAddress;
@@ -14,7 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.assertj.core.data.Offset;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 /**
  * End-to-end proof against real ClickHouse, organized by the type categories ClickHouse's own docs
@@ -22,6 +24,22 @@ import org.junit.jupiter.api.Test;
  * href="https://clickhouse.com/docs/reference/data-types">clickhouse.com/docs/reference/data-types</a>),
  * decoded through the full pipeline (transport → bridge → {@code RowBinaryDecoder}) — not one row,
  * one table, or one type at a time.
+ *
+ * <p>Every test method is a {@link ParameterizedTest} over {@link RowBinaryDecoderMode} ({@link
+ * EnumSource}), run once per mode via {@link RealClickHouseQueryAbility#queryRows(String,
+ * RowBinaryDecoderMode)} — so this class doesn't just prove every type category decodes correctly
+ * once, it proves the same real-ClickHouse response decodes to the identical result whichever
+ * reader decodes it: {@link RowBinaryDecoderMode#CLICKHOUSE} (client-v2's own reader, this driver's
+ * default) and {@link RowBinaryDecoderMode#NATIVE} (this driver's own reader for the types it
+ * covers, with automatic per-result fallback to the exact same client-v2 path for everything else —
+ * see {@code RowBinaryDecoder}'s Javadoc). {@link RowBinaryDecoderMode#NATIVE} is expected to
+ * exercise both of its own sub-paths across this suite: natively for the scalar/{@code Decimal}
+ * types {@code NativeColumnTypeResolver} resolves, and via its automatic fallback for every
+ * composite/specialized type it doesn't (yet) — {@code Array}/{@code Map}/{@code Tuple}/{@code
+ * Nested}/{@code Enum8}/{@code Enum16}/{@code UUID}/{@code IPv4}/{@code IPv6}/{@code Date}/{@code
+ * DateTime}/{@code JSON}/{@code LowCardinality} at time of writing — this suite doesn't need to
+ * know which path a given type takes to prove correctness either way, that split is {@code
+ * RowBinaryDecoder}'s own internal decision.
  *
  * <p>Extends {@link BaseClickHouseIntegrationTest}: the ClickHouse container is shared across every
  * test class that extends it (started once per JVM), and every table created by a test method here
@@ -110,8 +128,9 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     return transport;
   }
 
-  @Test
-  void shouldDecodeAMultiTypeMultiRowTable() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeAMultiTypeMultiRowTable(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE people ("
@@ -130,7 +149,7 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
             + "(3, 'Carol', 'carol@example.com', 22, 999999.99, '2025-03-20 23:59:59', 1)");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM people ORDER BY id");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM people ORDER BY id", mode);
 
     // then
     assertThat(rows).hasSize(3);
@@ -146,8 +165,9 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     assertThatRow(rows.get(2)).hasValue("id", 3L).hasDecimal("balance", "999999.99");
   }
 
-  @Test
-  void shouldDecodeNumericTypes() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeNumericTypes(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE numeric_types ("
@@ -171,7 +191,7 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
             + "true)");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM numeric_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM numeric_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
@@ -210,8 +230,9 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
    * width tiers had no coverage at all in this repo, positive or negative value, which is the
    * actual gap worth closing before trusting a version bump.
    */
-  @Test
-  void shouldDecodeLargeDecimalTypes() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeLargeDecimalTypes(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE large_decimals ("
@@ -227,7 +248,8 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
             + "-91234567890123456789012345678901234567890123456789012345.12345678901234567890)");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM large_decimals ORDER BY id");
+    final List<Map<String, Object>> rows =
+        queryRows("SELECT * FROM large_decimals ORDER BY id", mode);
 
     // then
     assertThat(rows).hasSize(2);
@@ -243,8 +265,9 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
             "-91234567890123456789012345678901234567890123456789012345.12345678901234567890");
   }
 
-  @Test
-  void shouldDecodeStringTypes() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeStringTypes(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE string_types (id UInt32, string_val String, fixedstring_val FixedString(5)) "
@@ -252,7 +275,7 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     execute("INSERT INTO string_types VALUES (1, 'hello world', 'abcde')");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM string_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM string_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
@@ -261,8 +284,9 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
         .hasValue("fixedstring_val", "abcde");
   }
 
-  @Test
-  void shouldDecodeDateAndTimeTypes() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeDateAndTimeTypes(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE date_time_types ("
@@ -273,7 +297,7 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
             + "(1, '2024-06-15', '2024-06-15', '2024-06-15 12:30:00', '2024-06-15 12:30:00.123')");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM date_time_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM date_time_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
@@ -291,15 +315,16 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
         .hasTypeAt("datetime64_val", ZonedDateTime.class);
   }
 
-  @Test
-  void shouldDecodeNetworkTypes() throws UnknownHostException {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeNetworkTypes(final RowBinaryDecoderMode mode) throws UnknownHostException {
     // given
     execute(
         "CREATE TABLE network_types (id UInt32, ipv4_val IPv4, ipv6_val IPv6) ENGINE = MergeTree ORDER BY id");
     execute("INSERT INTO network_types VALUES (1, '192.168.1.1', '2001:db8::1')");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM network_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM network_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
@@ -308,15 +333,16 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
         .hasInetAddress("ipv6_val", InetAddress.getByName("2001:db8::1"));
   }
 
-  @Test
-  void shouldDecodeSpecializedTypes() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeSpecializedTypes(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE specialized_types (id UInt32, uuid_val UUID) ENGINE = MergeTree ORDER BY id");
     execute("INSERT INTO specialized_types VALUES (1, '61f0c404-5cb3-11e7-907b-a6006ad3dba0')");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM specialized_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM specialized_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
@@ -324,52 +350,56 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
         .hasUuid("uuid_val", UUID.fromString("61f0c404-5cb3-11e7-907b-a6006ad3dba0"));
   }
 
-  @Test
-  void shouldDecodeJsonTypeAsAPlainString() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeJsonTypeAsAPlainString(final RowBinaryDecoderMode mode) {
     // given
     execute("CREATE TABLE json_types (id UInt32, payload_val JSON) ENGINE = MergeTree ORDER BY id");
     execute("INSERT INTO json_types VALUES (1, '{\"a\":\"1\"}')");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM json_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM json_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0)).hasValue("payload_val", "{\"a\":\"1\"}");
   }
 
-  @Test
-  void shouldDecodeMapType() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeMapType(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE map_types (id UInt32, map_val Map(String, Int32)) ENGINE = MergeTree ORDER BY id");
     execute("INSERT INTO map_types VALUES (1, {'a': 1, 'b': 2})");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM map_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM map_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0)).hasMap("map_val", entry("a", 1), entry("b", 2));
   }
 
-  @Test
-  void shouldDecodeTupleType() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeTupleType(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE tuple_types (id UInt32, tuple_val Tuple(String, Int32)) ENGINE = MergeTree ORDER BY id");
     execute("INSERT INTO tuple_types VALUES (1, ('hello', 42))");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM tuple_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM tuple_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0)).hasTuple("tuple_val", "hello", 42);
   }
 
-  @Test
-  void shouldDecodeEnumTypes() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeEnumTypes(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE enum_types (id UInt32, enum8_val Enum8('a' = 1, 'b' = 2), enum16_val Enum16('x' = 1, 'y' = 2)) "
@@ -377,30 +407,32 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     execute("INSERT INTO enum_types VALUES (1, 'a', 'y')");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM enum_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM enum_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0)).hasEnumName("enum8_val", "a").hasEnumName("enum16_val", "y");
   }
 
-  @Test
-  void shouldDecodeArrayType() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeArrayType(final RowBinaryDecoderMode mode) {
     // given
     execute(
         "CREATE TABLE array_types (id UInt32, array_val Array(Int32)) ENGINE = MergeTree ORDER BY id");
     execute("INSERT INTO array_types VALUES (1, [10, 20, 30])");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM array_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM array_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
     assertThatRow(rows.get(0)).hasList("array_val", 10, 20, 30);
   }
 
-  @Test
-  void shouldDecodeNestedType() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeNestedType(final RowBinaryDecoderMode mode) {
     // given - ClickHouse flattens Nested(...) into one Array(...) column per sub-field by default
     // (flatten_nested=1), addressed as "<nested_col>.<sub_field>" in both INSERT and SELECT * -
     // so on the wire this is indistinguishable from two ordinary Array columns, exercising the
@@ -413,7 +445,7 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
             + "(1, ['apple', 'banana'], [3, 5])");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM nested_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM nested_types", mode);
 
     // then
     assertThat(rows).hasSize(1);
@@ -422,8 +454,9 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
         .hasList("items.quantity", 3, 5);
   }
 
-  @Test
-  void shouldDecodeLowCardinalityType() {
+  @ParameterizedTest
+  @EnumSource(RowBinaryDecoderMode.class)
+  void shouldDecodeLowCardinalityType(final RowBinaryDecoderMode mode) {
     // given - confirmed directly against client-v2's own test suite (DataTypeTests, our pinned
     // v0.9.0) rather than assumed: LowCardinality is a "virtual type" there, meaning
     // ClickHouseColumn strips the wrapper and dispatches to the underlying type's reader, the same
@@ -435,7 +468,7 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     execute("INSERT INTO low_cardinality_types VALUES (1, 'electronics')");
 
     // when
-    final List<Map<String, Object>> rows = queryRows("SELECT * FROM low_cardinality_types");
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM low_cardinality_types", mode);
 
     // then
     assertThat(rows).hasSize(1);

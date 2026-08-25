@@ -71,8 +71,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
 
   /**
    * {@code rowDecoderMode} is shared, unchanged, with every {@link ClickHouseConnection} this
-   * factory produces — see {@link ClickHouseConnectionFactoryProvider#ROW_DECODER}'s Javadoc for the
-   * full contract.
+   * factory produces — see {@link ClickHouseConnectionFactoryProvider#ROW_DECODER}'s Javadoc for
+   * the full contract.
    */
   ClickHouseConnectionFactory(
       final ClickHouseHttpTransport transport,
@@ -142,9 +142,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * Javadoc.
    *
    * <p>{@link ClickHouseConnectionFactoryProvider#ROW_DECODER} selects the {@link
-   * RowBinaryDecoderMode} every query run over a produced {@link ClickHouseConnection} decodes
-   * with — defaults to {@link RowBinaryDecoderMode#CLICKHOUSE} when not set; see that option's
-   * Javadoc.
+   * RowBinaryDecoderMode} every query run over a produced {@link ClickHouseConnection} decodes with
+   * — defaults to {@link RowBinaryDecoderMode#CLICKHOUSE} when not set; see that option's Javadoc.
    *
    * <p>There is deliberately no {@code statementTimeout} option here: that needs to apply per
    * statement, not per factory — see {@code ClickHouseConnection.setStatementTimeout}.

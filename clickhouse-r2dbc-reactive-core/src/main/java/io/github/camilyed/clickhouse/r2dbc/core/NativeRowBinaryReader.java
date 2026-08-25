@@ -84,8 +84,8 @@ final class NativeRowBinaryReader implements RowBinaryReader {
   }
 
   /**
-   * Returns {@code null} for a {@code Nullable} column whose wire value is the null marker byte —
-   * a legitimate decoded value, not an absent one, so this method is deliberately {@link Nullable}
+   * Returns {@code null} for a {@code Nullable} column whose wire value is the null marker byte — a
+   * legitimate decoded value, not an absent one, so this method is deliberately {@link Nullable}
    * rather than relying on the package's {@code @NullMarked} default.
    */
   private @Nullable Object decodeOneValue(final ColumnPlan plan) throws IOException {

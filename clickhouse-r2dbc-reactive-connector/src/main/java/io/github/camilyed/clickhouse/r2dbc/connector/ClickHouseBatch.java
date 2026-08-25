@@ -60,8 +60,8 @@ final class ClickHouseBatch implements Batch {
 
   /**
    * {@code rowDecoderMode} decides which {@code RowBinaryReader} decodes every statement this
-   * batch's {@link #execute()} runs — see {@code
-   * ClickHouseConnectionFactoryProvider#ROW_DECODER}'s Javadoc for the full contract.
+   * batch's {@link #execute()} runs — see {@code ClickHouseConnectionFactoryProvider#ROW_DECODER}'s
+   * Javadoc for the full contract.
    */
   ClickHouseBatch(
       final ClickHouseHttpTransport transport,

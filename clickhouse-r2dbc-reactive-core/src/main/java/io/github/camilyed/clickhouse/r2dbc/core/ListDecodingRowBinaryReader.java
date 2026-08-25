@@ -89,14 +89,14 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
    * decode contract requires. See docs/PERFORMANCE.md's "second-opinion review" section (finding 4)
    * for how this was found.
    *
-   * <p>{@link #getSchema()} itself is {@code null} rather than an empty schema for a response with no
-   * {@code RowBinaryWithNamesAndTypes} header at all (a DDL statement) — see {@link
-   * RowBinaryHeader}'s Javadoc. In {@link RowBinaryDecoderMode#NATIVE}, {@link RowBinaryDecoder} only
-   * ever constructs this reader once that case has already been routed to {@link
+   * <p>{@link #getSchema()} itself is {@code null} rather than an empty schema for a response with
+   * no {@code RowBinaryWithNamesAndTypes} header at all (a DDL statement) — see {@link
+   * RowBinaryHeader}'s Javadoc. In {@link RowBinaryDecoderMode#NATIVE}, {@link RowBinaryDecoder}
+   * only ever constructs this reader once that case has already been routed to {@link
    * EmptyRowBinaryReader} instead, but in {@link RowBinaryDecoderMode#CLICKHOUSE} this reader is
-   * constructed directly, with no such pre-check, so the {@code null} case can genuinely reach here —
-   * treated the same way {@link RowBinaryDecoder}'s old {@code columnsOf} helper always did, before
-   * this method existed: an empty column list, not a {@link NullPointerException}.
+   * constructed directly, with no such pre-check, so the {@code null} case can genuinely reach here
+   * — treated the same way {@link RowBinaryDecoder}'s old {@code columnsOf} helper always did,
+   * before this method existed: an empty column list, not a {@link NullPointerException}.
    */
   private List<ClickHouseColumn> clickHouseColumns() {
     List<ClickHouseColumn> columns = cachedColumns;
@@ -206,13 +206,12 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
 
   /**
    * Narrows client-v2's inherited {@code close() throws Exception} ({@code
-   * AbstractBinaryFormatReader.close()}, which only ever closes the underlying {@link
-   * InputStream}) down to {@link IOException} — the specific type {@link RowBinaryReader}'s
-   * contract declares. {@code super.close()} cannot itself throw anything but an {@link
-   * IOException} in practice (it only calls {@code InputStream.close()}), so this translation is
-   * exhaustive, not a guess: an unexpected checked exception from a future client-v2 version would
-   * still surface, wrapped, rather than silently satisfying a narrower contract it doesn't actually
-   * meet.
+   * AbstractBinaryFormatReader.close()}, which only ever closes the underlying {@link InputStream})
+   * down to {@link IOException} — the specific type {@link RowBinaryReader}'s contract declares.
+   * {@code super.close()} cannot itself throw anything but an {@link IOException} in practice (it
+   * only calls {@code InputStream.close()}), so this translation is exhaustive, not a guess: an
+   * unexpected checked exception from a future client-v2 version would still surface, wrapped,
+   * rather than silently satisfying a narrower contract it doesn't actually meet.
    */
   @Override
   public void close() throws IOException {

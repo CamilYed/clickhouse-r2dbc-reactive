@@ -80,12 +80,12 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
    *
    * <p><b>Defaults to {@link RowBinaryDecoderMode#CLICKHOUSE}</b>: every column, of every type,
    * decodes through client-v2's own reader exactly as this driver always has. Set {@code
-   * rowDecoder=native} to opt into {@link RowBinaryDecoderMode#NATIVE} — see that constant's Javadoc
-   * for exactly which types decode natively today and the automatic, per-result fallback for
-   * anything outside that set. Both modes decode every result to identical values and Java types;
-   * only the decode path taken to get there differs. An unrecognized value fails fast with {@link
-   * IllegalArgumentException} at factory-construction time, rather than silently falling back to the
-   * default.
+   * rowDecoder=native} to opt into {@link RowBinaryDecoderMode#NATIVE} — see that constant's
+   * Javadoc for exactly which types decode natively today and the automatic, per-result fallback
+   * for anything outside that set. Both modes decode every result to identical values and Java
+   * types; only the decode path taken to get there differs. An unrecognized value fails fast with
+   * {@link IllegalArgumentException} at factory-construction time, rather than silently falling
+   * back to the default.
    */
   public static final Option<String> ROW_DECODER = Option.valueOf("rowDecoder");
 
