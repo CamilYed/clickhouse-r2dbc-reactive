@@ -534,6 +534,26 @@ caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
 No leak-detection wiring needed (no `ByteBuf` involved beyond what `ZeroCopyByteBufInputStreamBridge`
 already handles and Variant B/C already leak-verified).
 
+**Single-fork sanity, `-t1` (default, no `-Pjmh.threads` passed) (2026-08-25): clean build, no
+exceptions, `MinimalRowBinaryReader` decoded correctly on the first real run.**
+
+| Variant | Scenario | Concurrency | client-v2 reader mean (µs) | minimal reader mean (µs) | client-v2 p99 (µs) | minimal p99 (µs) | minimal vs. client-v2 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| D | SELECT 1 | 1 (single-fork, untrusted) | 580.3 ± 2.15 | 568.2 ± 2.01 | 794.6 | 744.4 | **~2.1% faster** |
+| D | point | 1 (single-fork, untrusted) | 1169.9 ± 4.96 | 1152.7 ± 5.37 | 1714.2 | 1687.4 | **~1.5% faster** |
+
+Both diffs favor `minimalReader` and both exceed combined error (SELECT 1: 12.1µs diff vs. ±4.2µs
+combined error, ~2.9x; point: 17.3µs diff vs. ±10.3µs combined error, ~1.7x) — unlike Variant C's
+single-fork pass, which flip-flopped in *direction* between the two scenarios, this one is at least
+directionally consistent across both. Still single-fork and untrusted per this project's own
+standard — Variant C's own single-fork pass looked just as clean before its trusted rerun reversed
+it, so this is a reason to run the trusted sequence next, not a reason to conclude anything yet.
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=1 -Pjmh.forks=3
+```
+
 ## A/B/C/D result table
 
 **Single-fork, single-warmup-iteration sanity run only (2026-08-25, no `-Pjmh.threads` passed, so
