@@ -236,10 +236,10 @@ public final class RowDecodingScheduler {
      * admission permit, but that thread's {@code finally}-block {@link Semaphore#release()} can
      * wake a <em>different</em>, already-waiting task's {@link Semaphore#acquire()} before that
      * second task's own interrupt has been delivered/observed — {@code Thread.interrupt()} and
-     * {@code Semaphore.release()} on two different threads give no ordering guarantee between
-     * "this thread's interrupt flag is set" and "that thread's acquire() unblocks". Without this
-     * flag, the newly-unblocked task can slip through and run {@code command} after the executor
-     * was already told to shut down. Setting this <em>before</em> delegating to {@code
+     * {@code Semaphore.release()} on two different threads give no ordering guarantee between "this
+     * thread's interrupt flag is set" and "that thread's acquire() unblocks". Without this flag,
+     * the newly-unblocked task can slip through and run {@code command} after the executor was
+     * already told to shut down. Setting this <em>before</em> delegating to {@code
      * delegate.shutdownNow()} (which is what actually interrupts the permit holder and triggers its
      * release) guarantees the flag is visible to every task by the time any permit released as part
      * of shutdown could possibly be re-acquired — a real happens-before chain, not a best-effort
