@@ -4,6 +4,7 @@ import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseQueryResponse;
@@ -98,23 +99,28 @@ final class ClickHouseResult implements Result {
    * that decided whether {@code compress=1} was sent for this request — is forwarded to {@link
    * RowBinaryDecoder#decode} unchanged, so the decode side unwraps ClickHouse's LZ4 block framing
    * exactly when the request side asked for it. See {@link ResponseCompression}'s Javadoc.
+   *
+   * <p>{@code rowDecoderMode} is likewise forwarded to {@link RowBinaryDecoder#decode} unchanged —
+   * see {@code ClickHouseConnectionFactoryProvider#ROW_DECODER}'s Javadoc for the full contract.
    */
   static Mono<ClickHouseResult> decode(
       final ClickHouseQueryResponse response,
       final RowDecodingScheduler decodingScheduler,
       final QueryObservation observation,
-      final ResponseCompression compression) {
+      final ResponseCompression compression,
+      final RowBinaryDecoderMode rowDecoderMode) {
     return observation.isEnabled()
-        ? decodeObserved(response, decodingScheduler, observation, compression)
-        : decodePlain(response, decodingScheduler, compression);
+        ? decodeObserved(response, decodingScheduler, observation, compression, rowDecoderMode)
+        : decodePlain(response, decodingScheduler, compression, rowDecoderMode);
   }
 
   private static Mono<ClickHouseResult> decodePlain(
       final ClickHouseQueryResponse response,
       final RowDecodingScheduler decodingScheduler,
-      final ResponseCompression compression) {
+      final ResponseCompression compression,
+      final RowBinaryDecoderMode rowDecoderMode) {
     final Flux<ByteBuffer> body = response.body().asByteArray().map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body, decodingScheduler, compression)
+    return RowBinaryDecoder.decode(body, decodingScheduler, compression, rowDecoderMode)
         .map(decoded -> new ClickHouseResult(decoded, response.writtenRows().getAsLong()));
   }
 
@@ -122,7 +128,8 @@ final class ClickHouseResult implements Result {
       final ClickHouseQueryResponse response,
       final RowDecodingScheduler decodingScheduler,
       final QueryObservation observation,
-      final ResponseCompression compression) {
+      final ResponseCompression compression,
+      final RowBinaryDecoderMode rowDecoderMode) {
     final AtomicLong byteCount = new AtomicLong();
     final Flux<ByteBuffer> body =
         response
@@ -130,7 +137,7 @@ final class ClickHouseResult implements Result {
             .asByteArray()
             .doOnNext(bytes -> byteCount.addAndGet(bytes.length))
             .map(ByteBuffer::wrap);
-    return RowBinaryDecoder.decode(body, decodingScheduler, compression)
+    return RowBinaryDecoder.decode(body, decodingScheduler, compression, rowDecoderMode)
         .map(
             decoded ->
                 new ClickHouseResult(

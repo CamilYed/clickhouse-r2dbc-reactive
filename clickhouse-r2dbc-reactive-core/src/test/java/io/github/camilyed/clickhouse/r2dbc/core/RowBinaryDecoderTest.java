@@ -98,9 +98,10 @@ class RowBinaryDecoderTest {
             });
     final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(wireBytes));
 
-    // when
+    // when - RowBinaryDecoderMode.NATIVE explicitly, since the default (CLICKHOUSE) never
+    // constructs NativeRowBinaryReader at all
     final DecodedRow row =
-        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE)
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
             .blockFirst(Duration.ofSeconds(5));
 
     // then
@@ -135,9 +136,11 @@ class RowBinaryDecoderTest {
             });
     final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(wireBytes));
 
-    // when
+    // when - RowBinaryDecoderMode.NATIVE explicitly: the default (CLICKHOUSE) would route this
+    // through ListDecodingRowBinaryReader unconditionally, which would make this test pass for
+    // the wrong reason (never exercising NativeColumnTypeResolver's all-or-nothing decision)
     final DecodedRow row =
-        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE)
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
             .blockFirst(Duration.ofSeconds(5));
 
     // then - the native-eligible column still decodes correctly via the fallback path
@@ -160,9 +163,10 @@ class RowBinaryDecoderTest {
             );
     final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(wireBytes));
 
-    // when
+    // when - RowBinaryDecoderMode.NATIVE explicitly, to exercise NativeRowBinaryReader's own
+    // Nullable handling rather than client-v2's
     final List<DecodedRow> rows =
-        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE)
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
             .collectList()
             .block(Duration.ofSeconds(5));
 
@@ -189,6 +193,37 @@ class RowBinaryDecoderTest {
     // when
     final DecodedResult result =
         RowBinaryDecoder.decode(source, decodingScheduler, ResponseCompression.NONE)
+            .block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(result.columns()).isEmpty();
+    // and
+    StepVerifier.create(result.rows()).verifyComplete();
+  }
+
+  @Test
+  void shouldEmitNoRowsForAResponseWithNoHeaderAtAllInNativeMode() {
+    // given - same DDL/empty-body case as shouldEmitNoRowsForAResponseWithNoHeaderAtAll, but
+    // routed through EmptyRowBinaryReader (RowBinaryDecoderMode.NATIVE) instead of
+    // ListDecodingRowBinaryReader's own null-schema handling (RowBinaryDecoderMode.CLICKHOUSE) -
+    // both must agree on the observable outcome
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(new byte[0]));
+
+    // when / then
+    StepVerifier.create(
+            RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE))
+        .verifyComplete();
+  }
+
+  @Test
+  void shouldExposeEmptyColumnsForAResponseWithNoHeaderAtAllInNativeMode() {
+    // given
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(new byte[0]));
+
+    // when
+    final DecodedResult result =
+        RowBinaryDecoder.decode(
+                source, decodingScheduler, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
             .block(Duration.ofSeconds(5));
 
     // then

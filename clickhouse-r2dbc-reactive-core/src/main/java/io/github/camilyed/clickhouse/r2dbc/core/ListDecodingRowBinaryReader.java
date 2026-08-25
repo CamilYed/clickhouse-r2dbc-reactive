@@ -88,20 +88,29 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
    * {@code R} times (once per row) for a fixed answer was pure repeated work, not something the
    * decode contract requires. See docs/PERFORMANCE.md's "second-opinion review" section (finding 4)
    * for how this was found.
+   *
+   * <p>{@link #getSchema()} itself is {@code null} rather than an empty schema for a response with no
+   * {@code RowBinaryWithNamesAndTypes} header at all (a DDL statement) — see {@link
+   * RowBinaryHeader}'s Javadoc. In {@link RowBinaryDecoderMode#NATIVE}, {@link RowBinaryDecoder} only
+   * ever constructs this reader once that case has already been routed to {@link
+   * EmptyRowBinaryReader} instead, but in {@link RowBinaryDecoderMode#CLICKHOUSE} this reader is
+   * constructed directly, with no such pre-check, so the {@code null} case can genuinely reach here —
+   * treated the same way {@link RowBinaryDecoder}'s old {@code columnsOf} helper always did, before
+   * this method existed: an empty column list, not a {@link NullPointerException}.
    */
   private List<ClickHouseColumn> clickHouseColumns() {
     List<ClickHouseColumn> columns = cachedColumns;
     if (columns == null) {
-      columns = getSchema().getColumns();
+      final var schema = getSchema();
+      columns = schema == null ? List.of() : schema.getColumns();
       cachedColumns = columns;
     }
     return columns;
   }
 
   /**
-   * This result's column schema, in wire order — {@link RowBinaryReader}'s contract. This reader is
-   * only ever constructed (see {@link RowBinaryDecoder}) once {@link RowBinaryHeader#present()} is
-   * known {@code true}, so {@link #getSchema()} is guaranteed non-null here.
+   * This result's column schema, in wire order — {@link RowBinaryReader}'s contract. Empty for a
+   * response with no header at all — see {@link #clickHouseColumns()}'s Javadoc.
    */
   @Override
   public List<ColumnDescriptor> columns() {
