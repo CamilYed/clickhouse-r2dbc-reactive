@@ -843,10 +843,13 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     explicit "no production change justified yet"). Falls back to profiling
     `ClickHouseStatement`/`ClickHouseQuery` construction (the third informal bullet above) only if
     A/B/C/D don't explain the gap.
-  - **Status: latency-path-isolation ladder reopened by Variant D — reader-layer effect real for
-    multi-column decode, trusted t1+t8 both in, `*Stream10k`/network-free follow-up built, awaiting
-    run (2026-08-25).** No production change yet; still the plan's own allowed "no production
-    change justified yet" outcome, now with a live lead instead of a closed ladder.
+  - **Status: Variant D confirms a real per-row/per-column reader-layer cost at 10k-row scale
+    (~21.6% faster, ~79x combined error, cross-checked) — the strongest lead in the ladder.
+    `point`'s earlier single-row "win" retracted (sign-flipped on a second trusted `-t8` run, same
+    fate as Variant C). Network-free `RowBinaryReaderTypeMatrixBenchmark` built, awaiting run, to
+    find which type(s) it comes from (2026-08-25).** No production change yet — still "no
+    production change justified yet" per the plan's own allowed outcome, pending network-free
+    confirmation, profiler, and a maintenance-cost estimate before any decoder is even a candidate.
     `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted
