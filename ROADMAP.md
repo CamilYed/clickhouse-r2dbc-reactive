@@ -860,8 +860,12 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     `QueryConstructionMicrobenchmark` measured `ClickHouseQuery.of`/`.withParameters`/UUID-generation
     cost (including under 8-way contention) at 20-150x too small to explain either concurrency level's
     deficit. Elimination list now complete (GC, the copy, and construction cost all ruled out) —
-    **Variant C** (transport-acquisition-before-decoder-admission) is the only remaining hypothesis and
-    is next. Variant D not started.
+    **Variant C** (transport-acquisition-before-decoder-admission) is the only remaining hypothesis
+    and is **built, awaiting a run**: `LatencyPathVariantCBenchmark` prototypes calling
+    `FluxInputStreamBridge.subscribeTo` (subscription = HTTP send) eagerly on the calling thread,
+    before `subscribeOn(decodeScheduler)`, instead of inside it as production does today — decoupling
+    "wait for a decoder-worker slot" from "wait for the network" for the first time in this pipeline.
+    Variant D not started.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,

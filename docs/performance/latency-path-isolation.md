@@ -68,7 +68,7 @@ source, not that earlier, since-superseded shape.
 | --- | --- | --- |
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
 | **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Settled — real payoff too small to matter.** Ownership proven correct (leak-clean real-HTTP run); real-HTTP timing inconclusive (≤1.3%, sign-flipping); network-free microbenchmark isolated the true cost: 15-35ns/call at production response sizes, negligible against a ~600-1150µs round trip. Not the source of Variant A's deficit — not adopted. See below. |
-| **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | Not started — now the only remaining hypothesis (GC, the copy, and construction cost all ruled out; see task #309 below) |
+| **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | **Built, awaiting sanity run** — `LatencyPathVariantCBenchmark`, the only remaining hypothesis (GC, the copy, and construction cost all ruled out; see task #309 above). See below. |
 | **D — benchmark-local `BinaryInput` adapter (optional, only after A/B/C)** | Minimal `read()`/`readFully(...)` adapter removing the blocking-`InputStream` boundary for only the types this benchmark needs | Not started |
 
 ## Variant A — built, trusted 3-fork runs done at both concurrency levels
@@ -332,6 +332,55 @@ caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
 caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
   -Pjmh.includes=LatencyPathVariantBBenchmark -Pjmh.threads=8 -Pjmh.forks=3
 ```
+
+## Variant C — built, awaiting sanity run
+
+`LatencyPathVariantCBenchmark`
+(`clickhouse-r2dbc-reactive-benchmarks/src/jmh/java/.../LatencyPathVariantCBenchmark.java`) — the
+last remaining hypothesis after GC, the `asByteArray()` copy (Variant B), and fixed
+query/statement construction cost (task #309) were each ruled out. Same self-contained-pair shape
+as `LatencyPathVariantBBenchmark`: one class, same transport instance, same client-v2 reader,
+`ResponseCompression.NONE` (same package-private-`ClickHouseLz4InputStream` reason as Variant B),
+`POOL_SIZE=8`.
+
+**What differs between the two scenarios** (see class Javadoc for the full reasoning): today,
+`FluxInputStreamBridge.subscribeTo` — the call that actually subscribes to the transport response
+and thereby sends the HTTP request, per this project's own "request not sent before subscription"
+boundary — runs *inside* `Mono.fromCallable(...).subscribeOn(decodeScheduler)`, so it waits for a
+decoder-scheduler worker permit before the request is even sent
+(`currentOrderingSelect1`/`currentOrderingPoint`). The prototype
+(`earlyAcquisitionSelect1`/`earlyAcquisitionPoint`) calls `subscribeTo` eagerly, on the calling
+thread, before `subscribeOn` is reached — decoupling "wait for a decoder-worker slot" from "wait
+for the network" for the first time in this pipeline. Confirmed safe to call this way:
+`FluxInputStreamBridge`'s constructor only does a synchronous, non-blocking `source.subscribe(...)`
+— actual bytes still arrive later, asynchronously, on Reactor Netty's own event loop, exactly as in
+the current-ordering scenario.
+
+**Expected signature of a real effect:** negligible difference at `-t1` (nothing is contending for
+either the HTTP pool or the decoder scheduler, so there's no admission queueing to decouple), and a
+narrowing gap at `-t8` if this ordering is actually part of Variant A's deficit — matching this
+doc's own earlier observation that the deficit is "flat, not growing much with load" (a fixed-cost
+signature) rather than "growing with contention" (a queueing signature); if `earlyAcquisition`
+doesn't move the `-t8` numbers either, this hypothesis is rejected the same way Variant B and task
+#309 were, and the deficit's source remains open.
+
+**How to run** — sanity pass, then the same trusted 3-fork sequence at both concurrency levels
+Variant A/B used:
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=LatencyPathVariantCBenchmark
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantCBenchmark -Pjmh.threads=1 -Pjmh.forks=3
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantCBenchmark -Pjmh.threads=8 -Pjmh.forks=3
+```
+
+No leak-detection wiring needed here (no `ByteBuf` involved, only `ByteBuffer` via the same
+`asByteArray()` path Variant A already uses) — this class carries no correctness risk beyond what
+Variant A's existing, already-trusted pipeline already covers; the only thing under test is
+ordering.
 
 ## A/B/C/D result table
 
