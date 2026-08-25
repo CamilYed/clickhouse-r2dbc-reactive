@@ -382,6 +382,25 @@ No leak-detection wiring needed here (no `ByteBuf` involved, only `ByteBuffer` v
 Variant A's existing, already-trusted pipeline already covers; the only thing under test is
 ordering.
 
+**Single-fork sanity, `-t1` (default, no `-Pjmh.threads` passed) (2026-08-25):** matches this
+project's own confidence standard — a single-fork number is a first signal, not something to act
+on. Recorded here so the shape is visible while trusted runs are pending.
+
+| Variant | Scenario | Concurrency | current-ordering mean (µs) | early-acquisition mean (µs) | current p99 (µs) | early p99 (µs) | early vs. current |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| C | SELECT 1 | 1 (single-fork, untrusted) | 570.6 ± 1.94 | 574.2 ± 2.26 | 757.8 | 793.6 | ~0.6% **slower** |
+| C | point | 1 (single-fork, untrusted) | 1109.1 ± 3.47 | 1119.6 ± 3.28 | 1359.9 | 1364.0 | ~0.9% **slower** |
+
+Both diffs sit within/at the edge of combined error bars (SELECT 1: 3.6µs diff vs. ±2-2.3µs error
+each side; point: 10.5µs diff vs. ±3.3-3.5µs error each side) — noise-level, not a signal either
+way. **This matches this section's own prediction above**: no meaningful difference at `-t1`, since
+nothing is contending for either the HTTP pool or the decoder scheduler at concurrency 1, so there
+is no admission-gate queueing for early acquisition to decouple anything from. The real test is
+`-t8`, where Variant A's own trusted data shows both scenarios' deficit widening (SELECT 1
+4.2%→4.9%, point 2.6%→4.9%) — if admission-gate ordering is part of that widening,
+`earlyAcquisition` should narrow it there; if `-t8` looks like this `-t1` pass (no difference, or a
+similarly small reversed one), Variant C is rejected the same way Variant B and task #309 were.
+
 ## A/B/C/D result table
 
 **Single-fork, single-warmup-iteration sanity run only (2026-08-25, no `-Pjmh.threads` passed, so
