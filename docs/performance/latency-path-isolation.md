@@ -69,7 +69,7 @@ source, not that earlier, since-superseded shape.
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
 | **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Settled — real payoff too small to matter.** Ownership proven correct (leak-clean real-HTTP run); real-HTTP timing inconclusive (≤1.3%, sign-flipping); network-free microbenchmark isolated the true cost: 15-35ns/call at production response sizes, negligible against a ~600-1150µs round trip. Not the source of Variant A's deficit — not adopted. See below. |
 | **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | **Done — inconclusive, not adopted.** Trusted 3-fork results at both concurrency levels are internally inconsistent (favors early acquisition at `-t1`, doesn't at `-t8` — the opposite of the predicted admission-gate-contention signature) and don't reproduce their own single-fork sanity passes either. Not confirmed, not confidently rejected on mechanism, not actionable. See below. |
-| **D — benchmark-local `BinaryInput` adapter (optional, only after A/B/C)** | Minimal `read()`/`readFully(...)` adapter removing the blocking-`InputStream` boundary for only the types this benchmark needs | Not started |
+| **D — `MinimalRowBinaryReader`: skip client-v2's reader/parsing layer** | Hand-rolled `RowBinaryWithNamesAndTypes` decoder (`UInt8`/`UInt64`/`String`/`Decimal`) reading off `ZeroCopyByteBufInputStreamBridge`, replacing client-v2's `RowBinaryWithNamesAndTypesFormatReader`/`AbstractBinaryFormatReader` — the one layer A/B/C/#309 never isolated | **Built, awaiting sanity run** — `LatencyPathVariantDBenchmark`, Select 1/point pair. See below. |
 
 ## Variant A — built, trusted 3-fork runs done at both concurrency levels
 
@@ -496,6 +496,43 @@ investigation's own plan (see top of this doc), "no production change justified 
 valid outcome — the deficit remains a real, measured, reproduced-across-two-independent-3-fork-runs
 characteristic of the current implementation vs. client-v2, but its source is not established by
 any of the four hypotheses this ladder was built to test.
+
+## Variant D — built, awaiting sanity run
+
+The elimination list above covered every hypothesis about what happens *around* client-v2's reader
+(the copy feeding it, admission-gate ordering before it, the query object built before calling it).
+It never questioned the reader itself. `MinimalRowBinaryReader`
+(`clickhouse-r2dbc-reactive-benchmarks/src/main/java/.../MinimalRowBinaryReader.java`) is a minimal,
+hand-rolled `RowBinaryWithNamesAndTypes` decoder covering only the four ClickHouse wire types
+`TrivialQueryBenchmark`/`PointQueryBenchmark` actually use (`UInt8`, `UInt64`, `String`,
+`Decimal(P, S)`), reading directly off `ZeroCopyByteBufInputStreamBridge` — replacing client-v2's
+`RowBinaryWithNamesAndTypesFormatReader`/`AbstractBinaryFormatReader`/`BinaryStreamReader` machinery
+entirely for the scenarios it covers.
+
+`LatencyPathVariantDBenchmark` deliberately holds the copy-vs-zero-copy question constant (both
+scenarios use `ZeroCopyByteBufInputStreamBridge` — Variant B already measured that choice at
+15-35ns/call, negligible either way) so this isolates the one remaining untested variable: the
+reader/parsing layer itself. Four methods, same self-contained-pair shape as B/C:
+`clientV2ReaderSelect1`/`minimalReaderSelect1`/`clientV2ReaderPoint`/`minimalReaderPoint`.
+
+**Scope, deliberately narrow for this first cut**: `StreamingScanBenchmark`'s full-scan shape (same
+three columns, many rows) isn't covered yet — extending `MinimalRowBinaryReader` to a streaming
+scenario is the natural next step only if this pair shows a real, reproducible effect.
+
+**How to run** — sanity pass, then the same trusted 3-fork sequence at both concurrency levels:
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=LatencyPathVariantDBenchmark
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=1 -Pjmh.forks=3
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=8 -Pjmh.forks=3
+```
+
+No leak-detection wiring needed (no `ByteBuf` involved beyond what `ZeroCopyByteBufInputStreamBridge`
+already handles and Variant B/C already leak-verified).
 
 ## A/B/C/D result table
 
