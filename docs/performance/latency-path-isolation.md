@@ -390,16 +390,27 @@ on. Recorded here so the shape is visible while trusted runs are pending.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | C | SELECT 1 | 1 (single-fork, untrusted) | 570.6 ± 1.94 | 574.2 ± 2.26 | 757.8 | 793.6 | ~0.6% **slower** |
 | C | point | 1 (single-fork, untrusted) | 1109.1 ± 3.47 | 1119.6 ± 3.28 | 1359.9 | 1364.0 | ~0.9% **slower** |
+| C | SELECT 1 | 8 (single-fork, untrusted) | 1601.9 ± 9.32 | 1569.4 ± 5.75 | 3850.2 | 3564.2 | ~2.0% **faster** |
+| C | point | 8 (single-fork, untrusted) | 2284.0 ± 8.09 | 2249.5 ± 7.83 | 4808.7 | 4792.3 | ~1.5% **faster** |
 
 Both diffs sit within/at the edge of combined error bars (SELECT 1: 3.6µs diff vs. ±2-2.3µs error
 each side; point: 10.5µs diff vs. ±3.3-3.5µs error each side) — noise-level, not a signal either
 way. **This matches this section's own prediction above**: no meaningful difference at `-t1`, since
 nothing is contending for either the HTTP pool or the decoder scheduler at concurrency 1, so there
-is no admission-gate queueing for early acquisition to decouple anything from. The real test is
-`-t8`, where Variant A's own trusted data shows both scenarios' deficit widening (SELECT 1
-4.2%→4.9%, point 2.6%→4.9%) — if admission-gate ordering is part of that widening,
-`earlyAcquisition` should narrow it there; if `-t8` looks like this `-t1` pass (no difference, or a
-similarly small reversed one), Variant C is rejected the same way Variant B and task #309 were.
+is no admission-gate queueing for early acquisition to decouple anything from.
+
+**`-t8` reverses direction, cleanly, in both scenarios — the predicted signature of a real
+admission-gate effect.** Unlike the `-t1` pass (diff smaller than combined error, no direction to
+trust), the `-t8` diff (SELECT 1: 32.5µs; point: 34.5µs) is roughly **2.1-2.2x the combined error**
+in both scenarios, consistently favoring `earlyAcquisition`, and `p50`/`p90`/`p95`/`p99` all move
+the same direction, not just the mean — the shape a genuine effect produces, as opposed to one or
+two outlier samples dragging a mean around. This is single-fork and untrusted per this project's
+own confidence standard (a single-fork number is a first signal, not something to act on) — a
+3-fork trusted run at both `-t1` and `-t8` is needed before this can be treated as confirmed, but
+unlike Variant B and task #309 (which were rejected outright, 20-150x too small even in their most
+generous single-fork framing), this is the first result in this investigation whose *direction* and
+*magnitude* both plausibly fit the hypothesis: negligible at `-t1`, real and reproducible-looking at
+`-t8`. Next: trusted 3-fork runs at both concurrency levels.
 
 ## A/B/C/D result table
 
