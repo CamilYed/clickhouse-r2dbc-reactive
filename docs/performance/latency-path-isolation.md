@@ -97,12 +97,15 @@ already were, specifically for this ladder — an unwired `-P` flag on this plug
 per that file's own comment, so this had to be added rather than assumed):
 
 ```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
   -Pjmh.includes=LatencyPathVariantABenchmark -Pjmh.threads=1 -Pjmh.forks=3
 
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
   -Pjmh.includes=LatencyPathVariantABenchmark -Pjmh.threads=8 -Pjmh.forks=3
 ```
+
+(`caffeinate -d -i` per `running-benchmarks.md`'s own advice — prevents the MacBook sleeping mid-run
+for any multi-fork/unattended benchmark invocation on macOS.)
 
 For the plan's "5-warmup/5-measurement" trusted-run deliverable target (once a quick default pass
 confirms the class runs clean first), add `-Pjmh.warmupIterations=5 -Pjmh.iterations=5`
