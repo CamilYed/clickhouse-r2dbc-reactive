@@ -845,13 +845,20 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     A/B/C/D don't explain the gap.
   - **Status: in progress (2026-08-25).** `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
-    pipeline diagram + boundary locations, verified against current `main` source, correcting the
-    doc's own now-superseded `ChunkBuffer` reference) and Variant A (`LatencyPathVariantABenchmark`,
-    pool/decoder-workers pinned to 8, three scenarios × two drivers) are built — see
+    pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted
+    3-fork runs at both `-t 1`/`-t 8`) are done — a flat ~2.6-4.9% `thisDriver` mean deficit vs.
+    client-v2 on `SELECT 1`/point, streaming already ~9-17% faster with no change needed. **Variant B**
+    (avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy) is also done and **settled, not adopted**:
+    `ZeroCopyByteBufInputStreamBridge`'s ownership is proven correct (leak-clean real-HTTP run), but a
+    dedicated network-free microbenchmark isolated the copy's true cost at real `SELECT 1`/point
+    response sizes to 15-35ns/call — real and reproducible, but negligible against the ~600-1150µs
+    real round trip, and not the source of Variant A's deficit. Both classes stay as diagnostic,
+    benchmark-local artifacts. See
     [docs/performance/latency-path-isolation.md](docs/performance/latency-path-isolation.md) for the
-    full diagram, variant status table, and run instructions. Not yet run (same disclosed sandbox
-    limitation as the rest of this phase — no Gradle-wrapper network access here). Variants B/C/D not
-    started.
+    full diagram, variant status table, and both variants' full result tables/reasoning. Next:
+    Variant C (transport-acquisition-before-decoder-admission), weighed against the cheaper task #309
+    (profiling `ClickHouseStatement`/`ClickHouseQuery` construction) as an alternative first check.
+    Variant D not started.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,

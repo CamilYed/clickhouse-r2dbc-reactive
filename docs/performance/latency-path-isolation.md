@@ -67,7 +67,7 @@ source, not that earlier, since-superseded shape.
 | Variant | What it changes | Status |
 | --- | --- | --- |
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
-| **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Built, not yet run** — `LatencyPathVariantBBenchmark` (see below) |
+| **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Settled — real payoff too small to matter.** Ownership proven correct (leak-clean real-HTTP run); real-HTTP timing inconclusive (≤1.3%, sign-flipping); network-free microbenchmark isolated the true cost: 15-35ns/call at production response sizes, negligible against a ~600-1150µs round trip. Not the source of Variant A's deficit — not adopted. See below. |
 | **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | Not started |
 | **D — benchmark-local `BinaryInput` adapter (optional, only after A/B/C)** | Minimal `read()`/`readFully(...)` adapter removing the blocking-`InputStream` boundary for only the types this benchmark needs | Not started |
 
@@ -250,34 +250,43 @@ record-pattern dispatch — has its own fixed per-call cost that a tiny copy nev
 outweigh. Only once the response is tens of KB does the O(n) copy cost finally catch up to that fixed
 overhead.
 
-**This also would fully explain, rather than just temper, the earlier real-HTTP ambiguity** — the
-≤1.3%, sign-flipping result reading as two small, opposite-signed, genuinely negligible effects
-swamped by ~600-1150µs of network/HTTP/Docker cost — *if* the number above is trustworthy as-is.
+**Confound confirmed — clean rerun (no `-Dio.netty.leakDetection.*`) reverses the direction entirely:**
 
-**Open confound, caught before finalizing anything: this run still had `-Dio.netty.leakDetection.level=paranoid`
-active** (same `-Pjmh.jvmArgsAppend` used for the leak-detection pass, not cleared for the
-results-producing run). Under paranoid mode, every `ByteBuf` method call is routed through
-`AdvancedLeakAwareByteBuf`, which records an access entry on each call — `zeroCopyPath` touches the
-`ByteBuf` across its *entire* read/close lifecycle (`retain`, repeated `isReadable`/`readableBytes`/
-`readBytes`, `release`), while `copyPath` touches it only 3-4 times up front before handing off to a
-plain, uninstrumented `byte[]`/`ByteBuffer` for the rest of the pipeline. That asymmetry in
-leak-detector overhead — not sealed-interface dispatch (pattern matching over sealed records compiles
-to a cheap `instanceof`-chain + accessor call, negligible next to what's measured here) — is a live
-candidate for some or all of the 45-55% gap at small sizes. Correctness (no leak) was already verified
-separately; the number above needs a rerun **without** the leak-detection JVM args to be trusted as a
-timing result. Not retracting the direction yet — retracting the "final" framing until that rerun
-confirms the gap survives outside the leak detector's own overhead:
+| `responseBytes` | `copyPath` mean (µs) | `zeroCopyPath` mean (µs) | zero-copy vs. copy |
+| --- | --- | --- | --- |
+| 64 | 0.147 ± 0.004 | 0.132 ± 0.004 | **~10.2% faster** |
+| 256 | 0.149 ± 0.006 | 0.139 ± 0.005 | **~6.7% faster** |
+| 1024 | 0.202 ± 0.008 | 0.167 ± 0.005 | **~17.3% faster** |
+| 4096 | 0.404 ± 0.015 | 0.296 ± 0.005 | **~26.7% faster** |
+| 16384 | 1.233 ± 0.020 | 0.587 ± 0.004 | **~52.4% faster** |
+| 65536 | 5.092 ± 0.021 | 2.398 ± 0.003 | **~52.9% faster** |
 
-```
-caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
-  -Pjmh.includes=ZeroCopyByteBufInputStreamBridgeMicrobenchmark
-```
+The under-instrumentation run above was measuring the leak detector's own per-`ByteBuf`-call tax, not
+the bridge design — exactly the confound flagged before treating it as final. Clean, `zeroCopyPath` is
+*consistently faster* at every tier, and the margin grows with size (as expected: copying is O(n),
+avoiding it isn't) — the opposite conclusion from the confounded run, and absolute magnitudes 10-20x
+smaller across the board (the leak detector's instrumentation tax was several µs *per call*, dwarfing
+the actual few-hundred-nanosecond-to-low-microsecond real costs being measured).
 
-If the gap survives clean (undetected, no `-Dio.netty.leakDetection.*`), the verdict above stands:
-reject copy-avoidance as a production change, `ZeroCopyByteBufInputStreamBridge` stays a diagnostic
-artifact per the "no production code changes" scope. If the gap shrinks dramatically or disappears
-without the leak detector's instrumentation tax, that's a different, more interesting finding —
-leak-detection overhead being large enough to flip a benchmark's verdict would be worth its own note.
+**Reconciling with the real-HTTP ambiguity (Variant A/B, above): both are correct, at different
+scales.** At `SELECT 1`/point production response sizes (64-1024 bytes), the clean savings is **15-35
+nanoseconds per call** (0.015µs at 64B, 0.035µs at 1024B) — real, reproducible, and utterly negligible
+against a ~600-1150µs real network round trip (a ~0.003-0.03% effect). That's exactly why
+`LatencyPathVariantBBenchmark`'s real-HTTP run couldn't detect a consistent signal: there wasn't
+enough of one to detect at that scale, not because the effect doesn't exist. The savings only becomes
+practically visible from 16KB up (~0.6-2.7µs) — sizes this ladder's `SELECT 1`/point scenarios never
+produce, and which this driver's streaming scenario already beats client-v2 on without this change
+(Variant A: ~9-17% faster mean on `stream 10k`, no copy-avoidance involved).
+
+**Verdict, final: `asByteArray()`'s copy is not the source of Variant A's flat ~4-5% `SELECT
+1`/point deficit — settled, not just unsupported.** Copy-avoidance is a genuine, measurable,
+reproducible micro-optimization (confirmed at the isolated-CPU-cost level, ruling out both
+sealed-interface dispatch — cheap `instanceof`-chain, checked and ruled out — and JVM/environment
+noise as explanations), but its absolute payoff at this driver's actual small-response workload is
+nanoseconds, not the microseconds the real deficit represents. Not worth production adoption for that
+reason, not because it doesn't work. `ZeroCopyByteBufInputStreamBridge`/
+`ZeroCopyByteBufInputStreamBridgeMicrobenchmark` stay diagnostic, benchmark-local artifacts per the
+"no production code changes in this pass" scope — the finding is complete without promoting them.
 
 **Design, and three deliberate departures from Variant A worth knowing before reading numbers:**
 
