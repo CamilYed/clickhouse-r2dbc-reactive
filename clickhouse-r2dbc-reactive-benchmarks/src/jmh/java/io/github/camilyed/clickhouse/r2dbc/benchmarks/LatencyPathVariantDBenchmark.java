@@ -50,11 +50,12 @@ import reactor.netty.ByteBufFlux;
  * those), {@code POOL_SIZE=8}. Scenarios: {@code SELECT 1} (single {@code UInt8} column) and the
  * same point lookup ({@code label String}, {@code amount Decimal(18,4)}) Variant B/C use.
  *
- * <p><b>Scope, deliberately narrow for this first cut:</b> {@code StreamingScanBenchmark}'s
- * full-scan shape (same three columns, many rows) is not covered here — if this pair shows a real
- * effect, extending {@link MinimalRowBinaryReader} to a streaming scenario is the natural next
- * step; building that before knowing whether the reader-layer hypothesis has any legs would be
- * premature.
+ * <p><b>Scope.</b> Trusted t1/t8 results on the SELECT 1 / point pair showed a scenario-dependent
+ * effect (noise/flip on 1-column SELECT 1, a real and reproducible ~5-7% gap on the 2-column point
+ * lookup) — consistent with a per-column decode cost rather than a fixed per-request one. The
+ * {@code *Stream10k} pair added after that result reuses {@link PointQueryTable}'s existing
+ * 3-column shape at the "10000" row tier (same shape as {@link StreamingScanBenchmark}, single tier
+ * only) to check whether that per-column cost compounds over many rows or stays flat.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -65,6 +66,14 @@ public class LatencyPathVariantDBenchmark {
 
   private static final String SELECT_BY_ID_SQL =
       "SELECT label, amount FROM " + PointQueryTable.NAME + " WHERE id = {id:UInt64}";
+
+  // Same shape as StreamingScanBenchmark's SELECT_ALL_SQL, at the "10000" tier only - this pair
+  // exists to tell fixed-per-request cost apart from per-row cost (see trusted-t1/t8 verdict in
+  // docs/performance/latency-path-isolation.md: the reader-layer effect showed up for the
+  // 2-column point scenario but not the 1-column SELECT 1 scenario, consistent with a per-column
+  // decode cost - this pair checks whether that cost compounds over many rows).
+  private static final String SELECT_ALL_SQL =
+      "SELECT id, label, amount FROM " + PointQueryTable.NAME;
 
   private static final int POOL_SIZE = 8;
 
@@ -137,6 +146,18 @@ public class LatencyPathVariantDBenchmark {
     blackhole.consume(decodeViaMinimalReader(pointQuery()));
   }
 
+  /** client-v2's reader, full 10k-row scan - same shape as {@link StreamingScanBenchmark}. */
+  @Benchmark
+  public void clientV2ReaderStream10k(final Blackhole blackhole) {
+    decodeStreamViaClientV2Reader(blackhole);
+  }
+
+  /** {@link MinimalRowBinaryReader}, full 10k-row scan. */
+  @Benchmark
+  public void minimalReaderStream10k(final Blackhole blackhole) {
+    decodeStreamViaMinimalReader(blackhole);
+  }
+
   private ClickHouseQuery pointQuery() {
     final long id = nextId();
     return ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
@@ -177,10 +198,77 @@ public class LatencyPathVariantDBenchmark {
     }
   }
 
+  private void decodeStreamViaClientV2Reader(final Blackhole blackhole) {
+    final ByteBufFlux body = ourTransport.query(ClickHouseQuery.of(SELECT_ALL_SQL));
+    final long rowCount =
+        Mono.fromCallable(
+                () ->
+                    readAllRowsViaClientV2(
+                        ZeroCopyByteBufInputStreamBridge.subscribeTo(body, RESPONSE_CHUNK_DEMAND),
+                        blackhole))
+            .subscribeOn(decodeScheduler)
+            .block(Duration.ofSeconds(10));
+    blackhole.consume(rowCount);
+  }
+
+  private void decodeStreamViaMinimalReader(final Blackhole blackhole) {
+    final ByteBufFlux body = ourTransport.query(ClickHouseQuery.of(SELECT_ALL_SQL));
+    final long rowCount =
+        Mono.fromCallable(
+                () ->
+                    readAllRowsViaMinimalReader(
+                        ZeroCopyByteBufInputStreamBridge.subscribeTo(body, RESPONSE_CHUNK_DEMAND),
+                        blackhole))
+            .subscribeOn(decodeScheduler)
+            .block(Duration.ofSeconds(10));
+    blackhole.consume(rowCount);
+  }
+
+  /**
+   * Drains every row of the {@code SELECT_ALL_SQL} scan via client-v2's reader, consuming all three
+   * columns (matching {@link StreamingScanBenchmark#clientV2}'s own per-row reads) so the decode of
+   * every column is on the hot path, not just the first.
+   */
+  private static long readAllRowsViaClientV2(final InputStream source, final Blackhole blackhole)
+      throws IOException {
+    try (InputStream input = source) {
+      final RowBinaryWithNamesAndTypesFormatReader reader =
+          new RowBinaryWithNamesAndTypesFormatReader(
+              input,
+              new QuerySettings().setUseTimeZone("UTC"),
+              new BinaryStreamReader.DefaultByteBufferAllocator());
+      long rowCount = 0;
+      while (reader.next() != null) {
+        blackhole.consume(reader.getLong(1));
+        blackhole.consume(reader.getString(2));
+        blackhole.consume(reader.getBigDecimal(3));
+        rowCount++;
+      }
+      return rowCount;
+    }
+  }
+
+  /** Same shape as {@link #readAllRowsViaClientV2}, via {@link MinimalRowBinaryReader}. */
+  private static long readAllRowsViaMinimalReader(
+      final InputStream source, final Blackhole blackhole) throws IOException {
+    try (MinimalRowBinaryReader reader = MinimalRowBinaryReader.open(source)) {
+      long rowCount = 0;
+      Object[] row;
+      while ((row = reader.nextRow()) != null) {
+        blackhole.consume(row[0]);
+        blackhole.consume(row[1]);
+        blackhole.consume(row[2]);
+        rowCount++;
+      }
+      return rowCount;
+    }
+  }
+
   /**
    * Same first-column-as-string convention as {@link #readFirstRowViaClientV2} — {@code UInt8} for
-   * {@code SELECT 1} widens to its {@code Long} boxed form's {@code toString()} (matches client-v2's
-   * own {@code getString} widening for that scenario), {@code label} for the point lookup.
+   * {@code SELECT 1} widens to its {@code Long} boxed form's {@code toString()} (matches
+   * client-v2's own {@code getString} widening for that scenario), {@code label} for the point
+   * lookup.
    */
   private static String readFirstRowViaMinimalReader(final InputStream source) throws IOException {
     try (MinimalRowBinaryReader reader = MinimalRowBinaryReader.open(source)) {

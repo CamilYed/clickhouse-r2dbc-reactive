@@ -69,7 +69,7 @@ source, not that earlier, since-superseded shape.
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
 | **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Settled — real payoff too small to matter.** Ownership proven correct (leak-clean real-HTTP run); real-HTTP timing inconclusive (≤1.3%, sign-flipping); network-free microbenchmark isolated the true cost: 15-35ns/call at production response sizes, negligible against a ~600-1150µs round trip. Not the source of Variant A's deficit — not adopted. See below. |
 | **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | **Done — inconclusive, not adopted.** Trusted 3-fork results at both concurrency levels are internally inconsistent (favors early acquisition at `-t1`, doesn't at `-t8` — the opposite of the predicted admission-gate-contention signature) and don't reproduce their own single-fork sanity passes either. Not confirmed, not confidently rejected on mechanism, not actionable. See below. |
-| **D — `MinimalRowBinaryReader`: skip client-v2's reader/parsing layer** | Hand-rolled `RowBinaryWithNamesAndTypes` decoder (`UInt8`/`UInt64`/`String`/`Decimal`) reading off `ZeroCopyByteBufInputStreamBridge`, replacing client-v2's `RowBinaryWithNamesAndTypesFormatReader`/`AbstractBinaryFormatReader` — the one layer A/B/C/#309 never isolated | **Promising — trusted `-t1` reproduces and grows (~5.4-7.3% faster), first lead in this ladder to survive a trusted rerun.** `-t8` trusted pending before final verdict. See below. |
+| **D — `MinimalRowBinaryReader`: skip client-v2's reader/parsing layer** | Hand-rolled `RowBinaryWithNamesAndTypes` decoder (`UInt8`/`UInt64`/`String`/`Decimal`) reading off `ZeroCopyByteBufInputStreamBridge`, replacing client-v2's `RowBinaryWithNamesAndTypesFormatReader`/`AbstractBinaryFormatReader` — the one layer A/B/C/#309 never isolated | **Reader contributes but does not explain the full gap — scenario-dependent, real for multi-column decode.** Trusted `-t1`+`-t8` both in: `SELECT 1` (1 column) is noise/direction-flip (+5.4% at t1, -0.6% at t8), `point` (2 columns) reproduces at both concurrency levels (+7.27% t1, +5.23% t8, ~11x combined error both times) — consistent with a per-column decode cost, not a fixed per-request one. `*Stream10k` pair (compounding-over-rows check) and network-free `ReaderOnlyMicrobenchmark` (pure reader cost, no transport/scheduler/pool) built next per the plan's "STOP and evaluate" gate. See below. |
 
 ## Variant A — built, trusted 3-fork runs done at both concurrency levels
 
@@ -585,6 +585,74 @@ caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
   -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=8 -Pjmh.forks=3
 ```
 
+**Trusted 3-fork `-t8` run (2026-08-25) — scenario-dependent: `SELECT 1` flips, `point` reproduces.**
+
+| Variant | Scenario | Concurrency | client-v2 reader mean (µs) | minimal reader mean (µs) | client-v2 p99 (µs) | minimal p99 (µs) | minimal vs. client-v2 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| D | SELECT 1 | 8 (**3-fork, trusted**) | 1594.206 ± 5.288 | 1604.539 ± 3.834 | 3858.4 | 3805.2 | **~0.65% *slower*** (direction flip vs. `-t1`'s +5.44%) |
+| D | point | 8 (**3-fork, trusted**) | 2387.531 ± 6.360 | 2262.743 ± 5.116 | 5365.8 | 4898.8 | **~5.23% faster** (same direction as `-t1`'s +7.27%) |
+
+`SELECT 1`'s diff (10.3µs) barely exceeds its combined error (9.1µs, ~1.13x) — inside the "could be
+noise" band, and it flipped sign from `-t1`. `point`'s diff (124.8µs) is ~10.9x its combined error
+(11.5µs) — decisively outside noise, same direction as `-t1`, at both concurrency levels now.
+
+**Verdict on the t1+t8 pair, applying the plan's Case A/B/C framework jointly across both
+concurrency levels and both scenarios, not just the strongest single number:**
+
+- `SELECT 1` (1 column, `UInt8`): **Case A — reject.** Direction flips between `-t1` (+5.44%) and
+  `-t8` (-0.65%), and `-t8`'s magnitude sits right at the noise boundary. No reader-layer effect
+  established for this scenario.
+- `point` (2 columns, `String` + `Decimal`): **reproduces at both concurrency levels, ~11x combined
+  error both times (+7.27% at `-t1`, +5.23% at `-t8`)** — this is not Case A. It's short of the
+  plan's literal Case C wording ("closes most/all of the gap across SELECT1/point/t1/t8" — it
+  doesn't hold for `SELECT 1`), so the honest read is **Case B**: the reader contributes a real,
+  reproducible cost for multi-column/typed decoding, but it isn't a blanket effect across every
+  query shape.
+
+**Mechanistically coherent, not just numerically consistent:** the one scenario where the effect
+disappears (`SELECT 1`) is the one with the least reader work to save (one column, one type,
+`UInt8`); the one where it holds (`point`) has two columns and two different types (`String`,
+`Decimal`) — more type-dispatch/allocation surface for a specialized reader to avoid. This points at
+a **per-column decode cost**, not a fixed per-request one — exactly the question the `*Stream10k`
+pair (many rows, same 3-column shape) and a network-free reader-only microbenchmark are built to
+settle, per the plan's step-3/step-4 prescription after this "STOP and evaluate" gate.
+
+**Built, not yet run — next two data points before any production-decoder discussion:**
+
+1. `LatencyPathVariantDBenchmark.clientV2ReaderStream10k`/`minimalReaderStream10k` — same transport/
+   bridge/scheduler/pool/compression as the existing pair, `PointQueryTable`'s existing 3-column
+   shape (`id UInt64`, `label String`, `amount Decimal(18,4)`) at the 10,000-row tier, decoding every
+   column of every row. Tells apart "fixed per-request reader cost" (flat vs. row count) from
+   "per-row/per-column cost that compounds" (grows with row count) — and, since it reads 3 columns
+   instead of `point`'s 2, whether the per-column effect keeps scaling.
+2. `ReaderOnlyMicrobenchmark` (new class) — network-free: captures each scenario's exact
+   `RowBinaryWithNamesAndTypes` response bytes once in `@Setup(Level.Trial)` over a real connection,
+   then every `@Benchmark` method decodes from a fresh `ByteArrayInputStream` over the same in-memory
+   bytes, on the calling thread — no HTTP, no `Scheduler`, no connection pool, no
+   `ZeroCopyByteBufInputStreamBridge`. Isolates pure header-parsing/type-dispatch/allocation cost
+   inside the reader, same three scenarios (`select1`/`point`/`stream10k`) for direct comparison.
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=1 -Pjmh.forks=3
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=8 -Pjmh.forks=3
+
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=ReaderOnlyMicrobenchmark -Pjmh.forks=3
+```
+
+`ReaderOnlyMicrobenchmark` runs single-threaded by construction (no network, no scheduler, nothing
+concurrency-sensitive to isolate) — one trusted 3-fork run is enough, no separate `-t1`/`-t8` split
+needed.
+
+**Not yet decided, and explicitly out of scope until the above two results are in:** whether to build
+a production decoder, what its type coverage would need to be, or any change to `core`/`connector`.
+Per the plan's guardrails: no client-v2 upstream changes, no production code changes yet, and — if a
+custom decoder is eventually considered — a maintenance-cost estimate across ClickHouse's full type
+taxonomy first, weighed against a *repeatable* gain, not a single scenario's number.
+
 ## A/B/C/D result table
 
 **Single-fork, single-warmup-iteration sanity run only (2026-08-25, no `-Pjmh.threads` passed, so
@@ -736,16 +804,17 @@ is the only remaining hypothesis from this investigation's original candidate li
 | `asByteArray()` `ByteBuf`→`byte[]`→`ByteBuffer` copy | Variant B — real-HTTP `-t1` trusted, then network-free `ZeroCopyByteBufInputStreamBridgeMicrobenchmark` | Real-HTTP: ≤1.3%, sign-flipping between scenarios. Isolated cost: 15-35ns/call at real response sizes — ~1000x too small vs. the ~24-103µs deficit | **Reject** |
 | Fixed query/statement construction (`ClickHouseQuery.of`/`.withParameters`/UUID generation/SQL placeholder scan) | Task #309 — `QueryConstructionMicrobenchmark`, including 8-way-contended UUID generation | 0.16-3.6µs total (even crediting the full contention penalty) vs. a 24-103µs deficit — 20-150x too small | **Reject** |
 | Transport-acquisition-before-decoder-admission ordering | Variant C — `LatencyPathVariantCBenchmark`, single-fork sanity + trusted 3-fork at both `-t1`/`-t8` | Real, sizeable effects appear (up to ~3.65%) but with no consistent direction: favors early acquisition at trusted `-t1` (the concurrency level where the mechanism shouldn't apply), doesn't at trusted `-t8` (where it should); doesn't reproduce its own single-fork sanity pass in any of the four (scenario, concurrency) cells | **Inconclusive — not adopted** (not "too small," but not reproducible) |
+| client-v2 reader/parsing machinery (`RowBinaryWithNamesAndTypesFormatReader`/`AbstractBinaryFormatReader`) | Variant D — `LatencyPathVariantDBenchmark`, single-fork sanity + trusted 3-fork at both `-t1`/`-t8` | `SELECT 1` (1 column): direction flips (+5.44% at `-t1`, -0.65% at `-t8`, latter within noise). `point` (2 columns, `String`+`Decimal`): reproduces at both levels (+7.27% `-t1`, +5.23% `-t8`, ~11x combined error both times) | **Reader contributes but does not explain the full gap — real for multi-column decode, not established for the 1-column case.** `*Stream10k` + network-free `ReaderOnlyMicrobenchmark` built, pending run, before any further verdict |
 
-**Recommended next production change: none.** All four candidate hypotheses from this
-investigation's original plan have been tested; none provides a reliable, reproducible explanation
-for Variant A's flat ~2.6-4.9% mean deficit on `SELECT 1`/point (streaming, by contrast, is already
-~9-17% faster and needs no change). Per the plan's own explicitly allowed outcome, this is
-**"no production change justified yet"** — the deficit is real and reproduced across two independent
-trusted 3-fork runs, but its source remains unestablished by this ladder. Further investigation, if
-pursued, would need a lower-noise methodology than this benchmark harness currently provides (e.g.
-interleaved same-fork comparison, or a dedicated JFR/async-profiler run against Variant A itself
-rather than against isolated hypotheses) — a new, separate piece of work, not a continuation of A/B/C/D.
+**Recommended next production change: still none, pending Variant D's remaining two data points.**
+Three of the five candidate hypotheses tested so far are rejected outright (GC, copy, construction);
+admission ordering is inconclusive; the reader layer is the first hypothesis in this ladder with a
+real, reproducible, mechanistically-coherent effect (per-column decode cost) — but confirmed for only
+one of the two scenarios tested against real HTTP traffic, and not yet checked against the
+`*Stream10k`/network-free follow-ups the plan's decision framework requires before considering a
+production change. This is still **"no production change justified yet,"** now with a live,
+promising lead instead of a closed ladder — the two builds above are the next concrete step, not a
+final verdict. Streaming, unaffected by any of this, is already ~9-17% faster and needs no change.
 
 ## Explicitly out of scope for this pass
 

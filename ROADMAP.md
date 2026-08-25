@@ -843,7 +843,10 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     explicit "no production change justified yet"). Falls back to profiling
     `ClickHouseStatement`/`ClickHouseQuery` construction (the third informal bullet above) only if
     A/B/C/D don't explain the gap.
-  - **Status: latency-path-isolation ladder done, no production change (2026-08-25).**
+  - **Status: latency-path-isolation ladder reopened by Variant D — reader-layer effect real for
+    multi-column decode, trusted t1+t8 both in, `*Stream10k`/network-free follow-up built, awaiting
+    run (2026-08-25).** No production change yet; still the plan's own allowed "no production
+    change justified yet" outcome, now with a live lead instead of a closed ladder.
     `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted

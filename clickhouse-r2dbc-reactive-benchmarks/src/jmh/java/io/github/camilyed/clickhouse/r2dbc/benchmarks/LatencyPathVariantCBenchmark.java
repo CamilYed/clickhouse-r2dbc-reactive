@@ -38,20 +38,20 @@ import reactor.core.scheduler.Schedulers;
  * cost (task #309, ruled out) all failed to explain {@link LatencyPathVariantABenchmark}'s trusted
  * ~2.6-4.9% mean deficit on {@code SELECT 1}/point at both concurrency 1 and 8.
  *
- * <p><b>What this isolates.</b> Today, per this doc's own "Exact pipeline" section,
- * {@code RowBinaryDecoder.decode} subscribes to the transport's response {@code Flux} — the act
- * that actually sends the HTTP request, per this project's own documented "request not sent before
- * subscription" boundary — <em>inside</em> {@code Mono.fromCallable(...).subscribeOn(decoderScheduler)},
- * i.e. only once a decoder-scheduler worker permit has already been granted. With
- * {@code decodeScheduler}/pool both pinned to {@link #POOL_SIZE}, this means a completed or
- * in-flight HTTP response cannot even begin being consumed until a decoder-worker slot frees up —
- * two independently-sized resources (an 8-connection HTTP pool and an 8-worker decoder scheduler)
- * end up serialized behind each other rather than overlapping, on every single query, not just
- * under overload. This is the ordering Variant C targets, prototyped here without touching
- * production code (this pass's "no production code changes" scope), without buffering the whole
- * response, without blocking the event loop, and without changing cancellation, connection reuse,
- * pool size, decoder identity, or compression versus {@link LatencyPathVariantABenchmark}/{@link
- * LatencyPathVariantBBenchmark}.
+ * <p><b>What this isolates.</b> Today, per this doc's own "Exact pipeline" section, {@code
+ * RowBinaryDecoder.decode} subscribes to the transport's response {@code Flux} — the act that
+ * actually sends the HTTP request, per this project's own documented "request not sent before
+ * subscription" boundary — <em>inside</em> {@code
+ * Mono.fromCallable(...).subscribeOn(decoderScheduler)}, i.e. only once a decoder-scheduler worker
+ * permit has already been granted. With {@code decodeScheduler}/pool both pinned to {@link
+ * #POOL_SIZE}, this means a completed or in-flight HTTP response cannot even begin being consumed
+ * until a decoder-worker slot frees up — two independently-sized resources (an 8-connection HTTP
+ * pool and an 8-worker decoder scheduler) end up serialized behind each other rather than
+ * overlapping, on every single query, not just under overload. This is the ordering Variant C
+ * targets, prototyped here without touching production code (this pass's "no production code
+ * changes" scope), without buffering the whole response, without blocking the event loop, and
+ * without changing cancellation, connection reuse, pool size, decoder identity, or compression
+ * versus {@link LatencyPathVariantABenchmark}/{@link LatencyPathVariantBBenchmark}.
  *
  * <p><b>Scenarios</b> (mirrors {@link LatencyPathVariantBBenchmark}'s self-contained-pair shape —
  * same transport instance, same client-v2 reader, same {@link ResponseCompression#NONE}
@@ -60,32 +60,32 @@ import reactor.core.scheduler.Schedulers;
  *
  * <ul>
  *   <li>{@link #currentOrderingSelect1}/{@link #currentOrderingPoint} — today's production
- *       ordering: {@link FluxInputStreamBridge#subscribeTo} happens inside the
- *       {@code subscribeOn(decodeScheduler)}-scheduled callable, so subscription (and HTTP send)
- *       waits for decoder-worker admission.
- *   <li>{@link #earlyAcquisitionSelect1}/{@link #earlyAcquisitionPoint} — the prototype:
- *       {@link FluxInputStreamBridge#subscribeTo} is called eagerly, on the calling (JMH
- *       benchmark) thread, <em>before</em> {@code subscribeOn(decodeScheduler)} is even reached —
- *       subscription and HTTP send happen immediately, independent of decoder-worker
- *       availability. Only the blocking work downstream of that — client-v2's header-reading
- *       constructor and the first row read — is gated behind decoder-scheduler admission,
- *       matching that work's actual nature (CPU/blocking-read bound, not something that benefits
- *       from more concurrent workers than {@link #POOL_SIZE} once network wait is decoupled from
- *       it). Safe to call from any thread: {@link FluxInputStreamBridge#subscribeTo}'s constructor
- *       only calls {@code source.subscribe(subscriber)}, a synchronous, non-blocking call per
- *       Reactor's own subscribe contract — actual bytes arrive later, asynchronously, on Reactor
- *       Netty's event loop, exactly as they already do in the current-ordering scenario.
+ *       ordering: {@link FluxInputStreamBridge#subscribeTo} happens inside the {@code
+ *       subscribeOn(decodeScheduler)}-scheduled callable, so subscription (and HTTP send) waits for
+ *       decoder-worker admission.
+ *   <li>{@link #earlyAcquisitionSelect1}/{@link #earlyAcquisitionPoint} — the prototype: {@link
+ *       FluxInputStreamBridge#subscribeTo} is called eagerly, on the calling (JMH benchmark)
+ *       thread, <em>before</em> {@code subscribeOn(decodeScheduler)} is even reached — subscription
+ *       and HTTP send happen immediately, independent of decoder-worker availability. Only the
+ *       blocking work downstream of that — client-v2's header-reading constructor and the first row
+ *       read — is gated behind decoder-scheduler admission, matching that work's actual nature
+ *       (CPU/blocking-read bound, not something that benefits from more concurrent workers than
+ *       {@link #POOL_SIZE} once network wait is decoupled from it). Safe to call from any thread:
+ *       {@link FluxInputStreamBridge#subscribeTo}'s constructor only calls {@code
+ *       source.subscribe(subscriber)}, a synchronous, non-blocking call per Reactor's own subscribe
+ *       contract — actual bytes arrive later, asynchronously, on Reactor Netty's event loop,
+ *       exactly as they already do in the current-ordering scenario.
  * </ul>
  *
  * <p><b>Expected shape of a real effect, if there is one:</b> negligible difference at concurrency
  * 1 (no admission queueing to decouple from when nothing is contending for either resource), and a
  * shrinking gap at concurrency 8 (HTTP-response consumption starts as soon as the network has
- * something, rather than queueing again behind decoder-worker admission after already having
- * queued behind pool/event-loop capacity). Run at both {@code -Pjmh.threads=1} and
- * {@code -Pjmh.threads=8} (same flags {@link LatencyPathVariantABenchmark} uses) — a difference
- * only at {@code -t8} would be the signature of an admission-gate-ordering effect; a difference at
- * both would point elsewhere; no difference at either would reject this hypothesis, the same way
- * Variant B and task #309 were each rejected.
+ * something, rather than queueing again behind decoder-worker admission after already having queued
+ * behind pool/event-loop capacity). Run at both {@code -Pjmh.threads=1} and {@code -Pjmh.threads=8}
+ * (same flags {@link LatencyPathVariantABenchmark} uses) — a difference only at {@code -t8} would
+ * be the signature of an admission-gate-ordering effect; a difference at both would point
+ * elsewhere; no difference at either would reject this hypothesis, the same way Variant B and task
+ * #309 were each rejected.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -174,9 +174,9 @@ public class LatencyPathVariantCBenchmark {
   }
 
   /**
-   * Today's ordering: {@code FluxInputStreamBridge.subscribeTo} runs inside the
-   * {@code subscribeOn(decodeScheduler)}-scheduled callable, so both the subscription (HTTP send)
-   * and the blocking read wait behind decoder-worker admission.
+   * Today's ordering: {@code FluxInputStreamBridge.subscribeTo} runs inside the {@code
+   * subscribeOn(decodeScheduler)}-scheduled callable, so both the subscription (HTTP send) and the
+   * blocking read wait behind decoder-worker admission.
    */
   private String decodeViaCurrentOrdering(final ClickHouseQuery query) {
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
@@ -189,8 +189,8 @@ public class LatencyPathVariantCBenchmark {
   /**
    * Variant C prototype: {@code FluxInputStreamBridge.subscribeTo} runs eagerly, on the calling
    * thread, before {@code subscribeOn(decodeScheduler)} is reached — subscription (HTTP send)
-   * happens immediately, decoupled from decoder-worker availability. Only the blocking read
-   * (header parse + first row) is gated behind decoder-scheduler admission.
+   * happens immediately, decoupled from decoder-worker availability. Only the blocking read (header
+   * parse + first row) is gated behind decoder-scheduler admission.
    */
   private String decodeViaEarlyAcquisition(final ClickHouseQuery query) {
     final Flux<ByteBuffer> body = ourTransport.query(query).asByteArray().map(ByteBuffer::wrap);
@@ -201,8 +201,8 @@ public class LatencyPathVariantCBenchmark {
   }
 
   /**
-   * Reads the schema header plus the single row both scenarios here produce, via client-v2's
-   * public {@link RowBinaryWithNamesAndTypesFormatReader} directly — same shape as {@link
+   * Reads the schema header plus the single row both scenarios here produce, via client-v2's public
+   * {@link RowBinaryWithNamesAndTypesFormatReader} directly — same shape as {@link
    * LatencyPathVariantABenchmark}/{@link LatencyPathVariantBBenchmark}'s equivalent methods, so
    * decode cost is comparable across all three classes.
    */

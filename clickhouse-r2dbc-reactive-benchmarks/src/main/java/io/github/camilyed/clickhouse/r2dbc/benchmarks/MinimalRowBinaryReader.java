@@ -11,11 +11,12 @@ import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Task following the closed-out latency-path-isolation ladder (docs/performance/latency-path-isolation.md):
- * that ladder tested copy-avoidance (Variant B), query/statement construction cost (task #309), and
- * admission-gate ordering (Variant C) — none explained {@code LatencyPathVariantABenchmark}'s ~2.6-4.9%
- * mean deficit vs. client-v2. One layer none of those four hypotheses ever isolated: client-v2's own
- * {@code RowBinaryWithNamesAndTypesFormatReader}/{@code AbstractBinaryFormatReader}/{@code
+ * Task following the closed-out latency-path-isolation ladder
+ * (docs/performance/latency-path-isolation.md): that ladder tested copy-avoidance (Variant B),
+ * query/statement construction cost (task #309), and admission-gate ordering (Variant C) — none
+ * explained {@code LatencyPathVariantABenchmark}'s ~2.6-4.9% mean deficit vs. client-v2. One layer
+ * none of those four hypotheses ever isolated: client-v2's own {@code
+ * RowBinaryWithNamesAndTypesFormatReader}/{@code AbstractBinaryFormatReader}/{@code
  * BinaryStreamReader} parsing machinery itself — its per-value type dispatch, buffering, and
  * allocation pattern while decoding varints/strings/decimals off the wire.
  *
@@ -48,9 +49,9 @@ final class MinimalRowBinaryReader implements AutoCloseable {
 
   /**
    * Parses the {@code RowBinaryWithNamesAndTypes} header off {@code source} — column count, then
-   * that many names (read and discarded; this class decodes positionally, matching how every
-   * caller in this module already reads columns by index), then that many type names, resolved to
-   * a {@link ColumnType} each.
+   * that many names (read and discarded; this class decodes positionally, matching how every caller
+   * in this module already reads columns by index), then that many type names, resolved to a {@link
+   * ColumnType} each.
    */
   static MinimalRowBinaryReader open(final InputStream source) throws IOException {
     final PushbackInputStream in = new PushbackInputStream(source, 1);
@@ -71,8 +72,8 @@ final class MinimalRowBinaryReader implements AutoCloseable {
   /**
    * The next row's values, positionally matching the header's column order, or {@code null} once
    * the stream is exhausted — mirrors client-v2's own {@code reader.next() == null} end-of-stream
-   * convention, checked via a one-byte peek/pushback rather than a dedicated row-count prefix
-   * (this wire format has none; end of stream is the only terminator).
+   * convention, checked via a one-byte peek/pushback rather than a dedicated row-count prefix (this
+   * wire format has none; end of stream is the only terminator).
    */
   @Nullable Object[] nextRow() throws IOException {
     final int first = in.read();
@@ -161,7 +162,10 @@ final class MinimalRowBinaryReader implements AutoCloseable {
     return new String(bytes, StandardCharsets.UTF_8);
   }
 
-  /** The only four ClickHouse wire types this benchmark-local decoder understands — see class Javadoc. */
+  /**
+   * The only four ClickHouse wire types this benchmark-local decoder understands — see class
+   * Javadoc.
+   */
   private enum ColumnType {
     UINT8,
     UINT64,

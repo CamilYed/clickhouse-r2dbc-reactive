@@ -22,33 +22,33 @@ import org.openjdk.jmh.infra.Blackhole;
  * already ruled out the {@code asByteArray()} copy as the cause; GC was ruled out earlier via
  * {@code -prof gc}).
  *
- * <p>No network, no container, no transport, no decoding — isolates exactly the object
- * construction {@link io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseStatement}'s
- * constructor and {@code execute()} perform per query, matching that class's source line for
- * line (see its {@code executeOneBindingSet}/constructor):
+ * <p>No network, no container, no transport, no decoding — isolates exactly the object construction
+ * {@link io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseStatement}'s constructor and
+ * {@code execute()} perform per query, matching that class's source line for line (see its {@code
+ * executeOneBindingSet}/constructor):
  *
  * <ul>
- *   <li>{@link #parameterNamesInPointSql} — {@link ClickHouseQuery#parameterNamesIn(String)},
- *       run once per {@code ClickHouseStatement} construction, not per {@code execute()} call.
- *   <li>{@link #uuidGeneration} / {@link #uuidGenerationContended} — {@link
- *       UUID#randomUUID()}, the first thing {@link ClickHouseQuery#of(String)} does. {@code
- *       UUID.randomUUID()} draws from a JDK-shared {@code SecureRandom} instance guarded by a
- *       single lock — a plausible source of a flat, load-independent-looking deficit if that
- *       lock or its underlying entropy source is the bottleneck, which is exactly why {@link
- *       #uuidGenerationContended} repeats the same call under {@code @Threads(8)}, matching
- *       {@code LatencyPathVariantABenchmark}'s own {@code -t8} concurrency level, to see whether
- *       contention changes the picture the single-threaded number alone can't show.
+ *   <li>{@link #parameterNamesInPointSql} — {@link ClickHouseQuery#parameterNamesIn(String)}, run
+ *       once per {@code ClickHouseStatement} construction, not per {@code execute()} call.
+ *   <li>{@link #uuidGeneration} / {@link #uuidGenerationContended} — {@link UUID#randomUUID()}, the
+ *       first thing {@link ClickHouseQuery#of(String)} does. {@code UUID.randomUUID()} draws from a
+ *       JDK-shared {@code SecureRandom} instance guarded by a single lock — a plausible source of a
+ *       flat, load-independent-looking deficit if that lock or its underlying entropy source is the
+ *       bottleneck, which is exactly why {@link #uuidGenerationContended} repeats the same call
+ *       under {@code @Threads(8)}, matching {@code LatencyPathVariantABenchmark}'s own {@code -t8}
+ *       concurrency level, to see whether contention changes the picture the single-threaded number
+ *       alone can't show.
  *   <li>{@link #queryOfSelect1} — the full {@code ClickHouseQuery.of(sql)} call {@code
- *       ClickHouseStatement.executeOneBindingSet} makes for every query, {@code SELECT 1} shape
- *       (no parameters to encode).
+ *       ClickHouseStatement.executeOneBindingSet} makes for every query, {@code SELECT 1} shape (no
+ *       parameters to encode).
  *   <li>{@link #queryOfPointWithParameters} — the same call plus {@link
  *       ClickHouseQuery#withParameters(Map)}, the point-lookup shape (one bound {@code UInt64}
  *       parameter, encoded via {@code Long#toString()}).
  * </ul>
  *
  * <p>{@link #SELECT_BY_ID_SQL} mirrors {@code LatencyPathVariantABenchmark}/{@code
- * LatencyPathVariantBBenchmark}'s own point-query SQL text and {@link PointQueryTable#NAME}, so
- * the scanned/parsed SQL shape here is the real one, not a simplified stand-in.
+ * LatencyPathVariantBBenchmark}'s own point-query SQL text and {@link PointQueryTable#NAME}, so the
+ * scanned/parsed SQL shape here is the real one, not a simplified stand-in.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
