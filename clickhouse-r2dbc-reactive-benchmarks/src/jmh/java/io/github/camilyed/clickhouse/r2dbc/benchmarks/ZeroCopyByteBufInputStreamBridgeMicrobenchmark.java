@@ -107,13 +107,25 @@ public class ZeroCopyByteBufInputStreamBridgeMicrobenchmark {
   /**
    * The same freshly-allocated {@link ByteBuf}, fed directly into {@link
    * ZeroCopyByteBufInputStreamBridge} — no intermediate copy.
+   *
+   * <p>{@code Flux.just(buf)} delivers {@code onNext} synchronously inside {@code subscribeTo}'s
+   * constructor call (confirmed by this benchmark's own first, leak-detected run) but — unlike real
+   * Reactor Netty {@code ByteBufFlux} sources — does not itself release the buffer once {@code
+   * onNext} returns. {@link ZeroCopyByteBufInputStreamBridge}'s {@code hookOnNext} retains on the
+   * assumption that release will happen (the documented Netty "retain past onNext" contract real
+   * Reactor Netty sources honor), so this benchmark must perform that release itself, once, right
+   * after {@code subscribeTo} returns — simulating the production auto-release rather than skipping
+   * it. Confirmed missing by the ~10GB direct-memory exhaustion this class's first run hit at the
+   * larger {@link #responseBytes} tiers: without this release, every invocation leaked one buffer.
    */
   @Benchmark
   public void zeroCopyPath(final Blackhole blackhole) {
     final ByteBuf buf = ByteBufAllocator.DEFAULT.buffer(payload.length);
     buf.writeBytes(payload);
-    final Flux<ByteBuf> source = Flux.just(buf);
-    blackhole.consume(readFully(ZeroCopyByteBufInputStreamBridge.subscribeTo(source, DEMAND)));
+    final ZeroCopyByteBufInputStreamBridge bridge =
+        ZeroCopyByteBufInputStreamBridge.subscribeTo(Flux.just(buf), DEMAND);
+    buf.release(); // simulates Reactor Netty's own auto-release-after-onNext (see Javadoc above)
+    blackhole.consume(readFully(bridge));
   }
 
   private long readFully(final InputStream source) {
