@@ -73,12 +73,16 @@ final class MinimalRowBinaryReader implements AutoCloseable {
    * The next row's values, positionally matching the header's column order, or {@code null} once
    * the stream is exhausted — mirrors client-v2's own {@code reader.next() == null} end-of-stream
    * convention, checked via a one-byte peek/pushback rather than a dedicated row-count prefix (this
-   * wire format has none; end of stream is the only terminator).
+   * wire format has none; end of stream is the only terminator). Deliberately {@code null} rather
+   * than an empty array: this is a distinct "no more rows" sentinel, not a zero-length row, and
+   * every JMH caller in this module already branches on {@code == null} to match client-v2's own
+   * convention above — switching to an empty array would make that comparison silently wrong
+   * instead of a compile error.
    */
-  @Nullable Object[] nextRow() throws IOException {
+  @Nullable Object[] nextRow() throws IOException { // NOSONAR - see Javadoc above
     final int first = in.read();
     if (first == -1) {
-      return null;
+      return null; // NOSONAR - see method Javadoc: null is an intentional end-of-stream sentinel
     }
     in.unread(first);
     final Object[] values = new Object[columns.length];

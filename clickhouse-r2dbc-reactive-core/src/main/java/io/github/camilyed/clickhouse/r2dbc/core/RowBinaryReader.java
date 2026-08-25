@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -31,6 +32,14 @@ sealed interface RowBinaryReader
    */
   Object[] nextRowValues();
 
-  /** Releases this reader's underlying stream. */
-  void close() throws Exception;
+  /**
+   * Releases this reader's underlying stream. Declared as {@link IOException} rather than the
+   * generic {@link Exception} so callers get a specific, catchable failure type instead of the
+   * broadest possible one. {@link NativeRowBinaryReader} and {@link EmptyRowBinaryReader} only ever
+   * throw {@link IOException} directly; {@link ListDecodingRowBinaryReader} inherits client-v2's
+   * {@code AbstractBinaryFormatReader.close() throws Exception} (it only ever calls {@code
+   * InputStream.close()} internally, so this is not a real widening in practice) and narrows it back
+   * down to {@link IOException} itself — see that class's own {@code close()} override.
+   */
+  void close() throws IOException;
 }

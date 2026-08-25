@@ -203,4 +203,25 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
     next();
     return currentRecord.clone();
   }
+
+  /**
+   * Narrows client-v2's inherited {@code close() throws Exception} ({@code
+   * AbstractBinaryFormatReader.close()}, which only ever closes the underlying {@link
+   * InputStream}) down to {@link IOException} — the specific type {@link RowBinaryReader}'s
+   * contract declares. {@code super.close()} cannot itself throw anything but an {@link
+   * IOException} in practice (it only calls {@code InputStream.close()}), so this translation is
+   * exhaustive, not a guess: an unexpected checked exception from a future client-v2 version would
+   * still surface, wrapped, rather than silently satisfying a narrower contract it doesn't actually
+   * meet.
+   */
+  @Override
+  public void close() throws IOException {
+    try {
+      super.close();
+    } catch (final IOException e) {
+      throw e;
+    } catch (final Exception e) {
+      throw new IOException(e);
+    }
+  }
 }

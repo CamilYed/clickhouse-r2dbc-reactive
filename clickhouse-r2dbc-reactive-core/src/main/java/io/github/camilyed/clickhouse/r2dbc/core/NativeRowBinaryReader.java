@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.io.UncheckedIOException;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Decodes {@code RowBinaryWithNamesAndTypes} rows directly, bypassing client-v2's {@code
@@ -82,7 +83,12 @@ final class NativeRowBinaryReader implements RowBinaryReader {
     }
   }
 
-  private Object decodeOneValue(final ColumnPlan plan) throws IOException {
+  /**
+   * Returns {@code null} for a {@code Nullable} column whose wire value is the null marker byte —
+   * a legitimate decoded value, not an absent one, so this method is deliberately {@link Nullable}
+   * rather than relying on the package's {@code @NullMarked} default.
+   */
+  private @Nullable Object decodeOneValue(final ColumnPlan plan) throws IOException {
     if (plan.nullable()) {
       final int isNull = RowBinaryWireFormat.readRequiredByte(in);
       if (isNull == 1) {

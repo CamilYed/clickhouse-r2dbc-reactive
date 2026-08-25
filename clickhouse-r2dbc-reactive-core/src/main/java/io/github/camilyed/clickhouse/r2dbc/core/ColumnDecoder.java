@@ -135,6 +135,50 @@ enum ScalarColumnDecoder implements ColumnDecoder {
     public Object decode(final InputStream in, final byte[] scratch) throws IOException {
       return RowBinaryWireFormat.readString(in);
     }
+  },
+
+  /**
+   * {@code Int128} → {@link BigInteger} (signed) — little-endian 16 bytes; matches client-v2's
+   * {@code readBigIntegerLE(16, false)}.
+   */
+  INT128 {
+    @Override
+    public Object decode(final InputStream in, final byte[] scratch) throws IOException {
+      return RowBinaryWireFormat.readSignedBigIntegerLE(in, scratch, 16);
+    }
+  },
+
+  /**
+   * {@code UInt128} → {@link BigInteger} (unsigned) — little-endian 16 bytes; matches client-v2's
+   * {@code readBigIntegerLE(16, true)}.
+   */
+  UINT128 {
+    @Override
+    public Object decode(final InputStream in, final byte[] scratch) throws IOException {
+      return RowBinaryWireFormat.readUnsignedBigIntegerLE(in, scratch, 16);
+    }
+  },
+
+  /**
+   * {@code Int256} → {@link BigInteger} (signed) — little-endian 32 bytes; matches client-v2's
+   * {@code readBigIntegerLE(32, false)}.
+   */
+  INT256 {
+    @Override
+    public Object decode(final InputStream in, final byte[] scratch) throws IOException {
+      return RowBinaryWireFormat.readSignedBigIntegerLE(in, scratch, 32);
+    }
+  },
+
+  /**
+   * {@code UInt256} → {@link BigInteger} (unsigned) — little-endian 32 bytes; matches client-v2's
+   * {@code readBigIntegerLE(32, true)}.
+   */
+  UINT256 {
+    @Override
+    public Object decode(final InputStream in, final byte[] scratch) throws IOException {
+      return RowBinaryWireFormat.readUnsignedBigIntegerLE(in, scratch, 32);
+    }
   }
 }
 

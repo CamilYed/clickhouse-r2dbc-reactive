@@ -7,7 +7,9 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * The {@code RowBinaryWithNamesAndTypes} header — column count, names, and ClickHouse type strings
@@ -26,6 +28,11 @@ import java.util.List;
  * was read and reports zero columns" — matches client-v2's own {@code
  * RowBinaryWithNamesAndTypesFormatReader#readSchema()}, which catches an {@link EOFException} on
  * the very first varint read and leaves its schema {@code null} rather than an empty one.
+ *
+ * <p>Overrides {@code equals}/{@code hashCode}/{@code toString} rather than using the record's
+ * generated ones — {@code rawBytes} is a {@code byte[]}, and array fields don't get content-aware
+ * behavior for free from a record (the generated methods would compare/print array identity, not
+ * content).
  */
 record RowBinaryHeader(List<ClickHouseColumn> columns, byte[] rawBytes, boolean present) {
 
@@ -47,6 +54,35 @@ record RowBinaryHeader(List<ClickHouseColumn> columns, byte[] rawBytes, boolean 
       columns.add(ClickHouseColumn.of(names.get(i), typeName));
     }
     return new RowBinaryHeader(columns, capturing.capturedBytes(), true);
+  }
+
+  @Override
+  public boolean equals(final Object o) {
+    if (this == o) {
+      return true;
+    }
+    if (!(o instanceof final RowBinaryHeader other)) {
+      return false;
+    }
+    return present == other.present
+        && columns.equals(other.columns)
+        && Arrays.equals(rawBytes, other.rawBytes);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(columns, Arrays.hashCode(rawBytes), present);
+  }
+
+  @Override
+  public String toString() {
+    return "RowBinaryHeader[columns="
+        + columns
+        + ", rawBytes="
+        + Arrays.toString(rawBytes)
+        + ", present="
+        + present
+        + "]";
   }
 
   /** Tees every byte read from the wrapped stream into a growable in-memory capture buffer. */

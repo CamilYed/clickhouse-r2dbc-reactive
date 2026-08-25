@@ -297,7 +297,7 @@ public final class RowBinaryDecoder {
   private static void closeReader(final RowBinaryReader reader) {
     try {
       reader.close();
-    } catch (final Exception e) {
+    } catch (final IOException e) {
       throw new RowBinaryDecoderCloseException(e);
     }
   }
