@@ -211,9 +211,73 @@ caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
   -Pjmh.includes=ZeroCopyByteBufInputStreamBridgeMicrobenchmark -Pjmh.forks=3
 ```
 
-Not yet run — built following the user's choice ("zbuduj benchmark bez sieci") to settle the
-copy-cost question independent of which machine runs it, rather than rerunning the network-bound
-benchmark on CI.
+**First real run caught a genuine leak — in the benchmark harness, not in
+`ZeroCopyByteBufInputStreamBridge` itself.** Every `zeroCopyPath` invocation leaked its synthetic
+`ByteBuf`, exhausting direct memory (~9.6GB, the default `-XX:MaxDirectMemorySize` ceiling) at the
+larger `responseBytes` tiers and producing bogus multi-second p100 values before an `OutOfMemoryError`
+killed the run. Cause: `Flux.just(buf)` delivers `onNext` synchronously inside `subscribeTo`'s
+constructor call, but — unlike real Reactor Netty `ByteBufFlux` sources — never itself releases the
+buffer once `onNext` returns; the bridge's `hookOnNext` retains on the assumption that release will
+happen, per Netty's documented "retain past `onNext`" contract, which `Flux.just` doesn't honor.
+`LatencyPathVariantABenchmark`'s (sic — `LatencyPathVariantBBenchmark`'s) earlier real-HTTP trusted run
+was leak-clean, confirming the bridge class itself is correct against actual Reactor Netty sources —
+this was purely a synthetic-harness gap. Fixed (commit `8f8b0e0`) by having the benchmark simulate that
+auto-release itself, once, right after `subscribeTo` returns. `copyPath`'s numbers from the failed run
+were unaffected (it never touches the leaking code path) and are folded into the clean run below.
+
+**Clean single-fork sanity run, after the fix (2026-08-25) — decisive, and in the opposite direction
+from the copy-avoidance hypothesis:**
+
+| `responseBytes` | `copyPath` mean (µs) | `zeroCopyPath` mean (µs) | zero-copy vs. copy |
+| --- | --- | --- | --- |
+| 64 | 2.552 ± 0.011 | 3.969 ± 0.008 | **+55.5% slower** |
+| 256 | 2.587 ± 0.010 | 3.943 ± 0.009 | **+52.4% slower** |
+| 1024 | 2.645 ± 0.009 | 4.015 ± 0.008 | **+51.8% slower** |
+| 4096 | 2.853 ± 0.016 | 4.155 ± 0.007 | **+45.6% slower** |
+| 16384 | 3.836 ± 0.010 | 4.484 ± 0.009 | +16.9% slower |
+| 65536 | 7.323 ± 0.026 | 7.112 ± 0.015 | ~2.9% faster |
+
+No leak, no OOM, no multi-second p100 outliers (max p100 across all tiers/both paths: 816µs at
+`responseBytes=65536`) — a healthy run. And it settles the question this section opened with: the
+effect isn't buried under this machine's noise floor, because at these sample counts (528k-1.04M per
+cell) and this error magnitude (±0.01-0.03µs), a 45-55% gap isn't noise on any machine. **Zero-copy is
+consistently and substantially *slower* than the copy path at every response size real `SELECT
+1`/point queries actually produce (tens to low hundreds of bytes), only catching up around 16-64KB.**
+The explanation is straightforward once isolated like this: a `memcpy` of a few dozen/few hundred
+bytes is nearly free (`System.arraycopy`-backed, sub-microsecond); `ZeroCopyByteBufInputStreamBridge`'s
+own machinery — atomic retain/release refcount operations, a `Deque<ByteBuf>`, sealed-interface
+record-pattern dispatch — has its own fixed per-call cost that a tiny copy never gets the chance to
+outweigh. Only once the response is tens of KB does the O(n) copy cost finally catch up to that fixed
+overhead.
+
+**This also would fully explain, rather than just temper, the earlier real-HTTP ambiguity** — the
+≤1.3%, sign-flipping result reading as two small, opposite-signed, genuinely negligible effects
+swamped by ~600-1150µs of network/HTTP/Docker cost — *if* the number above is trustworthy as-is.
+
+**Open confound, caught before finalizing anything: this run still had `-Dio.netty.leakDetection.level=paranoid`
+active** (same `-Pjmh.jvmArgsAppend` used for the leak-detection pass, not cleared for the
+results-producing run). Under paranoid mode, every `ByteBuf` method call is routed through
+`AdvancedLeakAwareByteBuf`, which records an access entry on each call — `zeroCopyPath` touches the
+`ByteBuf` across its *entire* read/close lifecycle (`retain`, repeated `isReadable`/`readableBytes`/
+`readBytes`, `release`), while `copyPath` touches it only 3-4 times up front before handing off to a
+plain, uninstrumented `byte[]`/`ByteBuffer` for the rest of the pipeline. That asymmetry in
+leak-detector overhead — not sealed-interface dispatch (pattern matching over sealed records compiles
+to a cheap `instanceof`-chain + accessor call, negligible next to what's measured here) — is a live
+candidate for some or all of the 45-55% gap at small sizes. Correctness (no leak) was already verified
+separately; the number above needs a rerun **without** the leak-detection JVM args to be trusted as a
+timing result. Not retracting the direction yet — retracting the "final" framing until that rerun
+confirms the gap survives outside the leak detector's own overhead:
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=ZeroCopyByteBufInputStreamBridgeMicrobenchmark
+```
+
+If the gap survives clean (undetected, no `-Dio.netty.leakDetection.*`), the verdict above stands:
+reject copy-avoidance as a production change, `ZeroCopyByteBufInputStreamBridge` stays a diagnostic
+artifact per the "no production code changes" scope. If the gap shrinks dramatically or disappears
+without the leak detector's instrumentation tax, that's a different, more interesting finding —
+leak-detection overhead being large enough to flip a benchmark's verdict would be worth its own note.
 
 **Design, and three deliberate departures from Variant A worth knowing before reading numbers:**
 
