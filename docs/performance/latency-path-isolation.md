@@ -91,20 +91,23 @@ table), `thisDriverPoint`/`clientV2Point` (single-row parameterized lookup again
 not the 1M-row tier `StreamingScanBenchmark` already covers — this ladder targets fixed per-query
 overhead, which a large scan amortizes away.
 
-**How to run** (per the plan's "Concurrency" section — `pool=8` fixed in the class, concurrency via
-JMH's own thread flag against the shared `@State(Scope.Benchmark)` instance):
+**How to run** (per the plan's "Concurrency" section — `pool=8` fixed in the class; concurrency via
+`-Pjmh.threads`, wired into `build.gradle.kts` the same way `jmh.forks`/`jmh.warmupIterations`
+already were, specifically for this ladder — an unwired `-P` flag on this plugin is a silent no-op,
+per that file's own comment, so this had to be added rather than assumed):
 
 ```
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
-  -Pjmh.include=LatencyPathVariantABenchmark -Pjmh.threads=1 -Pjmh.forks=3
+  -Pjmh.includes=LatencyPathVariantABenchmark -Pjmh.threads=1 -Pjmh.forks=3
 
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
-  -Pjmh.include=LatencyPathVariantABenchmark -Pjmh.threads=8 -Pjmh.forks=3
+  -Pjmh.includes=LatencyPathVariantABenchmark -Pjmh.threads=8 -Pjmh.forks=3
 ```
 
-(adjust the exact Gradle JMH property names to whatever `clickhouse-r2dbc-reactive-benchmarks/build.gradle.kts`
-already wires for `-t`/`-f`/`-wi`/`-i` — see `docs/performance/running-benchmarks.md` for this
-project's actual invocation conventions; not re-verified against the build file in this pass).
+For the plan's "5-warmup/5-measurement" trusted-run deliverable target (once a quick default pass
+confirms the class runs clean first), add `-Pjmh.warmupIterations=5 -Pjmh.iterations=5`
+(`jmh.iterations` also newly wired alongside `jmh.threads` above — the build file's own defaults are
+1 warmup / 3 measurement iterations, 1 fork).
 
 **Not yet run** — same disclosed sandbox limitation as every other benchmark in this repo: no
 network access for the Gradle wrapper distribution or a JDK 21 toolchain in this environment. Needs
