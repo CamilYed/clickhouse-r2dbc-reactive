@@ -843,7 +843,8 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     explicit "no production change justified yet"). Falls back to profiling
     `ClickHouseStatement`/`ClickHouseQuery` construction (the third informal bullet above) only if
     A/B/C/D don't explain the gap.
-  - **Status: in progress (2026-08-25).** `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
+  - **Status: latency-path-isolation ladder done, no production change (2026-08-25).**
+    `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted
     3-fork runs at both `-t 1`/`-t 8`) are done — a flat ~2.6-4.9% `thisDriver` mean deficit vs.
@@ -863,13 +864,21 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     **Variant C** (transport-acquisition-before-decoder-admission) is the only remaining hypothesis:
     `LatencyPathVariantCBenchmark` prototypes calling `FluxInputStreamBridge.subscribeTo`
     (subscription = HTTP send) eagerly on the calling thread, before `subscribeOn(decodeScheduler)`,
-    instead of inside it as production does today. Single-fork sanity at `-t8` looked promising
-    (~1.5-2.0% faster for early acquisition, matching the predicted signature) but **did not
-    reproduce in the trusted 3-fork `-t8` rerun**: SELECT 1 shows no difference (~0.1%, noise-level)
-    and point *flips direction* (~1.3% slower for early acquisition, opposite sign from the
-    single-fork pass) — retracted as a lead, same discipline as Variant A's earlier tail-latency
-    retraction. A trusted `-t1` run is still pending for completeness but, with the `-t8` signal
-    gone, isn't expected to reverse this. Variant D not started.
+    instead of inside it as production does today. **Done, verdict: inconclusive, not adopted.**
+    Single-fork sanity at `-t8` looked promising (~1.5-2.0% faster for early acquisition) but did not
+    reproduce in the trusted 3-fork `-t8` rerun (SELECT 1 ~0.1% noise-level, point flipped to ~1.3%
+    slower). The trusted `-t1` run then showed the opposite of the predicted signature entirely — a
+    real, sizeable effect (~3.65%/~1.22% faster for early acquisition, 9x/3.5x combined error) at the
+    concurrency level where an admission-gate-contention mechanism shouldn't apply at all (nothing
+    contends for the pool or decoder scheduler at `-t1`). All four (scenario, concurrency)
+    combinations flip character between single-fork and trusted runs, and the two trusted rows per
+    scenario disagree with each other too — no coherent direction survives across independent runs.
+    Retracted/set aside per this project's standing discipline, same practical outcome as Variant
+    B/task #309 but for a different reason: not "effect too small," but "effect inconsistent and
+    non-reproducible at a magnitude too large to just average away." **All four original candidate
+    hypotheses (GC, the copy, construction cost, admission-gate ordering) now examined; none reliably
+    explains Variant A's deficit — "no production change justified yet" per this investigation's own
+    plan.** Variant D not started.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,

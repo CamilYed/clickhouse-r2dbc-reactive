@@ -68,7 +68,7 @@ source, not that earlier, since-superseded shape.
 | --- | --- | --- |
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
 | **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Settled — real payoff too small to matter.** Ownership proven correct (leak-clean real-HTTP run); real-HTTP timing inconclusive (≤1.3%, sign-flipping); network-free microbenchmark isolated the true cost: 15-35ns/call at production response sizes, negligible against a ~600-1150µs round trip. Not the source of Variant A's deficit — not adopted. See below. |
-| **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | **Built, awaiting sanity run** — `LatencyPathVariantCBenchmark`, the only remaining hypothesis (GC, the copy, and construction cost all ruled out; see task #309 above). See below. |
+| **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | **Done — inconclusive, not adopted.** Trusted 3-fork results at both concurrency levels are internally inconsistent (favors early acquisition at `-t1`, doesn't at `-t8` — the opposite of the predicted admission-gate-contention signature) and don't reproduce their own single-fork sanity passes either. Not confirmed, not confidently rejected on mechanism, not actionable. See below. |
 | **D — benchmark-local `BinaryInput` adapter (optional, only after A/B/C)** | Minimal `read()`/`readFully(...)` adapter removing the blocking-`InputStream` boundary for only the types this benchmark needs | Not started |
 
 ## Variant A — built, trusted 3-fork runs done at both concurrency levels
@@ -333,7 +333,7 @@ caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
   -Pjmh.includes=LatencyPathVariantBBenchmark -Pjmh.threads=8 -Pjmh.forks=3
 ```
 
-## Variant C — built, awaiting sanity run
+## Variant C — done, inconclusive, not adopted
 
 `LatencyPathVariantCBenchmark`
 (`clickhouse-r2dbc-reactive-benchmarks/src/jmh/java/.../LatencyPathVariantCBenchmark.java`) — the
@@ -430,12 +430,72 @@ to act on, and this one did not survive a trusted rerun.
 With the `-t8` signal gone — the concurrency level where an admission-gate-ordering effect would be
 expected to show up most clearly — a trusted `-t1` run isn't expected to reverse this, but is still
 worth collecting for completeness, matching Variant A/B's own two-concurrency-level protocol before
-writing a final verdict:
+writing a final verdict.
 
-```
-caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
-  -Pjmh.includes=LatencyPathVariantCBenchmark -Pjmh.threads=1 -Pjmh.forks=3
-```
+**Trusted 3-fork `-t1` run (2026-08-25) — surprising, and it does *not* rescue the hypothesis
+either.** Contrary to the expectation just above, `-t1` shows a real, sizeable difference — the
+opposite of the "negligible at `-t1`" prediction this whole section was built on:
+
+| Variant | Scenario | Concurrency | current-ordering mean (µs) | early-acquisition mean (µs) | current p99 (µs) | early p99 (µs) | early vs. current |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| C | SELECT 1 | 1 (**3-fork, trusted**) | 592.9 ± 1.25 | 571.3 ± 1.09 | 788.5 | 746.5 | ~3.65% **faster** |
+| C | point | 1 (**3-fork, trusted**) | 1138.2 ± 2.07 | 1124.4 ± 1.90 | 1413.1 | 1372.9 | ~1.22% **faster** |
+
+Both diffs are large relative to error (SELECT 1: 21.6µs diff vs. ±2.3µs combined error, ~9.3x;
+point: 13.9µs diff vs. ±4.0µs combined error, ~3.5x) — far too big to dismiss as noise on their own.
+But laid out against every other data point collected for this variant, no coherent story survives:
+
+| Scenario | Concurrency | Run | early vs. current |
+| --- | --- | --- | --- |
+| SELECT 1 | 1 | single-fork | ~0.6% slower |
+| SELECT 1 | 1 | **3-fork trusted** | ~3.65% **faster** |
+| SELECT 1 | 8 | single-fork | ~2.0% faster |
+| SELECT 1 | 8 | **3-fork trusted** | ~0.1% slower (noise) |
+| point | 1 | single-fork | ~0.9% slower |
+| point | 1 | **3-fork trusted** | ~1.22% **faster** |
+| point | 8 | single-fork | ~1.5% faster |
+| point | 8 | **3-fork trusted** | ~1.26% **slower** |
+
+Every one of the four (scenario, concurrency) combinations flips character between its single-fork
+and trusted-3-fork measurement, and the two trusted rows that exist per scenario don't agree with
+each other either: `-t1` trusted favors `earlyAcquisition` clearly in both scenarios; `-t8` trusted
+shows no benefit (SELECT 1) or a real cost (point) instead. This is the opposite pattern from what
+an admission-gate-contention effect predicts — that mechanism requires concurrency to manifest at
+all, so a real, sizeable effect at `-t1` (no contention by construction: one JMH thread, nothing
+else contending for the 8-connection pool or the 8-worker decoder scheduler) can't be explained by
+decoder-worker admission queueing. A more plausible mechanism for a `-t1`-only effect would be
+something unrelated to contention — e.g. `subscribeOn`'s cross-thread hand-off to a bounded-elastic
+worker having its own fixed latency that, in the current-ordering path, sits *before* the HTTP
+request is even sent (serialized), while early acquisition lets that hand-off latency overlap with
+the network round-trip's own latency instead. That would predict a `-t1` benefit independent of
+contention — consistent with what `-t1` shows — but doesn't explain why the same overlap wouldn't
+also help (or would actively hurt, for `point`) at `-t8`, where the decoder-scheduler's worker
+threads are presumably already warm and busy rather than needing a cold hand-off.
+
+**Verdict: inconclusive — not confirmed, and not confidently rejected on mechanism, but not
+actionable either way.** Per this project's own standing discipline (a finding that doesn't
+reproduce or flips direction across independent runs gets retracted, not defended), the honest
+reading of four internally-inconsistent (scenario, concurrency) results is that this benchmark
+setup cannot currently distinguish a real, reliable ordering effect from run-to-run noise/drift at
+the ~1-4% magnitude being measured here — noting that JMH runs each `@Benchmark` method's forks as
+its own sequential block by default (not interleaved with the other methods), so `currentOrdering*`
+and `earlyAcquisition*` for the same scenario are never measured concurrently within one invocation,
+leaving room for time-of-day-dependent machine/Docker/network drift between them that this design
+cannot separate from a genuine code effect. **Not adopted, same practical outcome as Variant B and
+task #309, but for a different reason: those were rejected because the measured effect was reliably
+too small; this one is set aside because the measured effect, when it appears, is large enough to
+matter but does not reproduce in a direction- or magnitude-consistent way.** A confident verdict
+either way would need a redesigned, lower-noise comparison (e.g. interleaving both orderings within
+a single fork via `@Benchmark` group profiling, or a dedicated JFR run correlating thread hand-off
+timing with request-send timing) — out of scope for this diagnostic-only pass.
+
+**All four original candidate hypotheses (GC, the `asByteArray()` copy, fixed query/statement
+construction cost, and admission-gate ordering) have now been examined. None provides a reliable,
+reproducible explanation for Variant A's flat ~2.6-4.9% mean deficit on `SELECT 1`/point.** Per this
+investigation's own plan (see top of this doc), "no production change justified yet" is an explicit,
+valid outcome — the deficit remains a real, measured, reproduced-across-two-independent-3-fork-runs
+characteristic of the current implementation vs. client-v2, but its source is not established by
+any of the four hypotheses this ladder was built to test.
 
 ## A/B/C/D result table
 
@@ -582,10 +642,22 @@ is the only remaining hypothesis from this investigation's original candidate li
 
 ## Hypothesis-ranking decision table
 
-Not populated yet — depends on the result table above. Will rank byte-copy /
-scheduler-admission-placement / `InputStream`-adaptation / fixed-statement-setup, each keep/reject
-with the measured delta, per the plan's "Deliverable" section, and end in **exactly one** recommended
-next production change (or an explicit "no production change justified yet").
+| Hypothesis | Test | Measured delta | Verdict |
+| --- | --- | --- | --- |
+| GC pauses | `-prof gc` on `LatencyPathVariantABenchmark` (trusted `-t8`) | `thisDriver` allocates far less/op but GC *time* is comparable-or-higher for `point`; spread across ops, ≤ ~1.3µs/op — far below the ~46-103µs deficit | **Reject** |
+| `asByteArray()` `ByteBuf`→`byte[]`→`ByteBuffer` copy | Variant B — real-HTTP `-t1` trusted, then network-free `ZeroCopyByteBufInputStreamBridgeMicrobenchmark` | Real-HTTP: ≤1.3%, sign-flipping between scenarios. Isolated cost: 15-35ns/call at real response sizes — ~1000x too small vs. the ~24-103µs deficit | **Reject** |
+| Fixed query/statement construction (`ClickHouseQuery.of`/`.withParameters`/UUID generation/SQL placeholder scan) | Task #309 — `QueryConstructionMicrobenchmark`, including 8-way-contended UUID generation | 0.16-3.6µs total (even crediting the full contention penalty) vs. a 24-103µs deficit — 20-150x too small | **Reject** |
+| Transport-acquisition-before-decoder-admission ordering | Variant C — `LatencyPathVariantCBenchmark`, single-fork sanity + trusted 3-fork at both `-t1`/`-t8` | Real, sizeable effects appear (up to ~3.65%) but with no consistent direction: favors early acquisition at trusted `-t1` (the concurrency level where the mechanism shouldn't apply), doesn't at trusted `-t8` (where it should); doesn't reproduce its own single-fork sanity pass in any of the four (scenario, concurrency) cells | **Inconclusive — not adopted** (not "too small," but not reproducible) |
+
+**Recommended next production change: none.** All four candidate hypotheses from this
+investigation's original plan have been tested; none provides a reliable, reproducible explanation
+for Variant A's flat ~2.6-4.9% mean deficit on `SELECT 1`/point (streaming, by contrast, is already
+~9-17% faster and needs no change). Per the plan's own explicitly allowed outcome, this is
+**"no production change justified yet"** — the deficit is real and reproduced across two independent
+trusted 3-fork runs, but its source remains unestablished by this ladder. Further investigation, if
+pursued, would need a lower-noise methodology than this benchmark harness currently provides (e.g.
+interleaved same-fork comparison, or a dedicated JFR/async-profiler run against Variant A itself
+rather than against isolated hypotheses) — a new, separate piece of work, not a continuation of A/B/C/D.
 
 ## Explicitly out of scope for this pass
 
