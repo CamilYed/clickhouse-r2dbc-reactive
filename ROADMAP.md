@@ -57,7 +57,13 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
 - **[Phase 11 — Benchmark methodology hardening](#phase-11--benchmark-methodology-hardening)** —
   the cloud-verified result above changed the performance story (client-v2 now ahead on
   throughput/latency, this driver ahead on allocation) substantially enough that the methodology
-  itself needs hardening before any further driver optimization. Planned 2026-08-23.
+  itself needs hardening before any further driver optimization. Planned 2026-08-23. **Closed**
+  2026-08-24, all five PRs done.
+- **[Phase 12 — Spring Boot end-to-end macrobenchmark](#phase-12--spring-boot-end-to-end-macrobenchmark-planned-not-started)**
+  — a real WebFlux application (`DatabaseClient` → this driver or client-v2 → ClickHouse) measuring
+  what the JMH suite structurally can't: HTTP/JSON/cancellation overhead layered on top of the
+  driver. Proposed 2026-08-24, not started — the plan is fully written (module shape, fairness
+  config, four scenarios, PR1-PR5 sequence) but no code exists yet.
 
 ## Later (deferred, was blocked on Phase 11)
 
@@ -673,6 +679,188 @@ path.
 - If PR2/PR4's profiling shows the cross-thread handoff is a small, absorbable cost, this idea stays
   parked — reusing client-v2's decoder remains the right trade-off (one proven parser to maintain,
   not two).
+
+## Phase 12 — Spring Boot end-to-end macrobenchmark (planned, not started)
+
+Proposed 2026-08-24 via an external review doc (cross-checked against current `main`, same
+due-diligence pattern as the virtual-thread and `FluxInputStreamBridge` reviews above — see task
+list item "incorporate macrobench + performance review doc" for the full source). Everything in
+[Phase 11](#phase-11--benchmark-methodology-hardening) and the [mega
+sweep](docs/performance/results.md#full-mega-sweep--every-scenario-one-run-2026-08-24) measures
+this driver at the JMH/public-SPI level. The layer still missing: a real Spring Boot WebFlux
+application, `DatabaseClient`, HTTP server, JSON/NDJSON encoding — does the small JMH-level latency
+gap still matter once a whole request path is included, and does streaming/allocation/cancellation
+behavior hold up the same way end to end?
+
+**Goal:** `load generator → Spring Boot WebFlux → same endpoint contract → this driver or client-v2
+→ same ClickHouse instance → same SQL/data/response DTO`. Complements the JMH suite, does not
+replace it.
+
+**Shape of the module** (new, non-published — `clickhouse-r2dbc-reactive-macrobench`, depending on
+`project(":clickhouse-r2dbc-reactive-connector")` so it benchmarks current source, not the
+published release the way `examples/spring-boot-webflux-demo` deliberately does):
+
+- One `BenchmarkQueryBackend` interface, two implementations (`R2dbcBenchmarkQueryBackend`,
+  `ClientV2BenchmarkQueryBackend`), four scenarios each: `point` (per-request overhead),
+  `analytics` (real multi-JOIN/GROUP BY/aggregation query, server-side-seeded ~5M-row fact table +
+  dimensions via `INSERT ... SELECT FROM numbers(...)`), `stream` (10k/100k/1M-row NDJSON, not
+  buffered JSON), `cancel` (abort in-flight HTTP requests, correlate against
+  `system.processes`/`system.query_log` via a query-id prefix, confirm pool recovery).
+- `benchmark.backend=both` (dual, for local A/B) vs `benchmark.backend=r2dbc`/`client-v2`
+  (isolated — required for trusted CPU/RSS/thread measurements, since an idle backend's threads
+  still contaminate process-level resource numbers in dual mode).
+- Primary fairness config: 8 physical connections both sides, **no outer `io.r2dbc.pool`** on the
+  R2DBC side (the real pool is already `ClickHouseHttpTransport`'s Reactor Netty
+  `ConnectionProvider` — an outer logical pool would add a queue this project's own docs already
+  say most users don't need, contaminating the primary comparison; a separate scenario can quantify
+  its cost later), `useAsyncRequests(true)` explicit on client-v2 (the same fairness bug Phase 11
+  PR1 already fixed once — see [archive.md](docs/performance/archive.md)), response compression on
+  both.
+- Open-loop load (k6 constant-arrival-rate or wrk2), not `ab` (closed-loop, hides tail behavior
+  under overload) — `ab` stays a local smoke-test tool only. Paired A/B rounds alternating order (≥5
+  pairs), deliberate warmup phase excluded from measurement, `system.query_log` correlation to
+  separate "HTTP end-to-end" from "ClickHouse execution time," process CPU/RSS/thread/GC collection
+  per isolated run. Manual `macro-benchmark.yml` workflow, not on every PR.
+
+**Recommended PR sequence** (do not build this in one PR): PR1 infrastructure only (module,
+backends, dataset seeding, endpoints, smoke + trusted scripts, resource collector, manual CI
+workflow — no production driver changes) → PR2 run + document a baseline report → PR3 isolate the
+`asByteArray()`/`ByteBuf` copy question below → PR4 prototype decoupling transport
+acquisition from decoder-scheduler admission → PR5 the first actual production optimization, only
+once PR2-4 evidence identifies a real bottleneck, verified with JMH **and** the macrobenchmark
+before/after.
+
+**PR1 status (2026-08-24): infrastructure built, not yet run.** The `clickhouse-r2dbc-reactive-macrobench`
+module exists with the `point`/`analytics`/`stream` scenarios, both backends, dataset seeding, the
+`BenchmarkController` endpoint contract, and a manual `.github/workflows/macro-benchmark.yml`
+smoke check (boots the app, seeds a small dataset, curls each active backend's endpoints — not a
+load test). Deliberately narrower than the full PR1 description above, disclosed rather than
+silently dropped: the `cancel` scenario is not implemented (needs per-backend cancellation-signal
+wiring plus `system.processes`/`system.query_log` correlation — a materially different, riskier
+piece than the other three scenarios, tracked as a PR1 follow-up rather than rushed in
+unverified), and there's no k6/wrk2 open-loop load generator, paired-A/B-round script, or resource
+collector yet — those are PR2's actual job per the sequence above, not scope creep to add here. A
+small `scripts/run-ab.sh` was added for quick local iteration (warmup pass discarded, then a
+measured `ab` run per backend/scenario) — explicitly documented as a local tool only, not a
+substitute for PR2's open-loop methodology, since `ab` is closed-loop and can't show tail-latency
+behavior under real overload.
+Also not yet done in this sandbox: a real Gradle build/test run (no network for the Gradle wrapper
+distribution in this environment) — needs `./gradlew :clickhouse-r2dbc-reactive-macrobench:spotlessCheck
+:clickhouse-r2dbc-reactive-macrobench:test` before merging, same disclosed limitation as the
+9-benchmark-class dispose fix above.
+
+**First real local run + a fairness bug it surfaced (2026-08-24).** The user ran
+`scripts/ab-summary.sh stress` (50000 requests, concurrency 200, warmup 5000) locally against both
+backends — the first actual execution of this module, not just a source review. Numbers are in
+`clickhouse-r2dbc-reactive-macrobench/README.md`'s "Local results" section. That first run exposed
+exactly the fairness gap this Phase's own "8 physical connections both sides" design goal (above)
+was meant to prevent: neither backend had an explicit pool size wired up yet, and their defaults
+aren't equal — this driver defaulted to Reactor Netty's `max(availableProcessors, 8) * 2` (24
+connections on that machine), client-v2 to its own default of 10. Fixed same-day: `BenchmarkProperties`
+now carries a `poolSize` field (`benchmark.pool-size` / `MACROBENCH_POOL_SIZE`, default `8`), wired
+into both `R2dbcBackendConfiguration` (`transportMaxConnections`) and `ClientV2BackendConfiguration`
+(`setMaxConnections`), so every future run is pinned to an equal, explicit, known pool size by
+default instead of silently comparing two different resource budgets. Also added: `scripts/ab-summary.sh`
+(runs the full backend x scenario matrix, prints one comparison table instead of six raw `ab`
+reports) and a `stress` profile (`ab-summary.sh stress` — 50000 requests/concurrency 200/warmup
+5000, vs the `quick` default's 2000/10/200) for heavier local load than the smoke-test defaults.
+The README's documented numbers predate the pool-size fix and are explicitly labeled unreliable for
+that reason - PR2's actual trusted baseline (matched pool confirmed, real dataset sizing, k6/wrk2
+open-loop load, dedicated CI machine) is still open.
+
+**Candidate follow-up findings the review doc flagged from reading current `main`** (documented
+here, none implemented yet — do not reopen without new evidence, per the doc's own instruction):
+
+- **Byte-copy in the decode path.** `ClickHouseResult.decodePlain`/`decodeObserved` do
+  `response.body().asByteArray().map(ByteBuffer::wrap)` — a `byte[]` allocation per inbound Netty
+  chunk before it reaches `FluxInputStreamBridge`. Already tracked: task list item "Benchmark:
+  remove ByteBuf->byte[]->ByteBuffer copy in ClickHouseResult.decode." Doc's explicit warning worth
+  keeping: don't naively swap in `ByteBuf.nioBuffer()` — Netty ref-counting/lifetime means
+  `FluxInputStreamBridge` retaining a chunk past `onNext` makes a zero-copy view unsafe unless
+  ownership/release is redesigned; build an isolation benchmark first (parallel to the disciplined
+  approach the [`FluxInputStreamBridge` queue/copy
+  investigation](#fluxinputstreambridge-queuecopy-overhead--measured-ruled-out-as-a-bottleneck-2026-08-24)
+  above already used), only adopt if the real macro/JMH numbers improve.
+- **Decoder scheduler doubles as transport admission control.** `RowBinaryDecoder.decode`'s
+  `subscribeOn(RowDecodingScheduler)` means transport subscription/connection-acquire begins under
+  decoder-scheduler admission — two different concerns (decode scheduling, transport admission)
+  accidentally sharing one gate. This is the same territory as the [experiment idea
+  above](#experiment-idea-not-a-decision--rewrite-the-decode-path-off-client-v2s-blocking-reader)
+  and the still-open [matched-pool latency
+  gap](docs/performance/results.md#open-follow-ups) — a narrower, concrete prototype question
+  (*can transport acquisition happen without consuming a decoder worker, while the blocking reader
+  still never runs on the event loop?*) worth trying before committing to that experiment's much
+  larger "own non-blocking decoder" scope.
+- **Small-query fixed overhead, unmeasured.** `ClickHouseStatement`'s per-construction
+  `parameterNamesIn(sql)`, plus per-execution `ClickHouseQuery` construction (UUID `query_id`,
+  parameter-encoding map, immutable-map copy) — plausible contributor to the small, consistent
+  point-query/`SELECT 1` deficit the mega sweep shows, not yet profiled. Build a microbenchmark
+  around `Connection.createStatement(sql)`/bind/execute-preparation and profile allocation before
+  reaching for a cache — explicitly not a global unbounded SQL cache.
+- **Formal latency-path-isolation plan (2026-08-25), supersedes the three informal bullets above
+  with a disciplined A/B/C/D benchmark ladder.** A second, more rigorous ChatGPT-authored brief
+  ("CLAUDE_LATENCY_PATH_ISOLATION") formalizes exactly the three items above into one controlled
+  experiment instead of three separate ad-hoc investigations. Explicitly diagnostic-only — **no
+  production code changes** in this pass, not even client-v2 modifications beyond a
+  benchmark-local, non-published, minimal-type-coverage adapter (Variant D). Plan, condensed:
+  - **Variant A** — exact current production path (`ClickHouseHttpTransport` →
+    `response.body().asByteArray().map(ByteBuffer::wrap)` → `FluxInputStreamBridge` →
+    `RowDecodingScheduler` → client-v2's blocking RowBinary reader → `DecodedRow`), faithfully
+    reproduced, not simplified. Baseline.
+  - **Variant B** — same path, but avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy only if ownership
+    can be proven correct (no use-after-release, no leak, correct cancel/error/full-consumption
+    cleanup, verified under `-Dio.netty.leakDetection.level=paranoid`). Never naively retain
+    `ByteBuf.nioBuffer()` past `onNext`.
+  - **Variant C** — the most important one: prototype transport response acquisition/subscription
+    starting *before* decoder-scheduler admission, instead of today's
+    `Mono.fromCallable(() -> newReader(source, compression)).subscribeOn(decoderScheduler)` (which
+    means `RowDecodingScheduler` gates transport admission too, not just decode). Must not buffer
+    the whole response, block the event loop, or change cancellation/connection-reuse/pool-size/
+    decoder/compression. If genuinely impossible without a major redesign, document exactly why
+    instead of forcing it.
+  - **Variant D** (optional, only after A/B/C) — a benchmark-local `BinaryInput` interface
+    (`read()`/`readFully(...)`) adapting only the minimum client-v2 `BinaryStreamReader` source
+    needed to remove the blocking-`InputStream` boundary, supporting only the types the benchmark
+    actually needs (UInt64/String/Float64/Decimal/Nullable) — not full type coverage, not a
+    published fork, not upstream-modifying. Stop if the measured gain is negligible; do not evolve
+    into a full decoder.
+  - **Scenarios**: `SELECT 1`, single-row point lookup, 10k-row stream — deliberately *not* the
+    1M-row scan the mega sweep already covers, since fixed per-query overhead is exactly what a
+    large scan amortizes away.
+  - **Concurrency**: start at `pool=8`, `concurrency=1` (isolates fixed overhead, minimal queueing)
+    and `concurrency=8` (full matched-pool utilization) before touching 32/128 (introduces queueing
+    that can hide a ~100µs fixed cost).
+  - **Explicitly out of scope for this pass**: virtual-thread decoder default, decoder worker
+    widening, pending-acquire tuning, `ArrayBlockingQueue`/SPSC replacement,
+    `FluxInputStreamBridge` coalescing rewrite, response compression defaults, default pool size, a
+    full custom RowBinary decoder, and the Spring Boot macrobenchmark above — separate questions,
+    not this one.
+  - **Deliverable**: exact pipeline diagram from source, exact subscription/scheduling boundary
+    locations, A/B/C/D result table (clean 3-fork/5-warmup/5-measurement runs, no JFR, plus a
+    separate 1-fork JFR diagnostic run), a hypothesis-ranking decision table (byte-copy /
+    scheduler-admission-placement / InputStream-adaptation / fixed-statement-setup — keep/reject
+    each with the measured delta), and **exactly one** recommended next production change (or an
+    explicit "no production change justified yet"). Falls back to profiling
+    `ClickHouseStatement`/`ClickHouseQuery` construction (the third informal bullet above) only if
+    A/B/C/D don't explain the gap.
+  - **Status: planned, not started.** Waiting on the user's go-ahead once the current macrobench PR
+    (`feature/305-phase12-macrobench-pr1`) is merged — do not begin implementation before that
+    signal.
+- **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
+  claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
+  `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,
+  `MixedWorkloadRapidRefreshCancelBenchmark`, `PointQueryBenchmark`, `StreamingScanBenchmark`,
+  `TransportOnlyStreamingBenchmark`, `TrivialQueryBenchmark`) constructed their own
+  `ClickHouseHttpTransport` in `@Setup(Level.Trial)` but never called `.dispose()` on it in
+  `@TearDown(Level.Trial)` — confirmed via direct grep across the module, not just the one class
+  the doc named. Fixed directly (benchmark hygiene, no production code touched) rather than filed
+  as a future candidate, since it was small, mechanical, and verifiable on the spot.
+
+**Explicitly not reopened without new evidence** (per the doc's own list, matching this project's
+existing verdicts): `ArrayBlockingQueue`/SPSC ring-buffer tuning (ruled out, see the
+`FluxInputStreamBridge` section above), virtual-thread decoder as default (tied throughput, ~45%
+more allocation, not adopted), `decoderWorkerCount` widening past pool size (Phase 11 PR5, no
+help), response-compression parity (already symmetric).
 
 ## Working with Claude / IntelliJ
 

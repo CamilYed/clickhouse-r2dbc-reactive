@@ -101,11 +101,12 @@ public class AggregationBenchmark {
             .build();
   }
 
-  /** Releases client-v2's connection pool and this driver's decode scheduler. */
+  /** Releases client-v2's connection pool, this driver's decode scheduler, and its transport. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
     decodingScheduler.dispose();
+    ourTransport.dispose();
   }
 
   /**

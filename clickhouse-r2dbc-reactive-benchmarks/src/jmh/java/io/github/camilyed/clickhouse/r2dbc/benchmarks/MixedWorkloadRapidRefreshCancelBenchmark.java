@@ -183,13 +183,14 @@ public class MixedWorkloadRapidRefreshCancelBenchmark {
   }
 
   /**
-   * Releases client-v2's connection pool and this driver's decode scheduler at the end of the
-   * trial.
+   * Releases client-v2's connection pool, this driver's decode scheduler, and its transport at the
+   * end of the trial.
    */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
     decodingScheduler.dispose();
+    ourTransport.dispose();
   }
 
   /** Logs and resets each side's refresh-survival count once per measurement iteration. */

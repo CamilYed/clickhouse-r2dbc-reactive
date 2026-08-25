@@ -1,0 +1,39 @@
+server:
+  port: ${MACROBENCH_PORT:8081}
+
+spring:
+  r2dbc:
+    url: ${MACROBENCH_R2DBC_URL:r2dbc:clickhouse://localhost:8123/default}
+    username: ${MACROBENCH_CLICKHOUSE_USER:default}
+    password: ${MACROBENCH_CLICKHOUSE_PASSWORD:}
+
+# See ROADMAP.md's Phase 12 "Shape of the module" for the full design this configuration backs.
+benchmark:
+  # r2dbc | client-v2 | dual - see Backend#fromProperty. dual runs both backends in one process
+  # (local A/B); r2dbc/client-v2 alone are required for trusted CPU/RSS/thread measurements.
+  backend: ${MACROBENCH_BACKEND:dual}
+  # Local-smoke-test sizing by default - override for a "trusted" run (ROADMAP.md's Phase 12
+  # mentions a ~5M-row fact table for the analytics scenario).
+  point-rows: ${MACROBENCH_POINT_ROWS:100000}
+  analytics-rows: ${MACROBENCH_ANALYTICS_ROWS:100000}
+  # Physical connection pool size both backends are pinned to (r2dbc via transportMaxConnections,
+  # client-v2 via setMaxConnections) - see BenchmarkProperties' Javadoc for why this defaults to a
+  # fixed, equal value instead of leaving each backend at its own (different) built-in default.
+  pool-size: ${MACROBENCH_POOL_SIZE:8}
+  # Escape hatch from the pinning above: true skips transportMaxConnections entirely for the r2dbc
+  # backend, leaving it at this driver's own CPU-scaled default - client-v2 still gets pool-size.
+  # For deliberately saturating client-v2's (smaller, fixed) pool under load while r2dbc has
+  # headroom to spare - see BenchmarkProperties' Javadoc.
+  unpin-r2dbc-pool: ${MACROBENCH_UNPIN_R2DBC_POOL:false}
+  clickhouse:
+    # Bare HTTP endpoint, not an r2dbc:clickhouse://... URL - see ClickHouseEndpointProperties'
+    # own Javadoc for why this is a separate config surface from spring.r2dbc.url above. Used by
+    # the client-v2 backend and by DatasetSeeder's plain-HTTP admin channel (never through either
+    # driver under comparison).
+    http-url: ${MACROBENCH_CLICKHOUSE_HTTP_URL:http://localhost:8123}
+    username: ${MACROBENCH_CLICKHOUSE_USER:default}
+    password: ${MACROBENCH_CLICKHOUSE_PASSWORD:}
+
+logging:
+  level:
+    io.github.camilyed.clickhouse.r2dbc.macrobench: INFO

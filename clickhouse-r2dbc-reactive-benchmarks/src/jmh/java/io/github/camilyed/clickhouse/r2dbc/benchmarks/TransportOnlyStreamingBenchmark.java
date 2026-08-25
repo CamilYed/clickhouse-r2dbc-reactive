@@ -78,10 +78,11 @@ public class TransportOnlyStreamingBenchmark {
             .build();
   }
 
-  /** Releases client-v2's connection pool. */
+  /** Releases client-v2's connection pool and this driver's transport. */
   @TearDown(Level.Trial)
   public void tearDownTrial() {
     clientV2.close();
+    ourTransport.dispose();
   }
 
   /** This driver: sums response chunk lengths, no {@code RowBinaryDecoder} involved. */

@@ -38,8 +38,14 @@ allprojects {
 //
 // clickhouse-r2dbc-reactive-benchmarks (Phase 5) is JMH measurement tooling, not a library either
 // - see docs/PERFORMANCE.md's Phase 5 section.
+//
+// clickhouse-r2dbc-reactive-macrobench (Phase 12) is a runnable Spring Boot WebFlux load-test
+// target, same shape as spring-boot-webflux-demo but deliberately depending on this repo's own
+// source (project(":clickhouse-r2dbc-reactive-connector")), not the published release - see
+// ROADMAP.md's Phase 12 section.
 val nonPublishedModules = setOf(
     "clickhouse-r2dbc-reactive-benchmarks",
+    "clickhouse-r2dbc-reactive-macrobench",
     "spring-boot-webflux-demo"
 )
 
@@ -279,11 +285,17 @@ sonar {
         //   the regular `test` task at all - see CLAUDE.md's "Performance testing" section ("not
         //   now", a later separate phase). Its own jacocoTestReport.xml would show 0% for anything
         //   touched, which would only ever drag the gate down, never reflect anything real.
+        // clickhouse-r2dbc-reactive-macrobench (Phase 12) joins the same exclusion for the same
+        // reason as benchmarks above: it's a runnable load-test target exercised via manual
+        // macro-benchmark runs, not the regular `test` task - a jacocoTestReport.xml for it would
+        // only ever drag the gate down. Revisit if real unit-testable business logic (e.g. the
+        // backend-selection condition, dataset seeding SQL) grows enough to warrant its own lane.
         property(
             "sonar.coverage.exclusions",
             listOf(
                 "clickhouse-r2dbc-reactive-testkit/src/main/**",
-                "clickhouse-r2dbc-reactive-benchmarks/**"
+                "clickhouse-r2dbc-reactive-benchmarks/**",
+                "clickhouse-r2dbc-reactive-macrobench/**"
             ).joinToString(",")
         )
     }
