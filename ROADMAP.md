@@ -843,9 +843,15 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     explicit "no production change justified yet"). Falls back to profiling
     `ClickHouseStatement`/`ClickHouseQuery` construction (the third informal bullet above) only if
     A/B/C/D don't explain the gap.
-  - **Status: planned, not started.** Waiting on the user's go-ahead once the current macrobench PR
-    (`feature/305-phase12-macrobench-pr1`) is merged — do not begin implementation before that
-    signal.
+  - **Status: in progress (2026-08-25).** `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
+    go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
+    pipeline diagram + boundary locations, verified against current `main` source, correcting the
+    doc's own now-superseded `ChunkBuffer` reference) and Variant A (`LatencyPathVariantABenchmark`,
+    pool/decoder-workers pinned to 8, three scenarios × two drivers) are built — see
+    [docs/performance/latency-path-isolation.md](docs/performance/latency-path-isolation.md) for the
+    full diagram, variant status table, and run instructions. Not yet run (same disclosed sandbox
+    limitation as the rest of this phase — no Gradle-wrapper network access here). Variants B/C/D not
+    started.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,

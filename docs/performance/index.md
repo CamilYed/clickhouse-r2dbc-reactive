@@ -6,7 +6,10 @@ how should that change the way you use this driver (below). It does not narrate 
 the benchmark suite got here — see `git log -- docs/PERFORMANCE.md` (the file this section was
 split from) if that archaeology is ever needed. To reproduce these numbers yourself, see
 [running-benchmarks.md](running-benchmarks.md). Retracted/fully-superseded result sections live in
-[archive.md](archive.md), not deleted, not mixed in with current numbers.
+[archive.md](archive.md), not deleted, not mixed in with current numbers. The still-open question of
+whether the "Protocol floor" row's small, consistent latency gap traces to a specific pipeline stage
+is being worked through a dedicated A/B/C/D benchmark ladder — see
+[latency-path-isolation.md](latency-path-isolation.md), in progress, not yet run.
 
 > [!TIP]
 > **New here? Start with [results.md's "Full mega sweep" section](results.md#full-mega-sweep--every-scenario-one-run-2026-08-24)** —
