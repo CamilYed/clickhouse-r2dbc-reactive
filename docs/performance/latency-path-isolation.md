@@ -69,7 +69,7 @@ source, not that earlier, since-superseded shape.
 | **A — baseline** | Nothing; exact production path, pool/decoder-workers pinned to 8 for a controlled comparison | **Built** — `LatencyPathVariantABenchmark` (see below) |
 | **B — avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy** | Only if ownership can be proven correct under `-Dio.netty.leakDetection.level=paranoid` (no use-after-release, no leak, correct cancel/error/full-consumption cleanup) | **Settled — real payoff too small to matter.** Ownership proven correct (leak-clean real-HTTP run); real-HTTP timing inconclusive (≤1.3%, sign-flipping); network-free microbenchmark isolated the true cost: 15-35ns/call at production response sizes, negligible against a ~600-1150µs round trip. Not the source of Variant A's deficit — not adopted. See below. |
 | **C — transport acquisition before decoder-scheduler admission** | Prototype starting `FluxInputStreamBridge.subscribeTo` *before* `subscribeOn(decoderScheduler)`, without buffering the whole response, blocking the event loop, or changing cancellation/connection-reuse/pool-size/decoder/compression | **Done — inconclusive, not adopted.** Trusted 3-fork results at both concurrency levels are internally inconsistent (favors early acquisition at `-t1`, doesn't at `-t8` — the opposite of the predicted admission-gate-contention signature) and don't reproduce their own single-fork sanity passes either. Not confirmed, not confidently rejected on mechanism, not actionable. See below. |
-| **D — `MinimalRowBinaryReader`: skip client-v2's reader/parsing layer** | Hand-rolled `RowBinaryWithNamesAndTypes` decoder (`UInt8`/`UInt64`/`String`/`Decimal`) reading off `ZeroCopyByteBufInputStreamBridge`, replacing client-v2's `RowBinaryWithNamesAndTypesFormatReader`/`AbstractBinaryFormatReader` — the one layer A/B/C/#309 never isolated | **Built, awaiting sanity run** — `LatencyPathVariantDBenchmark`, Select 1/point pair. See below. |
+| **D — `MinimalRowBinaryReader`: skip client-v2's reader/parsing layer** | Hand-rolled `RowBinaryWithNamesAndTypes` decoder (`UInt8`/`UInt64`/`String`/`Decimal`) reading off `ZeroCopyByteBufInputStreamBridge`, replacing client-v2's `RowBinaryWithNamesAndTypesFormatReader`/`AbstractBinaryFormatReader` — the one layer A/B/C/#309 never isolated | **Promising — trusted `-t1` reproduces and grows (~5.4-7.3% faster), first lead in this ladder to survive a trusted rerun.** `-t8` trusted pending before final verdict. See below. |
 
 ## Variant A — built, trusted 3-fork runs done at both concurrency levels
 
@@ -552,6 +552,37 @@ it, so this is a reason to run the trusted sequence next, not a reason to conclu
 ```
 caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
   -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=1 -Pjmh.forks=3
+```
+
+**Trusted 3-fork `-t1` run (2026-08-25) — reproduces and strengthens, unlike every other lead in
+this ladder.** Where Variant C's promising single-fork pass reversed under a trusted rerun, this one
+holds direction and grows:
+
+| Variant | Scenario | Concurrency | client-v2 reader mean (µs) | minimal reader mean (µs) | client-v2 p99 (µs) | minimal p99 (µs) | minimal vs. client-v2 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| D | SELECT 1 | 1 (**3-fork, trusted**) | 614.5 ± 1.51 | 581.1 ± 1.37 | 943.1 | 802.8 | **~5.44% faster** |
+| D | point | 1 (**3-fork, trusted**) | 1206.4 ± 5.64 | 1118.7 ± 1.90 | 2105.3 | 1378.3 | **~7.27% faster** |
+
+Both diffs are ~11.6x the combined error bars (SELECT 1: 33.4µs diff vs. ±2.9µs; point: 87.7µs diff
+vs. ±7.5µs) — decisively outside noise, not a borderline call. `p50`/`p90`/`p95`/`p99` all move the
+same direction too. This is the first result in the whole A/B/C/D + task #309 ladder that both
+reproduced under a trusted rerun *and* grew rather than shrank or reversed.
+
+**Note on magnitude, before over-reading it**: 5.4-7.3% here is *larger* than Variant A's original
+~2.6-4.9% `thisDriver`-vs-client-v2 deficit — expected, not a contradiction, since this comparison
+isolates only the reader/parsing layer on an otherwise-identical (zero-copy) input side, while
+Variant A compares two complete, independently-implemented pipelines (this driver's Reactor Netty
+transport + connection pool vs. client-v2's own transport/pool). The reader-layer cost measured here
+could be partly offset elsewhere in this driver's pipeline (e.g. transport/pool differences that
+favor this driver), netting out to Variant A's smaller observed total gap — plausible, not yet
+confirmed. Worth collecting the `-t8` trusted run next (same two-concurrency-level protocol as
+A/B/C) before drawing a final verdict, and — if `-t8` holds too — treating this as the leading
+candidate to extend `MinimalRowBinaryReader` toward `StreamingScanBenchmark`'s shape and to weigh
+seriously as a real production change, unlike every prior variant in this ladder.
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantDBenchmark -Pjmh.threads=8 -Pjmh.forks=3
 ```
 
 ## A/B/C/D result table
