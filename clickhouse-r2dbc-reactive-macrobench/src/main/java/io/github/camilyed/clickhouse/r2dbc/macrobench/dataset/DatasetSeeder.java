@@ -38,6 +38,9 @@ class DatasetSeeder implements ApplicationRunner {
 
   private static final Logger LOG = LoggerFactory.getLogger(DatasetSeeder.class);
   private static final Duration ADMIN_TIMEOUT = Duration.ofMinutes(10);
+  private static final String DROP_TABLE_IF_EXISTS = "DROP TABLE IF EXISTS ";
+  private static final String CREATE_TABLE = "CREATE TABLE ";
+  private static final String INSERT_INTO = "INSERT INTO ";
 
   private final ClickHouseEndpointProperties endpoint;
   private final BenchmarkProperties properties;
@@ -61,13 +64,13 @@ class DatasetSeeder implements ApplicationRunner {
   }
 
   private void seedPointTable() {
-    execute("DROP TABLE IF EXISTS " + BenchmarkDataset.POINT_TABLE);
+    execute(DROP_TABLE_IF_EXISTS + BenchmarkDataset.POINT_TABLE);
     execute(
-        "CREATE TABLE "
+        CREATE_TABLE
             + BenchmarkDataset.POINT_TABLE
             + " (id UInt64, label String, amount Decimal(18,4)) ENGINE = MergeTree ORDER BY id");
     execute(
-        "INSERT INTO "
+        INSERT_INTO
             + BenchmarkDataset.POINT_TABLE
             + " SELECT number + 1 AS id, concat('label-', toString(number)) AS label, "
             + "(number % 100000) / 100.0 AS amount FROM numbers("
@@ -76,26 +79,26 @@ class DatasetSeeder implements ApplicationRunner {
   }
 
   private void seedAnalyticsTables() {
-    execute("DROP TABLE IF EXISTS " + BenchmarkDataset.ORDERS_TABLE);
-    execute("DROP TABLE IF EXISTS " + BenchmarkDataset.CATEGORIES_TABLE);
+    execute(DROP_TABLE_IF_EXISTS + BenchmarkDataset.ORDERS_TABLE);
+    execute(DROP_TABLE_IF_EXISTS + BenchmarkDataset.CATEGORIES_TABLE);
     execute(
-        "CREATE TABLE "
+        CREATE_TABLE
             + BenchmarkDataset.CATEGORIES_TABLE
             + " (category_id UInt32, category_name String) ENGINE = MergeTree ORDER BY category_id");
     execute(
-        "INSERT INTO "
+        INSERT_INTO
             + BenchmarkDataset.CATEGORIES_TABLE
             + " SELECT number AS category_id, concat('category-', toString(number)) AS category_name "
             + "FROM numbers("
             + BenchmarkDataset.CATEGORY_COUNT
             + ")");
     execute(
-        "CREATE TABLE "
+        CREATE_TABLE
             + BenchmarkDataset.ORDERS_TABLE
             + " (order_id UInt64, category_id UInt32, amount Decimal(18,4), occurred_at DateTime) "
             + "ENGINE = MergeTree ORDER BY order_id");
     execute(
-        "INSERT INTO "
+        INSERT_INTO
             + BenchmarkDataset.ORDERS_TABLE
             + " SELECT number AS order_id, number % "
             + BenchmarkDataset.CATEGORY_COUNT
