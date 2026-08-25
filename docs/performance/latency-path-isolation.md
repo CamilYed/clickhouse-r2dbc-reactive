@@ -117,14 +117,41 @@ confirms the class runs clean first), add `-Pjmh.warmupIterations=5 -Pjmh.iterat
 warnings. Full result table above. Next: Variant B/C, then the hypothesis-ranking table — the
 tail-latency finding flagged above is the most concrete open thread Variant A surfaced.
 
-## Variant B — built, not yet run
+## Variant B — built; single-fork sanity run shows no meaningful difference (untrusted)
 
 `LatencyPathVariantBBenchmark` and `ZeroCopyByteBufInputStreamBridge`
 (`clickhouse-r2dbc-reactive-benchmarks/src/jmh/.../LatencyPathVariantBBenchmark.java` and
 `.../src/main/.../ZeroCopyByteBufInputStreamBridge.java`), built on `feature/314-latency-path-isolation`
-per the recommendation above. Not yet compiled/run — this sandbox has no JDK 21/Gradle network
-access, same limitation as every other class in this ladder; needs a run on your machine before any
-number here can be trusted.
+per the recommendation above.
+
+**First real run (2026-08-25) caught a construction bug, not a timing result**: all four
+`@Benchmark` methods failed identically with `ClientException: Time zone is not set.` —
+`readFirstRow` constructed `RowBinaryWithNamesAndTypesFormatReader` with a bare `new
+QuerySettings()`, missing the `.setUseTimeZone("UTC")` core's own `RowBinaryDecoder.newReader`
+always sets. Fixed (commit `a5599c3`); `LatencyPathVariantABenchmark` never hit this because it goes
+through `RowBinaryDecoder.decode()`, not a hand-constructed reader.
+
+**Leak-detection run, after the fix**: `BUILD SUCCESSFUL`, results table below — no leak lines
+reported by `LeakRecordingResourceLeakDetector` in the output shared back. (Flagging this rather than
+asserting it outright: the pasted output was the results table, not the full scrollback with the
+leak detector's own log lines — worth a second look at the full output if there's any doubt before
+treating the retain/release contract as verified.)
+
+**The single-fork result itself is a genuine, if untrusted, negative signal against the
+copy-avoidance hypothesis**: `copyPathPoint` (1357.7 ± 5.3 µs) vs. `zeroCopyPathPoint` (1351.9 ± 4.8
+µs) and `copyPathSelect1` (815.2 ± 3.3 µs) vs. `zeroCopyPathSelect1` (813.0 ± 3.4 µs) — differences
+of ~0.4% and ~0.3%, smaller than either side's own margin of error. If the `asByteArray()` copy were
+the fixed-overhead source of Variant A's flat ~4-5% deficit, removing it on exactly these same
+tiny-response scenarios should have shown up here. It didn't, at least not on one fork. Needs the
+trusted 3-fork run before treating this as settled (a single fork is "a first signal, not something
+to act on" per this project's own standard — the same standard that already caught one false lead
+this ladder produced), but this tempers the Variant A recommendation's confidence rather than
+confirming it.
+
+| Variant | Scenario | Concurrency | copy path mean (µs) | zero-copy mean (µs) | copy path p99 (µs) | zero-copy p99 (µs) | zero-copy vs. copy |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B | SELECT 1 | 1 (single-fork, untrusted) | 815.2 ± 3.3 | 813.0 ± 3.4 | 1472.5 | 1454.1 | ~0.3% faster (noise-level) |
+| B | point | 1 (single-fork, untrusted) | 1357.7 ± 5.3 | 1351.9 ± 4.8 | 2038.2 | 2009.1 | ~0.4% faster (noise-level) |
 
 **Design, and three deliberate departures from Variant A worth knowing before reading numbers:**
 
