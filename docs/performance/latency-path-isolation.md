@@ -410,7 +410,32 @@ own confidence standard (a single-fork number is a first signal, not something t
 unlike Variant B and task #309 (which were rejected outright, 20-150x too small even in their most
 generous single-fork framing), this is the first result in this investigation whose *direction* and
 *magnitude* both plausibly fit the hypothesis: negligible at `-t1`, real and reproducible-looking at
-`-t8`. Next: trusted 3-fork runs at both concurrency levels.
+`-t8`.
+
+**`-t8` trusted 3-fork run does not reproduce the single-fork signal — retracted (2026-08-25).** The
+single-fork pass above was called out explicitly as "the first result in this investigation whose
+direction and magnitude both plausibly fit the hypothesis." The trusted 3-fork rerun reverses that
+call: SELECT 1 now shows no difference at all (1587.8 vs 1589.9µs, ~0.13%, deep inside combined
+error bars), and point *flips direction* — `earlyAcquisition` is now ~1.3% **slower**, not faster
+(2233.3 vs 2261.5µs, diff ~2.7x combined error, opposite sign from the single-fork pass). Retracted
+as a lead, per the same discipline already applied once in this doc to Variant A's tail-latency
+finding and to Variant B/task #309's verdicts: a single-fork number is a first signal, not something
+to act on, and this one did not survive a trusted rerun.
+
+| Variant | Scenario | Concurrency | current-ordering mean (µs) | early-acquisition mean (µs) | current p99 (µs) | early p99 (µs) | early vs. current |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| C | SELECT 1 | 8 (**3-fork, trusted**) | 1587.8 ± 3.77 | 1589.9 ± 3.76 | 3715.1 | 3788.8 | ~0.1% slower (noise-level) |
+| C | point | 8 (**3-fork, trusted**) | 2233.3 ± 4.48 | 2261.5 ± 5.95 | 4759.6 | 4816.9 | ~1.3% **slower** |
+
+With the `-t8` signal gone — the concurrency level where an admission-gate-ordering effect would be
+expected to show up most clearly — a trusted `-t1` run isn't expected to reverse this, but is still
+worth collecting for completeness, matching Variant A/B's own two-concurrency-level protocol before
+writing a final verdict:
+
+```
+caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=LatencyPathVariantCBenchmark -Pjmh.threads=1 -Pjmh.forks=3
+```
 
 ## A/B/C/D result table
 

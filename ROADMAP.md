@@ -863,13 +863,13 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     **Variant C** (transport-acquisition-before-decoder-admission) is the only remaining hypothesis:
     `LatencyPathVariantCBenchmark` prototypes calling `FluxInputStreamBridge.subscribeTo`
     (subscription = HTTP send) eagerly on the calling thread, before `subscribeOn(decodeScheduler)`,
-    instead of inside it as production does today. Single-fork sanity runs at both concurrency levels
-    (2026-08-25) show the predicted signature: negligible/noise-level diff at `-t1` (~0.6-0.9%
-    slower, within combined error bars), reversing to a consistent ~1.5-2.0% **faster** for early
-    acquisition at `-t8`, a diff ~2.1-2.2x the combined error bars and moving the same direction
-    across mean/p50/p90/p95/p99. Untrusted (single-fork) — this is the first result in the ladder
-    whose direction and magnitude both plausibly fit the hypothesis, unlike Variant B/task #309's
-    outright rejections. Trusted 3-fork runs at both `-t1`/`-t8` next. Variant D not started.
+    instead of inside it as production does today. Single-fork sanity at `-t8` looked promising
+    (~1.5-2.0% faster for early acquisition, matching the predicted signature) but **did not
+    reproduce in the trusted 3-fork `-t8` rerun**: SELECT 1 shows no difference (~0.1%, noise-level)
+    and point *flips direction* (~1.3% slower for early acquisition, opposite sign from the
+    single-fork pass) — retracted as a lead, same discipline as Variant A's earlier tail-latency
+    retraction. A trusted `-t1` run is still pending for completeness but, with the `-t8` signal
+    gone, isn't expected to reverse this. Variant D not started.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,
