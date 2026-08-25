@@ -34,8 +34,8 @@ import reactor.netty.ByteBufFlux;
 
 /**
  * Variant B of the latency-path-isolation ladder (docs/performance/latency-path-isolation.md,
- * ROADMAP.md Phase 12): isolates the single question {@link LatencyPathVariantABenchmark}'s
- * trusted 3-fork numbers pointed at as the best-supported next step — does {@code
+ * ROADMAP.md Phase 12): isolates the single question {@link LatencyPathVariantABenchmark}'s trusted
+ * 3-fork numbers pointed at as the best-supported next step — does {@code
  * ClickHouseResult.decodePlain}'s {@code response.asByteArray().map(ByteBuffer::wrap)} copy explain
  * the flat ~4-5% mean deficit seen on {@code SELECT 1}/point at both concurrency 1 and 8, after GC
  * was ruled out by a {@code -prof gc} run.
@@ -60,12 +60,12 @@ import reactor.netty.ByteBufFlux;
  * conflating the two. Both {@code copyPath*} and {@code zeroCopyPath*} methods below use the same
  * {@link #ourTransport} instance, so this simplification applies identically to both sides.
  *
- * <p><b>Scenarios</b>: {@code SELECT 1} and the same point lookup {@link LatencyPathVariantABenchmark}
- * uses, against {@link PointQueryTable}. Streaming is deliberately out of scope for this first cut —
- * Variant A's trusted numbers already showed streaming favoring this driver, not the scenario the
- * flat deficit showed up in, and it's the scenario most likely to exercise {@link
- * ZeroCopyByteBufInputStreamBridge}'s disclosed hard-cancel race (see that class's Javadoc), which
- * this narrower first cut avoids needing to reason about at all.
+ * <p><b>Scenarios</b>: {@code SELECT 1} and the same point lookup {@link
+ * LatencyPathVariantABenchmark} uses, against {@link PointQueryTable}. Streaming is deliberately
+ * out of scope for this first cut — Variant A's trusted numbers already showed streaming favoring
+ * this driver, not the scenario the flat deficit showed up in, and it's the scenario most likely to
+ * exercise {@link ZeroCopyByteBufInputStreamBridge}'s disclosed hard-cancel race (see that class's
+ * Javadoc), which this narrower first cut avoids needing to reason about at all.
  *
  * <p><b>Decoding</b> uses client-v2's own public {@code
  * RowBinaryWithNamesAndTypesFormatReader}/{@code AbstractBinaryFormatReader} directly (not this
@@ -107,8 +107,8 @@ public class LatencyPathVariantBBenchmark {
 
   /**
    * Starts the shared container, seeds {@link PointQueryTable}, and configures {@link
-   * #ourTransport} with {@link ResponseCompression#NONE} (see class Javadoc for why) and a
-   * {@link #POOL_SIZE}-connection pool matching {@link LatencyPathVariantABenchmark}'s.
+   * #ourTransport} with {@link ResponseCompression#NONE} (see class Javadoc for why) and a {@link
+   * #POOL_SIZE}-connection pool matching {@link LatencyPathVariantABenchmark}'s.
    */
   @Setup(Level.Trial)
   public void setUpTrial() {
@@ -135,13 +135,19 @@ public class LatencyPathVariantBBenchmark {
     ourTransport.dispose();
   }
 
-  /** Production copy path, {@code SELECT 1}: {@code asByteArray()} into {@code FluxInputStreamBridge}. */
+  /**
+   * Production copy path, {@code SELECT 1}: {@code asByteArray()} into {@code
+   * FluxInputStreamBridge}.
+   */
   @Benchmark
   public void copyPathSelect1(final Blackhole blackhole) {
     blackhole.consume(decodeViaCopyPath(ClickHouseQuery.of(SELECT_1_SQL)));
   }
 
-  /** Zero-copy prototype, {@code SELECT 1}: raw {@code ByteBuf} into {@link ZeroCopyByteBufInputStreamBridge}. */
+  /**
+   * Zero-copy prototype, {@code SELECT 1}: raw {@code ByteBuf} into {@link
+   * ZeroCopyByteBufInputStreamBridge}.
+   */
   @Benchmark
   public void zeroCopyPathSelect1(final Blackhole blackhole) {
     blackhole.consume(decodeViaZeroCopyPath(ClickHouseQuery.of(SELECT_1_SQL)));
@@ -175,14 +181,16 @@ public class LatencyPathVariantBBenchmark {
   private String decodeViaZeroCopyPath(final ClickHouseQuery query) {
     final ByteBufFlux body = ourTransport.query(query);
     return Mono.fromCallable(
-            () -> readFirstRow(ZeroCopyByteBufInputStreamBridge.subscribeTo(body, RESPONSE_CHUNK_DEMAND)))
+            () ->
+                readFirstRow(
+                    ZeroCopyByteBufInputStreamBridge.subscribeTo(body, RESPONSE_CHUNK_DEMAND)))
         .subscribeOn(decodeScheduler)
         .block(Duration.ofSeconds(10));
   }
 
   /**
-   * Reads the schema header plus the single row both scenarios here produce, via client-v2's
-   * public {@link RowBinaryWithNamesAndTypesFormatReader} directly — same shape as {@link
+   * Reads the schema header plus the single row both scenarios here produce, via client-v2's public
+   * {@link RowBinaryWithNamesAndTypesFormatReader} directly — same shape as {@link
    * LatencyPathVariantABenchmark}'s {@code clientV2*} methods, so decode cost (typed getter
    * conversion, not just raw bytes) is comparable across both benchmark classes.
    */
@@ -190,7 +198,12 @@ public class LatencyPathVariantBBenchmark {
     try (InputStream input = source) {
       final RowBinaryWithNamesAndTypesFormatReader reader =
           new RowBinaryWithNamesAndTypesFormatReader(
-              input, new QuerySettings(), new BinaryStreamReader.DefaultByteBufferAllocator());
+              input,
+              // setUseTimeZone("UTC") mirrors core's own RowBinaryDecoder.newReader - without it
+              // AbstractBinaryFormatReader's constructor throws ClientException("Time zone is not
+              // set."), confirmed by this class's first real run.
+              new QuerySettings().setUseTimeZone("UTC"),
+              new BinaryStreamReader.DefaultByteBufferAllocator());
       if (reader.next() == null) {
         return "";
       }

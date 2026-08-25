@@ -19,9 +19,8 @@ import reactor.core.publisher.Flux;
  * Variant B of the latency-path-isolation ladder (docs/performance/latency-path-isolation.md): the
  * same push-to-pull {@link InputStream} shape {@code core.FluxInputStreamBridge} provides, but
  * operating directly on the live {@code Flux<ByteBuf>} Reactor Netty hands back instead of a
- * pre-copied {@code Flux<ByteBuffer>} — avoiding the {@code ByteBuf}-&gt;{@code byte[]} copy
- * {@code ClickHouseResult.decodePlain}'s {@code asByteArray()} call performs on the production
- * path.
+ * pre-copied {@code Flux<ByteBuffer>} — avoiding the {@code ByteBuf}-&gt;{@code byte[]} copy {@code
+ * ClickHouseResult.decodePlain}'s {@code asByteArray()} call performs on the production path.
  *
  * <p><b>Retain/release contract.</b> Reactor Netty releases each {@link ByteBuf} automatically once
  * a subscriber's {@code onNext} returns, unless the subscriber retains it first — the standard
@@ -33,11 +32,11 @@ import reactor.core.publisher.Flux;
  * anything still queued/pending at {@link #close()} time. Verify with {@code
  * -Dio.netty.leakDetection.level=paranoid} plus {@code
  * io.github.camilyed.clickhouse.r2dbc.testkit.fakes.LeakRecordingResourceLeakDetector} before
- * trusting any number produced against this class — see this module's benchmark for how it's
- * wired in.
+ * trusting any number produced against this class — see this module's benchmark for how it's wired
+ * in.
  *
- * <p><b>Known, disclosed gap.</b> {@link #close()}'s cleanup covers full natural consumption and the
- * bounded-drain-then-hard-cancel path, draining both the internal {@link #pending} deque and
+ * <p><b>Known, disclosed gap.</b> {@link #close()}'s cleanup covers full natural consumption and
+ * the bounded-drain-then-hard-cancel path, draining both the internal {@link #pending} deque and
  * anything still sitting in the raw {@link #queue}. It does not close a narrow race where Reactor
  * delivers a further {@code onNext} concurrently with (and just after) that sweep, during a hard
  * cancel — an inherent race in any externally-triggered-cancellation cleanup, harmless for {@code
@@ -48,8 +47,8 @@ import reactor.core.publisher.Flux;
  * production candidate — closing this gap would be required before it ever could be.
  *
  * <p>Benchmark-local: deliberately not touching {@code core.FluxInputStreamBridge} or any other
- * production class, per the latency-path-isolation plan's "no production code changes in this
- * pass" scope.
+ * production class, per the latency-path-isolation plan's "no production code changes in this pass"
+ * scope.
  */
 final class ZeroCopyByteBufInputStreamBridge extends InputStream {
 
@@ -73,7 +72,8 @@ final class ZeroCopyByteBufInputStreamBridge extends InputStream {
   }
 
   /** Subscribes to {@code source}, requesting {@code demand} chunks up front. */
-  static ZeroCopyByteBufInputStreamBridge subscribeTo(final Flux<ByteBuf> source, final int demand) {
+  static ZeroCopyByteBufInputStreamBridge subscribeTo(
+      final Flux<ByteBuf> source, final int demand) {
     return new ZeroCopyByteBufInputStreamBridge(source, demand);
   }
 
