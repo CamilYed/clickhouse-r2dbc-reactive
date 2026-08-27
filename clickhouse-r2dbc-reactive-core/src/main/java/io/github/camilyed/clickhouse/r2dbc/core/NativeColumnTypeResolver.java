@@ -41,6 +41,10 @@ final class NativeColumnTypeResolver {
       case UInt32 -> ScalarColumnDecoder.UINT32;
       case Int64 -> ScalarColumnDecoder.INT64;
       case UInt64 -> ScalarColumnDecoder.UINT64;
+      case Int128 -> ScalarColumnDecoder.INT128;
+      case UInt128 -> ScalarColumnDecoder.UINT128;
+      case Int256 -> ScalarColumnDecoder.INT256;
+      case UInt256 -> ScalarColumnDecoder.UINT256;
       case Float32 -> ScalarColumnDecoder.FLOAT32;
       case Float64 -> ScalarColumnDecoder.FLOAT64;
       case Bool -> ScalarColumnDecoder.BOOL;

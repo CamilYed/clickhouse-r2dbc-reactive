@@ -35,6 +35,54 @@ class NativeColumnTypeResolverTest {
   }
 
   @Test
+  void shouldResolveAnInt128ColumnToAScalarDecoder() {
+    // given
+    final ClickHouseColumn column = ClickHouseColumn.of("value", "Int128");
+
+    // when
+    final Optional<ColumnPlan> plan = NativeColumnTypeResolver.resolve(column);
+
+    // then
+    assertThat(plan.get().decoder()).isEqualTo(ScalarColumnDecoder.INT128);
+  }
+
+  @Test
+  void shouldResolveAUInt128ColumnToAScalarDecoder() {
+    // given
+    final ClickHouseColumn column = ClickHouseColumn.of("value", "UInt128");
+
+    // when
+    final Optional<ColumnPlan> plan = NativeColumnTypeResolver.resolve(column);
+
+    // then
+    assertThat(plan.get().decoder()).isEqualTo(ScalarColumnDecoder.UINT128);
+  }
+
+  @Test
+  void shouldResolveAnInt256ColumnToAScalarDecoder() {
+    // given
+    final ClickHouseColumn column = ClickHouseColumn.of("value", "Int256");
+
+    // when
+    final Optional<ColumnPlan> plan = NativeColumnTypeResolver.resolve(column);
+
+    // then
+    assertThat(plan.get().decoder()).isEqualTo(ScalarColumnDecoder.INT256);
+  }
+
+  @Test
+  void shouldResolveAUInt256ColumnToAScalarDecoder() {
+    // given
+    final ClickHouseColumn column = ClickHouseColumn.of("value", "UInt256");
+
+    // when
+    final Optional<ColumnPlan> plan = NativeColumnTypeResolver.resolve(column);
+
+    // then
+    assertThat(plan.get().decoder()).isEqualTo(ScalarColumnDecoder.UINT256);
+  }
+
+  @Test
   void shouldMarkANullableColumnAsNullableWhileResolvingItsInnerType() {
     // given
     final ClickHouseColumn column = ClickHouseColumn.of("value", "Nullable(Int32)");

@@ -851,13 +851,14 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     cross-validated result was taken as sufficient grounds to implement a real native
     `RowBinaryWithNamesAndTypes` decoder directly in `core`, scoped to a safe, incremental rollout:
     `NativeRowBinaryReader` decodes ClickHouse's scalar types natively (`Int8`-`Int64`/`UInt8`-`UInt64`,
+    `Int128`/`UInt128`/`Int256`/`UInt256`,
     `Float32`/`64`, `Bool`, `String`, `FixedString(n)`, `Decimal(P,S)`/`32`/`64`/`128`/`256`, and
     `Nullable(T)` wrapping any of those — semantics cross-checked byte-for-byte against client-v2's
     own `BinaryStreamReader`), while `RowBinaryDecoder` parses the `RowBinaryWithNamesAndTypes`
     header exactly once and falls back to the existing, unmodified `ListDecodingRowBinaryReader`
     (fed a `SequenceInputStream` replaying the already-consumed header bytes) for any result
-    containing even one column outside that native set — `Int128`/`UInt128`/`Int256`/`UInt256`,
-    `Date*`/`DateTime*`/`Time*`, `Interval*`, `IPv4`/`IPv6`, `UUID`, `Enum8`/`16`, `Array`, `Map`,
+    containing even one column outside that native set — `Date*`/`DateTime*`/`Time*`,
+    `Interval*`, `IPv4`/`IPv6`, `UUID`, `Enum8`/`16`, `Array`, `Map`,
     `Tuple`, `Nested`, `LowCardinality`, `JSON`, `Variant`/`Dynamic`, geo types,
     `AggregateFunction`/`SimpleAggregateFunction`, `QBit`, `BFloat16` all still decode exactly as
     before, byte-for-byte identical to today's production path. `EmptyRowBinaryReader` handles the
