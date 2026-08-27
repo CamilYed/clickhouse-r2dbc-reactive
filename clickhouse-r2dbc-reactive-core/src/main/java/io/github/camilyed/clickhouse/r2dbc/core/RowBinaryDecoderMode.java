@@ -13,13 +13,20 @@ package io.github.camilyed.clickhouse.r2dbc.core;
  * <p>{@link #NATIVE} opts into {@link NativeRowBinaryReader} for any result where every column
  * resolves through {@link NativeColumnTypeResolver} — see {@link RowBinaryDecoder}'s own Javadoc
  * for the exact per-result native/fallback decision this makes, and {@code
- * docs/performance/latency-path-isolation.md} for the measured motivation (a decisive, reported
- * ~21.6% per-row/per-column reader-layer cost at 10k-row scale — <b>unverified as of a 2026-08-26
- * external review of PR #99</b>; see {@link NativeRowBinaryReader}'s Javadoc for why, and {@code
- * DecoderOnlyBenchmark#thisDriver}/{@code #thisDriverNative} for the apples-to-apples comparison to
- * trust instead once it has been run). A result containing even one column outside that native set
- * still decodes exactly as {@link #CLICKHOUSE} would, automatically, with no observable difference
- * in decoded values or types — only the decode path taken to get there changes.
+ * docs/performance/latency-path-isolation.md} for the measured motivation. The originally reported
+ * ~21.6% figure from the {@code MinimalRowBinaryReader} prototype was <b>retracted</b> by a
+ * 2026-08-26 external review of PR #99 (see {@link NativeRowBinaryReader}'s Javadoc for why) and
+ * superseded by a trusted, apples-to-apples {@code DecoderOnlyBenchmark#thisDriver}/{@code
+ * #thisDriverNative} run against the exact production {@link RowBinaryDecoder} path on 2026-08-27:
+ * {@link #NATIVE} measured ~13.6-15.2% lower mean/p50/p90/p95 latency and ~11.4% lower allocation
+ * than {@link #CLICKHOUSE}, consistently across 10k/100k/1M rows, for a {@code UInt64 + String +
+ * Decimal(18,4)} row shape. That confirms a real decode-layer improvement, but not yet that it
+ * moves real, public R2DBC point-query latency/throughput end to end (network, transport, decoder
+ * scheduler, connection pool all sit between the decoder and an application) — see {@code
+ * PublicApiMatchedPoolThroughputBenchmark#thisDriverNative} for that still-pending comparison. A
+ * result containing even one column outside the native set still decodes exactly as {@link
+ * #CLICKHOUSE} would, automatically, with no observable difference in decoded values or types —
+ * only the decode path taken to get there changes.
  */
 public enum RowBinaryDecoderMode {
 

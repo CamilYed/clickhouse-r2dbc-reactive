@@ -680,20 +680,29 @@ both "look big": the mean-latency ratio (4954.4/3884.2 ≈ 1.275) and the sample
 (SampleTime mode packs more completed ops into the same fixed iteration-time budget when each op is
 quicker), a structural cross-check independent of the timing numbers themselves.
 
-> **Correction (2026-08-27, external review of PR #99): this ~21.6% number is unverified, do not
-> cite it as production evidence.** The review found that `minimalReader` decoded `UInt8`/`UInt64`
-> as `Long` here, not `Short`/`BigInteger` (the representations client-v2's own typed getters
-> produce and the production `NativeRowBinaryReader` eventually settled on) — and that the
-> `client-v2 reader` column above blackholes `getLong`/`getString`/`getBigDecimal` conversions while
+> **Correction (2026-08-27, external review of PR #99): this ~21.6% number is retracted, do not cite
+> it as production evidence.** The review found that `minimalReader` decoded `UInt8`/`UInt64` as
+> `Long` here, not `Short`/`BigInteger` (the representations client-v2's own typed getters produce
+> and the production `NativeRowBinaryReader` eventually settled on) — and that the `client-v2
+> reader` column above blackholes `getLong`/`getString`/`getBigDecimal` conversions while
 > `minimalReader` blackholes already-decoded raw values with no conversion. Both sides therefore did
 > different work, not just different decode paths, so the "structural cross-check" argument above
 > doesn't rule out a boxing/conversion confound the way it was intended to. The type mismatch in
-> `MinimalRowBinaryReader` is now fixed on branch `feature/314-latency-path-isolation`, but this
-> table has not been re-run against the fix, and development on this driver is paused as of
-> 2026-08-27. Treat every "faster"/"slower" verdict in this document as provisional until re-run. A
-> valid, symmetric production-level comparison (`DecoderOnlyBenchmark#thisDriver` vs
-> `#thisDriverNative`, same captured bytes, same `RowBinaryDecoder` call, only the mode differs) now
-> exists but has also not been run.
+> `MinimalRowBinaryReader` is fixed on branch `feature/314-latency-path-isolation`; this specific
+> table (the diagnostic `A/B/C/D` ladder) has not been re-run against the fix and should stay
+> provisional.
+>
+> **The number to trust instead: a 2026-08-27 trusted run of the actual production comparison**
+> (`DecoderOnlyBenchmark#thisDriver` vs `#thisDriverNative`, same captured bytes, same
+> `RowBinaryDecoder` call, only `RowBinaryDecoderMode` differs), commit `88020ed`, 3 forks/5
+> warmup/3 measurement with `gc,jfr`: `NATIVE` measured ~15.18%/13.62%/14.57% lower mean latency and
+> ~11.5%/11.4%/11.4% lower allocation than `CLICKHOUSE` at 10k/100k/1M rows respectively, for a
+> `UInt64 + String + Decimal(18,4)` row shape, with mean/p50/p90/p95 all agreeing on direction. This
+> is real evidence the native decoder is faster **at the isolated decode boundary** — it does not
+> yet show the full R2DBC driver is faster for real point queries end to end (network, transport,
+> decoder scheduler, and connection pooling all sit between the decoder and an application).
+> `PublicApiMatchedPoolThroughputBenchmark#thisDriverNative` (added alongside this correction) exists
+> to answer that question next and has not been run yet.
 
 **Mechanistically, this resolves the `SELECT 1`/`point` inconsistency rather than deepening it.**
 Both single-row scenarios sit inside a ~1.6-2.3ms HTTP round trip, where a genuine but small

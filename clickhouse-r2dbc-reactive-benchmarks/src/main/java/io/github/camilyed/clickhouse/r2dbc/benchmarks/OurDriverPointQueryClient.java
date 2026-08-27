@@ -36,8 +36,8 @@ import reactor.core.publisher.Mono;
  * ClientV2PointQueryClient#close()}, which disposes client-v2's {@code Client} — the equivalent
  * pool-owning object on that side.
  *
- * <p>Five constructors, five distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches
- * this driver to an explicit pool size for a fair matched-pool comparison; {@link
+ * <p>Six constructors, six distinct scenarios: {@link #OurDriverPointQueryClient(int)} matches this
+ * driver to an explicit pool size for a fair matched-pool comparison; {@link
  * #OurDriverPointQueryClient(double)} instead leaves this driver at its own default pool and slows
  * every query down via {@code sleep(...)} — see {@link DefaultPoolSlowQueryThroughputBenchmark}'s
  * Javadoc for why that second scenario exists; {@link
@@ -53,8 +53,12 @@ import reactor.core.publisher.Mono;
  * #OurDriverPointQueryClient(VirtualThreadDecoder)} matches the third constructor's shape exactly
  * (explicit pool size + explicit decoder worker count) but additionally sets {@link
  * ClickHouseConnectionFactoryProvider#DECODER_USE_VIRTUAL_THREADS} — see {@link
- * VirtualThreadDecoderThroughputBenchmark}'s Javadoc for why this fifth scenario exists. All five
- * share the same query/close logic below, only the SQL text and pool configuration differ.
+ * VirtualThreadDecoderThroughputBenchmark}'s Javadoc for why this fifth scenario exists; {@link
+ * #OurDriverPointQueryClient(NativeDecoder)} matches the first constructor's shape exactly
+ * (explicit pool size, otherwise default configuration) but additionally sets {@link
+ * ClickHouseConnectionFactoryProvider#ROW_DECODER} to {@code "native"} — see {@link
+ * NativeDecoder}'s Javadoc for why this sixth scenario exists. All six share the same query/close
+ * logic below, only the SQL text and pool configuration differ.
  */
 final class OurDriverPointQueryClient implements PointQueryClient {
 
@@ -100,6 +104,19 @@ final class OurDriverPointQueryClient implements PointQueryClient {
    * ExplicitDecoderWorkerCount} — see that class's Javadoc.
    */
   record VirtualThreadDecoder(int poolSize, int decoderWorkerCount) {}
+
+  /**
+   * Pairs an explicit {@code poolSize} with {@link ClickHouseConnectionFactoryProvider#ROW_DECODER}
+   * explicitly set to {@code "native"} instead of the default {@code "clickhouse"} — a distinct
+   * type rather than a boolean flag on {@link #OurDriverPointQueryClient(int)}, per the same "no
+   * boolean/flag parameters that silently change behavior" reasoning the other records above
+   * already follow. Exists specifically so {@code PublicApiMatchedPoolThroughputBenchmark} can
+   * measure whether {@code RowBinaryDecoderMode.NATIVE} — confirmed faster in isolation by {@code
+   * DecoderOnlyBenchmark} (see that class's Javadoc for the 2026-08-27 trusted decoder-only
+   * numbers) — actually moves the public, end-to-end point-query latency/throughput, not just the
+   * isolated decode step.
+   */
+  record NativeDecoder(int poolSize) {}
 
   /**
    * Opens one logical connection against a {@code ConnectionFactory} sized to {@code poolSize}
@@ -185,6 +202,26 @@ final class OurDriverPointQueryClient implements PointQueryClient {
                     ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT,
                     virtualThreadDecoder.decoderWorkerCount())
                 .option(ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS, true)
+                .build());
+    this.connection = openConnection(factory);
+  }
+
+  /**
+   * Opens one logical connection against a {@code ConnectionFactory} sized to {@link
+   * NativeDecoder#poolSize()} physical connections, with {@link
+   * ClickHouseConnectionFactoryProvider#ROW_DECODER} explicitly set to {@code "native"} — otherwise
+   * identical to {@link #OurDriverPointQueryClient(int)}, so a benchmark comparing the two isolates
+   * {@code rowDecoder} as the only variable, per {@link NativeDecoder}'s own Javadoc.
+   */
+  OurDriverPointQueryClient(final NativeDecoder nativeDecoder) {
+    this.selectSql = SELECT_BY_ID_SQL;
+    this.factory =
+        ClickHouseConnectionFactory.from(
+            baseOptions()
+                .option(
+                    ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS,
+                    nativeDecoder.poolSize())
+                .option(ClickHouseConnectionFactoryProvider.ROW_DECODER, "native")
                 .build());
     this.connection = openConnection(factory);
   }
