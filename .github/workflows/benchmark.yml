@@ -23,14 +23,25 @@ name: Cloud benchmark pipeline
 # thisDriver/client-v2 ratio, repeated across several runs (see scripts/benchmarks/analyze.py's
 # summary.md header and the roadmap section for the full rationale).
 #
-# Two profiles:
-#   fast    - 1 fork, 1 warmup iteration. A sanity check ("did it run, no catastrophic
-#             regression"), not a number to make a public performance claim from. Cheap enough to
-#             also run on a weekly schedule.
-#   trusted - 3 forks, 5 warmup iterations, -prof gc,jfr, plus a background /proc RSS/thread
-#             sampler (scripts/benchmarks/sample-resources.sh) for the whole run. workflow_dispatch
-#             only - deliberately never scheduled, so a noisy/slow run is something a human asked
-#             for, not unattended.
+# Three profiles:
+#   fast          - 1 fork, 1 warmup iteration, 3 measurement iterations (the jmh plugin's own
+#                   default - see build.gradle.kts). A sanity check ("did it run, no catastrophic
+#                   regression"), not a number to make a public performance claim from. Cheap enough
+#                   to also run on a weekly schedule.
+#   trusted       - 3 forks, 5 warmup iterations, 3 measurement iterations (unchanged, historical -
+#                   comparable to every earlier "trusted" run's numbers), -prof gc,jfr, plus a
+#                   background /proc RSS/thread sampler (scripts/benchmarks/sample-resources.sh) for
+#                   the whole run. Good diagnostic evidence (JFR hot-path samples, GC behavior), but
+#                   JFR/GC profiling overhead is itself a confound for a latency-sensitive headline
+#                   number - see docs/performance/latency-path-isolation.md's 2026-08-27 correction.
+#   trusted-clean - 3 forks, 5 warmup iterations, 5 measurement iterations (deliberately more than
+#                   trusted's 3, since this is meant to be the number to actually trust), no
+#                   profiler at all, no background resource sampler. Added 2026-08-27 specifically
+#                   for latency-sensitive point-query comparisons (ROADMAP.md's "Next candidate"
+#                   entry) where profiler overhead would itself distort the measurement. Use this,
+#                   not trusted, for any run whose headline number is a latency claim.
+# All workflow_dispatch only - deliberately never scheduled, so a noisy/slow run is something a
+# human asked for, not unattended (the weekly schedule below always forces "fast").
 #
 # Phase 11 PR2 (see ROADMAP.md): the /proc-based RSS/thread sampler above exists to answer the open
 # question of whether client-v2's throughput edge (docs/performance/results.md's cloud-verified
@@ -75,12 +86,16 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "fast (1 fork, sanity check) or trusted (3 forks, -prof gc)"
+        description: >-
+          fast (1 fork, sanity check), trusted (3 forks, -prof gc,jfr, historical/diagnostic), or
+          trusted-clean (3 forks, 5 measurement iterations, no profiler - use this for latency
+          claims)
         required: true
         type: choice
         options:
           - fast
           - trusted
+          - trusted-clean
         default: fast
       benchmark:
         description: >-
@@ -196,14 +211,26 @@ jobs:
         # No `hs_thr` here (see this file's header comment): removed after a real trusted run
         # (2026-08-24) failed with `ClassNotFoundException: hs_thr` - JMH 1.37 has no built-in
         # HotSpot thread-count profiler under that or any other name.
+        #
+        # `iterations` (measurement iterations) is explicitly set for every profile, not left to
+        # build.gradle.kts's own default (3) - trusted-clean deliberately uses 5, and being explicit
+        # here for fast/trusted too means this step is the single place all three profiles' full
+        # parameter sets are defined, not split between here and an implicit Gradle default.
         run: |
           if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
             echo "forks=3" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=5" >> "$GITHUB_OUTPUT"
+            echo "iterations=3" >> "$GITHUB_OUTPUT"
             echo "profilers=gc,jfr:dir=/tmp/jfr-output" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.profile.outputs.name }}" = "trusted-clean" ]; then
+            echo "forks=3" >> "$GITHUB_OUTPUT"
+            echo "warmup-iterations=5" >> "$GITHUB_OUTPUT"
+            echo "iterations=5" >> "$GITHUB_OUTPUT"
+            echo "profilers=" >> "$GITHUB_OUTPUT"
           else
             echo "forks=1" >> "$GITHUB_OUTPUT"
             echo "warmup-iterations=1" >> "$GITHUB_OUTPUT"
+            echo "iterations=3" >> "$GITHUB_OUTPUT"
             echo "profilers=" >> "$GITHUB_OUTPUT"
           fi
 
@@ -289,11 +316,13 @@ jobs:
           if [ "${{ steps.benchmark.outputs.name }}" = "VirtualThreadDecoderThroughputBenchmark" ]; then
             JVM_ARGS_FLAG="-Pjmh.jvmArgsAppend=-Djdk.tracePinnedThreads=full"
           fi
+          ITERATIONS_FLAG="-Pjmh.iterations=${{ steps.jmh-params.outputs.iterations }}"
           if [ "${{ steps.profile.outputs.name }}" = "trusted" ]; then
             ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
               -Pjmh.includes=${{ steps.benchmark.outputs.name }} \
               -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
               -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
+              $ITERATIONS_FLAG \
               $PROFILER_FLAG \
               $JVM_ARGS_FLAG \
               >raw-stdout.log 2>&1 &
@@ -308,10 +337,14 @@ jobs:
             wait "$SAMPLER_PID" "$TAIL_PID" 2>/dev/null || true
             exit "$GRADLE_EXIT"
           else
+            # Also the path trusted-clean takes (see this file's header comment): no background
+            # resource sampler, plain foreground `tee` - the whole point of trusted-clean is a
+            # profiler-free, sampler-free run with nothing but Gradle/JMH itself running.
             ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
               -Pjmh.includes=${{ steps.benchmark.outputs.name }} \
               -Pjmh.forks=${{ steps.jmh-params.outputs.forks }} \
               -Pjmh.warmupIterations=${{ steps.jmh-params.outputs.warmup-iterations }} \
+              $ITERATIONS_FLAG \
               $PROFILER_FLAG \
               $JVM_ARGS_FLAG \
               2>&1 | tee raw-stdout.log
@@ -358,6 +391,7 @@ jobs:
                   "cpuCores": int(sys.argv[14]),
                   "ramGb": int(sys.argv[15]),
                   "runDate": sys.argv[16],
+                  "measurementIterations": int(sys.argv[17]),
               },
               sys.stdout,
               indent=2,
@@ -379,6 +413,7 @@ jobs:
             "${CPU_CORES}" \
             "${RAM_GB}" \
             "$(date -u +%Y-%m-%d)" \
+            "${{ steps.jmh-params.outputs.iterations }}" \
             > metadata.json
           cat metadata.json
 
