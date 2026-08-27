@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -414,9 +415,14 @@ class RowBinaryDecoderTest {
 
       // then
       assertThat(droppedErrors).hasSize(1);
-      // and
+      // and - RowBinaryDecoderCloseException wraps the IOException that ListDecodingRowBinaryReader
+      // #close() itself narrows client-v2's inherited close() throws Exception into (see that
+      // method's Javadoc), which in turn wraps the original IllegalStateException from cancel() -
+      // two wrapping hops, not one, since that narrowing was introduced
       assertThat(droppedErrors.get(0))
           .hasMessageContaining("Failed to close the row decoder's underlying stream")
+          .cause()
+          .isInstanceOf(IOException.class)
           .cause()
           .isInstanceOf(IllegalStateException.class)
           .hasMessage("cancel failed");

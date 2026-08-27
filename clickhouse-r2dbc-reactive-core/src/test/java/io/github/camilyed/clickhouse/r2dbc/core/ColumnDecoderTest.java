@@ -143,6 +143,70 @@ class ColumnDecoderTest {
   }
 
   @Test
+  void shouldDecodeInt128AsASignedBigInteger() throws Exception {
+    // given - -100 as a 16-byte little-endian two's complement value (same bytes as the
+    // Decimal128 test above, but read as a plain integer, no scale)
+    final byte[] negativeOneHundred = new byte[16];
+    java.util.Arrays.fill(negativeOneHundred, (byte) 0xFF);
+    negativeOneHundred[0] = (byte) 0x9C;
+    final var in = new ByteArrayInputStream(negativeOneHundred);
+
+    // when
+    final Object value = ScalarColumnDecoder.INT128.decode(in, scratch);
+
+    // then
+    assertThat(value).isInstanceOf(BigInteger.class).isEqualTo(new BigInteger("-100"));
+  }
+
+  @Test
+  void shouldDecodeUInt128AsAnUnsignedBigIntegerBeyondLongRange() throws Exception {
+    // given - UInt128 max value: sixteen 0xFF bytes
+    final byte[] allOnes = new byte[16];
+    java.util.Arrays.fill(allOnes, (byte) 0xFF);
+    final var in = new ByteArrayInputStream(allOnes);
+
+    // when
+    final Object value = ScalarColumnDecoder.UINT128.decode(in, scratch);
+
+    // then
+    assertThat(value)
+        .isInstanceOf(BigInteger.class)
+        .isEqualTo(new BigInteger("340282366920938463463374607431768211455"));
+  }
+
+  @Test
+  void shouldDecodeInt256AsASignedBigInteger() throws Exception {
+    // given - -1 as a 32-byte little-endian two's complement value: all 0xFF
+    final byte[] negativeOne = new byte[32];
+    java.util.Arrays.fill(negativeOne, (byte) 0xFF);
+    final var in = new ByteArrayInputStream(negativeOne);
+
+    // when
+    final Object value = ScalarColumnDecoder.INT256.decode(in, scratch);
+
+    // then
+    assertThat(value).isInstanceOf(BigInteger.class).isEqualTo(new BigInteger("-1"));
+  }
+
+  @Test
+  void shouldDecodeUInt256AsAnUnsignedBigIntegerBeyondLongRange() throws Exception {
+    // given - UInt256 max value: thirty-two 0xFF bytes
+    final byte[] allOnes = new byte[32];
+    java.util.Arrays.fill(allOnes, (byte) 0xFF);
+    final var in = new ByteArrayInputStream(allOnes);
+
+    // when
+    final Object value = ScalarColumnDecoder.UINT256.decode(in, scratch);
+
+    // then
+    assertThat(value)
+        .isInstanceOf(BigInteger.class)
+        .isEqualTo(
+            new BigInteger(
+                "115792089237316195423570985008687907853269984665640564039457584007913129639935"));
+  }
+
+  @Test
   void shouldDecodeAFixedStringOfExactlyItsDeclaredLength() throws Exception {
     // given - FixedString(5) storing "hi" padded with three trailing NUL bytes
     final byte[] fixedStringBytes = {'h', 'i', 0x00, 0x00, 0x00};
