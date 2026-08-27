@@ -107,6 +107,7 @@ on:
         type: choice
         options:
           - PublicApiMatchedPoolThroughputBenchmark
+          - PointQueryPipelineIsolationBenchmark
           - DefaultPoolSlowQueryThroughputBenchmark
           - ClientV2ExecutorAggressivenessBenchmark
           - DecoderWorkerCountThroughputBenchmark

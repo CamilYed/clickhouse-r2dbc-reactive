@@ -27,10 +27,17 @@ package io.github.camilyed.clickhouse.r2dbc.core;
  * per-query latency was only ~1-2% lower at low/medium concurrency and flat at high concurrency,
  * and allocation was ~7-8% lower (the one clean, consistent signal) — network, transport, the
  * decoder scheduler, and connection pooling dominate this benchmark's cost far more than the decode
- * step does. See ROADMAP.md's "Trusted public-API result" entry for the full table; {@link #NATIVE}
- * stays opt-in on the strength of that result. A result containing even one column outside the
- * native set still decodes exactly as {@link #CLICKHOUSE} would, automatically, with no observable
- * difference in decoded values or types — only the decode path taken to get there changes.
+ * step does. A follow-up profiler-free rerun ({@code trusted-clean} profile, 2026-08-27, commit
+ * {@code 8c64d73}) confirmed the same picture without JFR/GC overhead as a confound: throughput
+ * again statistically indistinguishable, {@link #NATIVE}'s small p50 edge over {@link #CLICKHOUSE}
+ * did not reproduce (flat to marginally worse this time, within noise either way), and — the one
+ * decision-relevant finding — the tail-latency (p99) gap against {@code clientV2} was essentially
+ * identical regardless of decode mode (~22-28% either way), confirming that gap sits upstream of
+ * decoding entirely. See ROADMAP.md's "Trusted public-API result" and "Trusted-clean public-API
+ * result" entries for the full tables; {@link #NATIVE} stays opt-in on the strength of both. A
+ * result containing even one column outside the native set still decodes exactly as {@link
+ * #CLICKHOUSE} would, automatically, with no observable difference in decoded values or types —
+ * only the decode path taken to get there changes.
  */
 public enum RowBinaryDecoderMode {
 

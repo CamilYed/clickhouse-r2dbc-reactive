@@ -916,6 +916,36 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     `thisDriverNative` ≈41-42ms at `concurrency=32`) — a pre-existing, already-documented gap
     unrelated to the decoder question this benchmark exists to answer. See `NativeRowBinaryReader`'s
     Javadoc for the same caveat at the code level.
+  - **Trusted-clean public-API result (2026-08-27, commit `8c64d73`, 3 forks/5 warmup/5 measurement,
+    no profiler, `poolSize=8`, `concurrency=8/32/128`):** step (1)-(2) of the refined execution order
+    below, done. Same pinned external ClickHouse as the profiled trusted run above, but with
+    `-prof gc,jfr` removed and 5 measurement iterations instead of 3, specifically to rule out
+    profiler overhead as a confound on this latency-sensitive comparison. Throughput for
+    `thisDriver`/`thisDriverNative` is again statistically indistinguishable at every concurrency
+    (824.7/848.1/850.8 ops/s vs 815.5/844.7/840.2 ops/s - a ~0.4-1.3% spread against +/-23-61 ops/s
+    error bars), both still trailing `clientV2` (882.0/867.5/858.3 ops/s) by the same ~2-8% margin as
+    before. Merged per-query latency, computed by hand from the raw per-fork `TRUE MERGED` log lines
+    (`analyze.py` still only recognizes `thisDriver`/`clientV2` - the documented gap in
+    `PublicApiMatchedPoolThroughputBenchmark`'s own Javadoc, not fixed as part of this run): `NATIVE`
+    vs `CLICKHOUSE` (`thisDriver`) p50 is now flat-to-marginally-worse (+0.5%/+0.6%/+0.75% at
+    `concurrency=8/32/128`, not the ~1-2% lower this profiled run previously suggested - that earlier
+    edge did not reproduce cleanly and may itself have been partly a profiler-interaction artifact),
+    while p99 is marginally better (-1.9%/-0.6%/-1.5%) - both effects small enough to be within
+    ordinary run-to-run noise, not a repeatable win either direction. **The one clean, decision-useful
+    signal: the tail-latency gap vs `clientV2` is essentially identical regardless of decode mode.**
+    p99 for `thisDriverNative` is 27.9%/21.8%/22.0% higher than `clientV2` at `concurrency=8/32/128`;
+    p99 for `thisDriver` (`CLICKHOUSE`) is 30.4%/22.5%/23.9% higher - the same gap, within a couple of
+    points, whichever decoder runs. That's a clean (no profiler confound this time), independent
+    confirmation of this investigation's standing hypothesis: the tail-latency deficit against
+    `clientV2` sits upstream of decoding entirely (bridge/scheduler/pool/transport), so no decoder
+    change - `NATIVE` or further micro-optimization of it - will close it. No allocation figures this
+    run (profiler intentionally disabled). **Decision: step (2)'s "stop here" condition (`NATIVE`
+    clearly ahead end to end) did not hold - still effectively tied with `CLICKHOUSE`, both still
+    behind `clientV2` on tail latency by the same margin.** Per the refined execution order, the next
+    step would be step (3), the focused `PointQueryPipelineIsolationBenchmark` isolating
+    transport/scheduler/mapping cost - **not started, still deliberately deferred** per the standing
+    "revisit in a few days" decision below; this result sharpens the case for it without changing the
+    decision to wait.
     `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted
@@ -977,14 +1007,18 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     time actually goes before committing to the bigger rewrite, the same "one variable, cheap
     diagnostic before a production change" discipline this whole investigation has followed (Variant
     B/C/task #309 above were all ruled out this way, cheaply, before being discarded).
-    **Refined execution order (2026-08-27, still not started):** (1) add a `trusted-clean` JMH
-    profile (3 forks/5 warmup/5 measurement, no JFR/GC profiler — the current `trusted` profile's
-    JFR overhead is itself a confound for a latency-sensitive point-query comparison) alongside the
-    existing `trusted`, and extend `scripts/benchmarks/analyze.py` to chart `thisDriverNative`
-    (today it only recognizes `thisDriver`/`clientV2` — see `PublicApiMatchedPoolThroughputBenchmark`'s
-    own Javadoc); (2) rerun `PublicApiMatchedPoolThroughputBenchmark` under `trusted-clean` — if that
-    alone shows `NATIVE` clearly ahead end to end, stop here, no isolation benchmark needed; (3) if
-    still effectively tied, add one focused `PointQueryPipelineIsolationBenchmark` (single-row point
+    **Refined execution order (2026-08-27, updated 2026-08-27 after the trusted-clean run below):**
+    (1) **done** — added a `trusted-clean` JMH profile (3 forks/5 warmup/5 measurement, no JFR/GC
+    profiler — the current `trusted` profile's JFR overhead is itself a confound for a
+    latency-sensitive point-query comparison) alongside the existing `trusted` (commit `8c64d73`);
+    `scripts/benchmarks/analyze.py` was *not* extended to chart `thisDriverNative` as originally
+    planned (still only recognizes `thisDriver`/`clientV2` — see
+    `PublicApiMatchedPoolThroughputBenchmark`'s own Javadoc) — the trusted-clean result below was
+    instead computed by hand from the raw `TRUE MERGED` log lines, which was cheap enough for one run
+    that fixing the script wasn't worth blocking on; (2) **done, "stop here" condition not met** — see
+    the "Trusted-clean public-API result" entry below: `NATIVE` is not clearly ahead end to end,
+    still effectively tied with `CLICKHOUSE`; (3) **next step, not started** — add one focused
+    `PointQueryPipelineIsolationBenchmark` (single-row point
     query only, not a matrix) with minimal variants layered bottom-up: client-v2 transport-only
     (query → raw response bytes → checksum, no row materialization) vs. our transport-only
     (`ClickHouseHttpTransport` → response bytes → checksum, no `RowBinaryDecoder`) to check whether

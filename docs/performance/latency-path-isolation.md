@@ -717,6 +717,20 @@ quicker), a structural cross-check independent of the timing numbers themselves.
 > `String` scratch-buffer, and `PushbackInputStream` peek-removal ideas) on the strength of this
 > result — see ROADMAP.md's "Trusted public-API result" entry for the full table.
 
+> **Second follow-up (2026-08-27, commit `8c64d73`): `trusted-clean` profile confirms the same
+> picture without the profiler as a confound.** A rerun with `-prof gc,jfr` removed and 5
+> measurement iterations instead of 3 (3 forks, `poolSize=8`, `concurrency=8/32/128`, same pinned
+> external ClickHouse) found throughput again statistically indistinguishable between `thisDriver`
+> and `thisDriverNative` at every concurrency. `NATIVE`'s small p50 edge over `CLICKHOUSE` from the
+> profiled run above did not reproduce here (flat to marginally worse this time, within ordinary
+> run-to-run noise). No allocation figures this run — the profiler was intentionally disabled. The
+> one decision-relevant finding: the p99 gap against `clientV2` was essentially identical regardless
+> of decode mode (~22-28% either way), a clean, profiler-free confirmation that the tail-latency
+> deficit sits upstream of decoding — see ROADMAP.md's "Trusted-clean public-API result" entry for
+> the full numbers. Decision unchanged: keep `NATIVE` opt-in, do not prioritize further decoder
+> micro-optimization; the next step for the tail-latency gap itself is the still-deferred
+> `PointQueryPipelineIsolationBenchmark` isolation work, not another decoder change.
+
 **Mechanistically, this resolves the `SELECT 1`/`point` inconsistency rather than deepening it.**
 Both single-row scenarios sit inside a ~1.6-2.3ms HTTP round trip, where a genuine but small
 per-row/per-column reader-layer saving (plausibly sub-microsecond to low-microsecond per column,
