@@ -951,6 +951,32 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     hypotheses (GC, the copy, construction cost, admission-gate ordering) now examined; none reliably
     explains Variant A's deficit — "no production change justified yet" per this investigation's own
     plan.** Variant D not started.
+  - **Next candidate (proposed 2026-08-27, not started — deliberately deferred, see below): bypass
+    `FluxInputStreamBridge`/`RowDecodingScheduler` for the native path, not just the reader.**
+    `FluxInputStreamBridge` (bridges reactive `Flux<ChunkBuffer>` to a blocking `InputStream`) and
+    `RowDecodingScheduler` (the thread hop that lets a blocking reader run off the Netty event loop)
+    are shared by `CLICKHOUSE` and `NATIVE` alike — swapping the reader never touched them. For a
+    large scan this fixed per-request setup cost is amortized across thousands of rows, which is
+    exactly why `DecoderOnlyBenchmark`'s ~14-15% per-row win showed up clearly there; for a
+    point-query (one row), that same fixed cost is paid once and amortized over nothing, so it can
+    dominate total latency far more than the ~1-2 rows' worth of decode time `NativeRowBinaryReader`
+    actually saves — matching the 2026-08-27 public-API result above almost exactly (large isolated
+    win, negligible-to-small end-to-end win). The proposed target shape: decode directly off Reactor
+    Netty's `ByteBuf`/`Flux<ByteBuffer>` via a genuinely non-blocking streaming parser, with no
+    blocking-`InputStream` adaptation and no dedicated decode-scheduler thread hop, so `NATIVE`
+    becomes an actually different execution model, not just a different reader plugged into the same
+    pipeline. This is a materially bigger undertaking than anything done in this investigation so
+    far — it means redesigning `RowBinaryDecoder`'s execution model (cancellation, backpressure, and
+    the virtual-thread decoder option were all built around today's blocking-pull-on-a-worker-thread
+    shape), not adding another `RowBinaryReader` implementation. **Deliberately not started now** —
+    development capacity is limited (see PR #99's Slack context); revisit in a few days. When
+    resumed, the recommended entry point is cheap and non-invasive: a JFR profile of
+    `PublicApiMatchedPoolThroughputBenchmark` itself (not `DecoderOnlyBenchmark`) at
+    `concurrency=8`/`poolSize=8` to see the real breakdown of one ~7ms point-query round trip —
+    network/server vs. bridge/scheduler hop vs. decode vs. pool acquisition — confirming where the
+    time actually goes before committing to the bigger rewrite, the same "one variable, cheap
+    diagnostic before a production change" discipline this whole investigation has followed (Variant
+    B/C/task #309 above were all ruled out this way, cheaply, before being discarded).
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,
