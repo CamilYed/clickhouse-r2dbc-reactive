@@ -680,6 +680,21 @@ both "look big": the mean-latency ratio (4954.4/3884.2 ≈ 1.275) and the sample
 (SampleTime mode packs more completed ops into the same fixed iteration-time budget when each op is
 quicker), a structural cross-check independent of the timing numbers themselves.
 
+> **Correction (2026-08-27, external review of PR #99): this ~21.6% number is unverified, do not
+> cite it as production evidence.** The review found that `minimalReader` decoded `UInt8`/`UInt64`
+> as `Long` here, not `Short`/`BigInteger` (the representations client-v2's own typed getters
+> produce and the production `NativeRowBinaryReader` eventually settled on) — and that the
+> `client-v2 reader` column above blackholes `getLong`/`getString`/`getBigDecimal` conversions while
+> `minimalReader` blackholes already-decoded raw values with no conversion. Both sides therefore did
+> different work, not just different decode paths, so the "structural cross-check" argument above
+> doesn't rule out a boxing/conversion confound the way it was intended to. The type mismatch in
+> `MinimalRowBinaryReader` is now fixed on branch `feature/314-latency-path-isolation`, but this
+> table has not been re-run against the fix, and development on this driver is paused as of
+> 2026-08-27. Treat every "faster"/"slower" verdict in this document as provisional until re-run. A
+> valid, symmetric production-level comparison (`DecoderOnlyBenchmark#thisDriver` vs
+> `#thisDriverNative`, same captured bytes, same `RowBinaryDecoder` call, only the mode differs) now
+> exists but has also not been run.
+
 **Mechanistically, this resolves the `SELECT 1`/`point` inconsistency rather than deepening it.**
 Both single-row scenarios sit inside a ~1.6-2.3ms HTTP round trip, where a genuine but small
 per-row/per-column reader-layer saving (plausibly sub-microsecond to low-microsecond per column,

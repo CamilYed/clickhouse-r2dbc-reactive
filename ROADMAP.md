@@ -870,6 +870,20 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     `./gradlew spotlessApply spotlessCheck clean build`, which also re-runs
     `RealWorldTableAgainstRealClickHouseTest` as the regression net for every type not natively
     covered.
+  - **Correction (2026-08-27, external review of PR #99):** the `~21.6% faster` `stream10k` number
+    above is **unverified** — the review found `MinimalRowBinaryReader` decoded `UInt8`/`UInt64` as
+    `Long` (not the production decoder's `Short`/`BigInteger`) and that the benchmark blackholed
+    client-v2's typed-getter output against this prototype's raw array: different Java
+    representations and different consumption work on each side, not decode cost alone. The type
+    mismatch is fixed (`MinimalRowBinaryReader`, `RowBinaryReaderTypeMatrixBenchmark` now documents
+    the remaining getter-choice asymmetry), but the original benchmark has not been re-run. Real
+    ClickHouse type-coverage correctness between `CLICKHOUSE`/`NATIVE` modes is proven
+    (`RealWorldTableAgainstRealClickHouseTest`, parametrized over both), and a symmetric,
+    apples-to-apples production performance comparison now exists (`DecoderOnlyBenchmark#thisDriver`
+    vs `#thisDriverNative`, same captured bytes, same `RowBinaryDecoder` call) — but it has not been
+    run either. Development on this driver is paused (2026-08-27) before that run happened, so the
+    native decoder's actual production speedup remains an open question, not a settled one. See
+    `NativeRowBinaryReader`'s Javadoc for the same caveat at the code level.
     `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted

@@ -52,6 +52,19 @@ import org.openjdk.jmh.infra.Blackhole;
  * (bare {@code SELECT 1}), {@code uint64} (`id` alone), {@code string} (`label` alone), {@code
  * decimal} (`amount` alone), {@code stringDecimal} (`label, amount` — Variant D's {@code point}
  * shape), {@code fullRow} (`id, label, amount` — Variant D's {@code stream10k} row shape).
+ *
+ * <p><b>Known limitation, flagged by a 2026-08-26 review of PR #99, not yet fixed.</b> {@link
+ * #decodeOneColumnViaClientV2} always calls {@code reader.getString(1)} regardless of the column's
+ * actual type, so {@link #clientV2UInt8}/{@link #clientV2UInt64}/{@link #clientV2String}/{@link
+ * #clientV2Decimal} pay an extra type-conversion cost {@link #minimalUInt8}/{@link
+ * #minimalUInt64}/{@link #minimalString}/{@link #minimalDecimal} never do (those blackhole the
+ * already-decoded raw value directly) — a real confound in every single-column comparison this
+ * class reports, on top of decode cost. {@link #clientV2StringDecimal}/{@link #clientV2FullRow} do
+ * not have this problem (they call the type-appropriate {@code getString}/{@code getBigDecimal}/
+ * {@code getLong}). {@link #valuesMatch}'s {@code String.valueOf(...)} comparison in the setup
+ * sanity check has the same class of issue: it can hide a representation mismatch (e.g. {@code
+ * Short} vs {@code Long}) between the two readers, since both stringify to the same digits. Do not
+ * treat this class's single-column numbers as production evidence until both are fixed.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)

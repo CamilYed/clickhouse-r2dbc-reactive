@@ -16,13 +16,24 @@ import org.jspecify.annotations.Nullable;
  * instead.
  *
  * <p>Grew out of {@code MinimalRowBinaryReader}, a benchmark-only prototype (see
- * docs/performance/latency-path-isolation.md's Variant D section) that measured a decisive,
+ * docs/performance/latency-path-isolation.md's Variant D section) that reported a decisive,
  * reproducible per-row/per-column decode cost from client-v2's generic reader machinery on a
  * multi-column scan (~21.6% faster, ~79x combined error bars, cross-checked by matching
  * mean-latency and throughput ratios) — this class is the production version, covering ClickHouse's
  * scalar types ({@link NativeColumnTypeResolver}'s permitted set) rather than the benchmark's
  * narrow four-type slice, and wired behind an automatic, correctness-preserving fallback rather
  * than opt-in.
+ *
+ * <p><b>That ~21.6% number is unverified as of a 2026-08-26 external review of PR #99 and should
+ * not be cited as proof this class is faster.</b> The review found {@code MinimalRowBinaryReader}
+ * decoded {@code UInt8}/{@code UInt64} as {@code Long} (not this class's {@code Short}/{@code
+ * BigInteger}) and that the benchmark blackholed client-v2's typed-getter output against this
+ * prototype's raw array — different Java representations and different consumption work on each
+ * side, not decode cost alone. The type mismatch is now fixed, but the benchmark has not been
+ * re-run. {@link RowBinaryDecoderMode}'s {@code CLICKHOUSE} vs {@code NATIVE} can be compared
+ * directly and symmetrically today via {@code DecoderOnlyBenchmark#thisDriver}/{@code
+ * #thisDriverNative} (same captured bytes, same production {@code RowBinaryDecoder} call, only the
+ * mode differs) — that is the benchmark to trust once it has actually been run.
  *
  * <p>End-of-row-stream detection uses the same one-byte peek/{@link PushbackInputStream#unread}
  * approach as that prototype: {@code RowBinaryWithNamesAndTypes} carries no row-count prefix, so

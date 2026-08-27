@@ -30,6 +30,19 @@ import org.jspecify.annotations.Nullable;
  * into {@code core} or {@code connector} — this pass stays "no production code changes" per this
  * repo's diagnostic-only convention for latency investigation work; see {@code
  * LatencyPathVariantDBenchmark}'s own Javadoc for how it's used.
+ *
+ * <p><b>Type-parity fix (2026-08-26 PR #99 review).</b> An external code review of the production
+ * native decoder this class inspired ({@code NativeRowBinaryReader}) found that this class's {@code
+ * UInt8}/{@code UInt64} decoding did not match the Java representations production settled on
+ * ({@code Short}/{@code BigInteger}, matching client-v2's own typed getters) — this class
+ * originally returned {@code Long} for both. That mismatch mattered for benchmark validity, not
+ * just correctness: every benchmark that blackholed this class's raw values against client-v2's
+ * typed getters (e.g. {@code getLong(1)} for {@code UInt64}) was comparing different boxing/
+ * allocation work on top of decode cost, not decode cost alone. Fixed to remove that confound.
+ * {@code docs/performance/latency-path-isolation.md}'s Variant D {@code stream10k} result (~21.6%
+ * faster) predates this fix and should be treated as <b>unverified</b> until re-run against the
+ * corrected type mapping — see that document and {@code NativeRowBinaryReader}'s own Javadoc for
+ * the caveat.
  */
 final class MinimalRowBinaryReader implements AutoCloseable {
 
@@ -94,8 +107,14 @@ final class MinimalRowBinaryReader implements AutoCloseable {
 
   private Object decode(final ColumnType type, final int decimalScale) throws IOException {
     return switch (type) {
-      case UINT8 -> (long) readRequiredByte(in);
-      case UINT64 -> readLongLE(in, scratch8);
+      // UInt8 -> Short and UInt64 -> BigInteger match production's ColumnDecoder/
+      // NativeRowBinaryReader exactly (see class Javadoc's "Type-parity fix" note) - this
+      // benchmark-local decoder used to return Long for both, a real representation mismatch a
+      // 2026-08-26 review of PR #99 caught: it let the diagnostic benchmark's win margin include a
+      // free boxing/allocation difference against client-v2's own typed getters, not just decode
+      // cost. Fixed to remove that confound, not to change this class's own scope.
+      case UINT8 -> (short) (readRequiredByte(in) & 0xFF);
+      case UINT64 -> readUnsignedBigIntegerLE8(in, scratch8);
       case STRING -> readString(in);
       case DECIMAL -> BigDecimal.valueOf(readLongLE(in, scratch8), decimalScale);
     };
@@ -154,6 +173,23 @@ final class MinimalRowBinaryReader implements AutoCloseable {
       value = (value << 8) | (scratch8[i] & 0xFFL);
     }
     return value;
+  }
+
+  /**
+   * An unsigned 8-byte little-endian integer widened to {@link java.math.BigInteger} — matches
+   * production's {@code RowBinaryWireFormat.readUnsignedBigIntegerLE(in, scratch, 8)} (in turn
+   * matching client-v2's own {@code readBigIntegerLE(8, true)}), not a plain signed {@code long}:
+   * {@code UInt64} values above {@link Long#MAX_VALUE} would otherwise decode as negative. See
+   * {@link #decode}'s comment for why this matters for benchmark validity, not just correctness.
+   */
+  private static java.math.BigInteger readUnsignedBigIntegerLE8(
+      final InputStream in, final byte[] scratch8) throws IOException {
+    readFully(in, scratch8);
+    final byte[] reversed = new byte[8];
+    for (int i = 0; i < 8; i++) {
+      reversed[i] = scratch8[7 - i];
+    }
+    return new java.math.BigInteger(1, reversed);
   }
 
   private static String readString(final InputStream in) throws IOException {

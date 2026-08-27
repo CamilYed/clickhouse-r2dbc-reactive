@@ -13,11 +13,13 @@ package io.github.camilyed.clickhouse.r2dbc.core;
  * <p>{@link #NATIVE} opts into {@link NativeRowBinaryReader} for any result where every column
  * resolves through {@link NativeColumnTypeResolver} — see {@link RowBinaryDecoder}'s own Javadoc
  * for the exact per-result native/fallback decision this makes, and {@code
- * docs/performance/latency-path-isolation.md} for the measured motivation (a decisive,
- * cross-validated ~21.6% per-row/per-column reader-layer cost at 10k-row scale). A result
- * containing even one column outside that native set still decodes exactly as {@link #CLICKHOUSE}
- * would, automatically, with no observable difference in decoded values or types — only the decode
- * path taken to get there changes.
+ * docs/performance/latency-path-isolation.md} for the measured motivation (a decisive, reported
+ * ~21.6% per-row/per-column reader-layer cost at 10k-row scale — <b>unverified as of a 2026-08-26
+ * external review of PR #99</b>; see {@link NativeRowBinaryReader}'s Javadoc for why, and {@code
+ * DecoderOnlyBenchmark#thisDriver}/{@code #thisDriverNative} for the apples-to-apples comparison to
+ * trust instead once it has been run). A result containing even one column outside that native set
+ * still decodes exactly as {@link #CLICKHOUSE} would, automatically, with no observable difference
+ * in decoded values or types — only the decode path taken to get there changes.
  */
 public enum RowBinaryDecoderMode {
 
