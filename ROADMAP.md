@@ -977,6 +977,33 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     time actually goes before committing to the bigger rewrite, the same "one variable, cheap
     diagnostic before a production change" discipline this whole investigation has followed (Variant
     B/C/task #309 above were all ruled out this way, cheaply, before being discarded).
+    **Refined execution order (2026-08-27, still not started):** (1) add a `trusted-clean` JMH
+    profile (3 forks/5 warmup/5 measurement, no JFR/GC profiler — the current `trusted` profile's
+    JFR overhead is itself a confound for a latency-sensitive point-query comparison) alongside the
+    existing `trusted`, and extend `scripts/benchmarks/analyze.py` to chart `thisDriverNative`
+    (today it only recognizes `thisDriver`/`clientV2` — see `PublicApiMatchedPoolThroughputBenchmark`'s
+    own Javadoc); (2) rerun `PublicApiMatchedPoolThroughputBenchmark` under `trusted-clean` — if that
+    alone shows `NATIVE` clearly ahead end to end, stop here, no isolation benchmark needed; (3) if
+    still effectively tied, add one focused `PointQueryPipelineIsolationBenchmark` (single-row point
+    query only, not a matrix) with minimal variants layered bottom-up: client-v2 transport-only
+    (query → raw response bytes → checksum, no row materialization) vs. our transport-only
+    (`ClickHouseHttpTransport` → response bytes → checksum, no `RowBinaryDecoder`) to check whether
+    the gap is already present before decoding even starts; `RowBinaryDecoder.decodeRows(...,
+    NATIVE)` on captured one-row bytes (bridge + reader + `Flux.generate`, no `RowDecodingScheduler`)
+    vs. the same through the production `RowDecodingScheduler`-scheduled `decode(...)` to isolate the
+    scheduler hop's fixed cost in isolation; the same scheduled comparison repeated for `CLICKHOUSE`
+    as a control, since the original decoder-only numbers were only ever measured at 10k+ rows, never
+    for a single row; and finally that native scheduled decode vs. the full public
+    `ConnectionFactory`→`Statement`→`Result`→`Row`→`PointResult` path to isolate connector/SPI
+    mapping overhead. Each comparison answers one question in isolation (transport gap? scheduler
+    cost? mapping cost?) rather than guessing from the aggregate. **Hard safety rule carried into any
+    future work here:** do not move `NativeRowBinaryReader` decoding onto the Netty event loop even if
+    a captured-in-memory-bytes benchmark makes it look faster — `FluxInputStreamBridge`'s
+    `InputStream` can legitimately block waiting for a future network chunk, and captured bytes never
+    exercise that wait, so such a benchmark result would not transfer to production. Only pursue the
+    direct-`ByteBuffer` non-blocking parser (the earlier paragraph's target shape) if this isolation
+    work actually shows bridge/scheduler/orchestration cost is a meaningful share of point-query
+    latency — otherwise the effort is better spent elsewhere.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,
