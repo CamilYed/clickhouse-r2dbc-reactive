@@ -89,15 +89,16 @@ class RowDecoderModeWiringTest {
       final ClickHouseConnectionFactory factory = ClickHouseConnectionFactory.from(options);
 
       // when
-      final long rowCount =
+      final long rowsUpdated =
           Mono.from(factory.create())
               .flatMapMany(connection -> connection.createStatement("SELECT 1").execute())
               .flatMap(Result::getRowsUpdated)
-              .count()
-              .block(Duration.ofSeconds(5));
+              .blockFirst(Duration.ofSeconds(5));
 
-      // then - no error building/using the factory
-      assertThat(rowCount).isEqualTo(0L);
+      // then - no error building/using the factory; a SELECT reports 0 rows updated
+      // (ClickHouseResult#getRowsUpdated always emits exactly one element - Mono.just(writtenRows)
+      // - so this must read the emitted value itself, not count how many elements arrived)
+      assertThat(rowsUpdated).isEqualTo(0L);
     }
   }
 
