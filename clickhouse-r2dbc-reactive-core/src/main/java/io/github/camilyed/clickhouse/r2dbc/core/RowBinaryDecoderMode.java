@@ -24,10 +24,10 @@ package io.github.camilyed.clickhouse.r2dbc.core;
  * {@code PublicApiMatchedPoolThroughputBenchmark#thisDriverNative} run (2026-08-27, commit {@code
  * 3d66d62}) found it does not translate 1:1 to the public, end-to-end path: JMH throughput was
  * statistically indistinguishable from {@link #CLICKHOUSE} at every tested concurrency, merged
- * per-query latency was only ~1-2% lower at low/medium concurrency and flat at high concurrency, and
- * allocation was ~7-8% lower (the one clean, consistent signal) — network, transport, the decoder
- * scheduler, and connection pooling dominate this benchmark's cost far more than the decode step
- * does. See ROADMAP.md's "Trusted public-API result" entry for the full table; {@link #NATIVE}
+ * per-query latency was only ~1-2% lower at low/medium concurrency and flat at high concurrency,
+ * and allocation was ~7-8% lower (the one clean, consistent signal) — network, transport, the
+ * decoder scheduler, and connection pooling dominate this benchmark's cost far more than the decode
+ * step does. See ROADMAP.md's "Trusted public-API result" entry for the full table; {@link #NATIVE}
  * stays opt-in on the strength of that result. A result containing even one column outside the
  * native set still decodes exactly as {@link #CLICKHOUSE} would, automatically, with no observable
  * difference in decoded values or types — only the decode path taken to get there changes.

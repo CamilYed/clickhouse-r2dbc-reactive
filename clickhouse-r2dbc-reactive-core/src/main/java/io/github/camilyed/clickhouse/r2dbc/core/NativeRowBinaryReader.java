@@ -44,10 +44,11 @@ import org.jspecify.annotations.Nullable;
  * isolated ~11.4% since {@code Row}/{@code Result}/Reactor plumbing dilute the decoder's share of
  * total allocation at this layer) — network, transport, the decoder scheduler, and connection
  * pooling dominate this benchmark's cost far more than the decode step does. See ROADMAP.md's
- * "Trusted public-API result" entry for the full table and decision: {@link RowBinaryDecoderMode#NATIVE}
- * stays opt-in, and further decoder micro-optimization (e.g. {@code UInt64}'s temporary byte-array
- * reversal, a reusable {@code String} scratch buffer, removing the per-row {@link
- * PushbackInputStream} peek/unread) is not currently prioritized on the strength of this result.
+ * "Trusted public-API result" entry for the full table and decision: {@link
+ * RowBinaryDecoderMode#NATIVE} stays opt-in, and further decoder micro-optimization (e.g. {@code
+ * UInt64}'s temporary byte-array reversal, a reusable {@code String} scratch buffer, removing the
+ * per-row {@link PushbackInputStream} peek/unread) is not currently prioritized on the strength of
+ * this result.
  *
  * <p>End-of-row-stream detection uses the same one-byte peek/{@link PushbackInputStream#unread}
  * approach as that prototype: {@code RowBinaryWithNamesAndTypes} carries no row-count prefix, so
