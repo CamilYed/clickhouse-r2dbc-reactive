@@ -35,10 +35,19 @@ import org.jspecify.annotations.Nullable;
  * 2026-08-27 run (commit {@code 88020ed}) measured {@code NATIVE} ~13.6-15.2% faster (mean/p50/p90/
  * p95 all agreeing) with ~11.4% lower allocation, consistently at 10k/100k/1M rows, for a {@code
  * UInt64 + String + Decimal(18,4)} row shape. <b>That confirms this class decodes faster in
- * isolation — it does not yet prove the whole driver is faster for real point queries</b>, since
- * network, transport, the decoder scheduler, and connection pooling all sit between this class and
- * an application; {@code PublicApiMatchedPoolThroughputBenchmark#thisDriverNative} exists to answer
- * that end-to-end question next and has not been run yet.
+ * isolation — it does not translate 1:1 into the public, end-to-end R2DBC path</b>: a follow-up
+ * trusted run of {@code PublicApiMatchedPoolThroughputBenchmark#thisDriverNative} (2026-08-27,
+ * commit {@code 3d66d62}) found JMH throughput statistically indistinguishable from {@code
+ * CLICKHOUSE} at every tested concurrency (differences within JMH's own error bars), merged
+ * per-query latency only ~1-2% lower at {@code concurrency=8}/{@code 32} and flat at {@code
+ * concurrency=128}, and allocation ~7-8% lower consistently (the one clean signal, smaller than the
+ * isolated ~11.4% since {@code Row}/{@code Result}/Reactor plumbing dilute the decoder's share of
+ * total allocation at this layer) — network, transport, the decoder scheduler, and connection
+ * pooling dominate this benchmark's cost far more than the decode step does. See ROADMAP.md's
+ * "Trusted public-API result" entry for the full table and decision: {@link RowBinaryDecoderMode#NATIVE}
+ * stays opt-in, and further decoder micro-optimization (e.g. {@code UInt64}'s temporary byte-array
+ * reversal, a reusable {@code String} scratch buffer, removing the per-row {@link
+ * PushbackInputStream} peek/unread) is not currently prioritized on the strength of this result.
  *
  * <p>End-of-row-stream detection uses the same one-byte peek/{@link PushbackInputStream#unread}
  * approach as that prototype: {@code RowBinaryWithNamesAndTypes} carries no row-count prefix, so

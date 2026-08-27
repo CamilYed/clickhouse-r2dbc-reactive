@@ -891,9 +891,31 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     prove the whole driver is faster for real point queries**, since network, transport, the decoder
     scheduler, and connection pooling all sit between the decoder and an application. That question
     is what `PublicApiMatchedPoolThroughputBenchmark#thisDriverNative` (added alongside this
-    correction — see `OurDriverPointQueryClient.NativeDecoder`) exists to answer next, and it has not
-    been run yet. Until it has, treat `NATIVE` as "confirmed faster at the decoder layer, unproven
-    end to end" — see `NativeRowBinaryReader`'s Javadoc for the same caveat at the code level.
+    correction — see `OurDriverPointQueryClient.NativeDecoder`) exists to answer next.
+  - **Trusted public-API result (2026-08-27, commit `3d66d62`, 3 forks/5 warmup/3 measurement,
+    `gc,jfr`, `poolSize=8`, `concurrency=8/32/128`):** run against a single pinned external
+    ClickHouse (`scripts/start-benchmark-clickhouse.sh`), not per-fork Testcontainers, so all three
+    paths (`clientV2`/`thisDriver`/`thisDriverNative`) shared one server instance. **Small
+    success, not strong success — matches the "small success" branch of the decision rule above.**
+    JMH throughput for `thisDriver` vs `thisDriverNative` is statistically indistinguishable at
+    every concurrency level (differences of 1-4% against ±18-23% error bars). Merged per-query
+    latency (mean/p50/p90/p95) shows `NATIVE` consistently ~1-2% lower at `concurrency=8`/`32`, and
+    essentially flat (p99 marginally worse) at `concurrency=128` — real but modest, nowhere near the
+    isolated decoder's ~14-15%: network, transport, `RowDecodingScheduler`, and the 8-connection
+    pool dominate this benchmark's cost, diluting the decoder's share of total latency. The one
+    clean, consistent signal is allocation: `NATIVE` uses ~7-8% less per query
+    (`gc.alloc.rate.norm`) than `CLICKHOUSE` at all three concurrency levels (e.g. 18933→17449 B/op
+    at `concurrency=128`) — smaller than the isolated ~11.4% (more allocation happens outside the
+    decoder at this layer — `Row`/`Result`/Reactor plumbing — diluting the decoder's own share) but
+    directionally unambiguous, unlike the noisy throughput/latency numbers. **Decision (matching
+    section 19's "small success" branch): keep `NATIVE` opt-in; do not prioritize the JFR-suggested
+    decoder micro-optimizations (`UInt64` `readReversed`, `String` scratch buffer, `PushbackInputStream`
+    peek removal) over other work — the isolated 14-15% win is real but doesn't clearly translate into
+    a public-API win worth chasing further right now.** Both R2DBC modes also trail `clientV2` in
+    this same run, more so at `concurrency≥32` (e.g. `clientV2` p90 ≈34.8ms vs `thisDriver`/
+    `thisDriverNative` ≈41-42ms at `concurrency=32`) — a pre-existing, already-documented gap
+    unrelated to the decoder question this benchmark exists to answer. See `NativeRowBinaryReader`'s
+    Javadoc for the same caveat at the code level.
     `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted

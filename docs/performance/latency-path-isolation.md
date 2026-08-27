@@ -699,10 +699,23 @@ quicker), a structural cross-check independent of the timing numbers themselves.
 > ~11.5%/11.4%/11.4% lower allocation than `CLICKHOUSE` at 10k/100k/1M rows respectively, for a
 > `UInt64 + String + Decimal(18,4)` row shape, with mean/p50/p90/p95 all agreeing on direction. This
 > is real evidence the native decoder is faster **at the isolated decode boundary** — it does not
-> yet show the full R2DBC driver is faster for real point queries end to end (network, transport,
+> show the full R2DBC driver is faster for real point queries end to end (network, transport,
 > decoder scheduler, and connection pooling all sit between the decoder and an application).
-> `PublicApiMatchedPoolThroughputBenchmark#thisDriverNative` (added alongside this correction) exists
-> to answer that question next and has not been run yet.
+>
+> **Follow-up (2026-08-27, commit `3d66d62`): the public-API answer is "small success", not
+> confirmed end-to-end.** A trusted `PublicApiMatchedPoolThroughputBenchmark` run (3 forks/5
+> warmup/3 measurement, `gc,jfr`, `poolSize=8`, `concurrency=8/32/128`, one pinned external
+> ClickHouse shared by `clientV2`/`thisDriver`/`thisDriverNative`) found JMH throughput
+> statistically indistinguishable between `thisDriver` (`CLICKHOUSE`) and `thisDriverNative`
+> (`NATIVE`) at every concurrency level (differences within JMH's own error bars). Merged per-query
+> latency (mean/p50/p90/p95) was ~1-2% lower for `NATIVE` at `concurrency=8`/`32`, essentially flat
+> at `concurrency=128`. Allocation was the one clean signal: `NATIVE` used ~7-8% less per query
+> consistently across all three concurrency levels — smaller than the isolated ~11.4% (`Row`/
+> `Result`/Reactor plumbing dilute the decoder's own share of allocation at this layer), but
+> unambiguous in direction, unlike throughput/latency. Decision: keep `NATIVE` opt-in; do not
+> prioritize further decoder micro-optimization (the JFR-suggested `UInt64` temporary-array,
+> `String` scratch-buffer, and `PushbackInputStream` peek-removal ideas) on the strength of this
+> result — see ROADMAP.md's "Trusted public-API result" entry for the full table.
 
 **Mechanistically, this resolves the `SELECT 1`/`point` inconsistency rather than deepening it.**
 Both single-row scenarios sit inside a ~1.6-2.3ms HTTP round trip, where a genuine but small
