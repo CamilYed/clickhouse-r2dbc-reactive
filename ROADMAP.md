@@ -941,11 +941,10 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     change - `NATIVE` or further micro-optimization of it - will close it. No allocation figures this
     run (profiler intentionally disabled). **Decision: step (2)'s "stop here" condition (`NATIVE`
     clearly ahead end to end) did not hold - still effectively tied with `CLICKHOUSE`, both still
-    behind `clientV2` on tail latency by the same margin.** Per the refined execution order, the next
-    step would be step (3), the focused `PointQueryPipelineIsolationBenchmark` isolating
-    transport/scheduler/mapping cost - **not started, still deliberately deferred** per the standing
-    "revisit in a few days" decision below; this result sharpens the case for it without changing the
-    decision to wait.
+    behind `clientV2` on tail latency by the same margin.** Step (3), the focused
+    `PointQueryPipelineIsolationBenchmark`, has since completed; see the trusted-clean isolation
+    result below. It found transport parity and a measurable but small scheduler boundary, leaving no
+    production optimization justified by this investigation.
     `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
     go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
     pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted
@@ -981,7 +980,7 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     hypotheses (GC, the copy, construction cost, admission-gate ordering) now examined; none reliably
     explains Variant A's deficit — "no production change justified yet" per this investigation's own
     plan.** Variant D not started.
-  - **Next candidate (proposed 2026-08-27, not started — deliberately deferred, see below): bypass
+  - **Deferred architectural candidate (measured 2026-08-27, not adopted): bypass
     `FluxInputStreamBridge`/`RowDecodingScheduler` for the native path, not just the reader.**
     `FluxInputStreamBridge` (bridges reactive `Flux<ChunkBuffer>` to a blocking `InputStream`) and
     `RowDecodingScheduler` (the thread hop that lets a blocking reader run off the Netty event loop)
@@ -998,15 +997,12 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     pipeline. This is a materially bigger undertaking than anything done in this investigation so
     far — it means redesigning `RowBinaryDecoder`'s execution model (cancellation, backpressure, and
     the virtual-thread decoder option were all built around today's blocking-pull-on-a-worker-thread
-    shape), not adding another `RowBinaryReader` implementation. **Deliberately not started now** —
-    development capacity is limited (see PR #99's Slack context); revisit in a few days. When
-    resumed, the recommended entry point is cheap and non-invasive: a JFR profile of
-    `PublicApiMatchedPoolThroughputBenchmark` itself (not `DecoderOnlyBenchmark`) at
-    `concurrency=8`/`poolSize=8` to see the real breakdown of one ~7ms point-query round trip —
-    network/server vs. bridge/scheduler hop vs. decode vs. pool acquisition — confirming where the
-    time actually goes before committing to the bigger rewrite, the same "one variable, cheap
-    diagnostic before a production change" discipline this whole investigation has followed (Variant
-    B/C/task #309 above were all ruled out this way, cheaply, before being discarded).
+    shape), not adding another `RowBinaryReader` implementation. The completed isolation benchmark
+    below measured the scheduler boundary at ~51us mean for a one-row response, but that is only
+    ~2.4% of the full ~2.17ms R2DBC request. That evidence is not strong enough to justify this
+    redesign's cancellation, backpressure, fragmentation, buffer-ownership, and event-loop-fairness
+    risk. Keep this as a possible separate future project only if a real workload or new profile
+    demonstrates a materially larger benefit; do not start it as a continuation of PR #99.
     **Refined execution order (2026-08-27, updated 2026-08-27 after the trusted-clean run below):**
     (1) **done** — added a `trusted-clean` JMH profile (3 forks/5 warmup/5 measurement, no JFR/GC
     profiler — the current `trusted` profile's JFR overhead is itself a confound for a
@@ -1017,27 +1013,32 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     instead computed by hand from the raw `TRUE MERGED` log lines, which was cheap enough for one run
     that fixing the script wasn't worth blocking on; (2) **done, "stop here" condition not met** — see
     the "Trusted-clean public-API result" entry below: `NATIVE` is not clearly ahead end to end,
-    still effectively tied with `CLICKHOUSE`; (3) **next step, not started** — add one focused
-    `PointQueryPipelineIsolationBenchmark` (single-row point
-    query only, not a matrix) with minimal variants layered bottom-up: client-v2 transport-only
-    (query → raw response bytes → checksum, no row materialization) vs. our transport-only
-    (`ClickHouseHttpTransport` → response bytes → checksum, no `RowBinaryDecoder`) to check whether
-    the gap is already present before decoding even starts; `RowBinaryDecoder.decodeRows(...,
-    NATIVE)` on captured one-row bytes (bridge + reader + `Flux.generate`, no `RowDecodingScheduler`)
-    vs. the same through the production `RowDecodingScheduler`-scheduled `decode(...)` to isolate the
-    scheduler hop's fixed cost in isolation; the same scheduled comparison repeated for `CLICKHOUSE`
-    as a control, since the original decoder-only numbers were only ever measured at 10k+ rows, never
-    for a single row; and finally that native scheduled decode vs. the full public
-    `ConnectionFactory`→`Statement`→`Result`→`Row`→`PointResult` path to isolate connector/SPI
-    mapping overhead. Each comparison answers one question in isolation (transport gap? scheduler
-    cost? mapping cost?) rather than guessing from the aggregate. **Hard safety rule carried into any
-    future work here:** do not move `NativeRowBinaryReader` decoding onto the Netty event loop even if
-    a captured-in-memory-bytes benchmark makes it look faster — `FluxInputStreamBridge`'s
-    `InputStream` can legitimately block waiting for a future network chunk, and captured bytes never
-    exercise that wait, so such a benchmark result would not transfer to production. Only pursue the
-    direct-`ByteBuffer` non-blocking parser (the earlier paragraph's target shape) if this isolation
-    work actually shows bridge/scheduler/orchestration cost is a meaningful share of point-query
-    latency — otherwise the effort is better spent elsewhere.
+    still effectively tied with `CLICKHOUSE`; (3) **done — trusted-clean pipeline isolation** —
+    `PointQueryPipelineIsolationBenchmark`, GitHub Actions run `33099710434`, 3 forks/5 warmup/5
+    measurement, no profiler, one pinned ClickHouse, `poolSize=8`. Full result:
+
+    | Variant | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | `clientV2RawResponse` | 2081.411 | 2052.096 | 2260.992 | 2445.312 | 2830.336 |
+    | `ourTransportRawResponse` | 2075.412 | 2054.144 | 2199.552 | 2400.256 | 2715.648 |
+    | `nativeDecodeRaw` | 1.406 | 1.274 | 1.380 | 1.506 | 2.292 |
+    | `nativeDecodeScheduled` | 52.850 | 49.600 | 64.384 | 68.096 | 77.440 |
+    | `clickHouseDecodeScheduled` | 54.839 | 51.648 | 65.536 | 70.016 | 80.768 |
+    | `fullR2dbcNative` | 2168.968 | 2146.304 | 2297.856 | 2457.600 | 2838.528 |
+
+    The raw transport means differ by only ~6us (~0.3%) and p50 by ~2us, with our transport
+    nominally ahead on mean/p90/p95/p99: no transport deficit is present before decoding. The actual
+    one-row native reader costs ~1.4us; scheduling the same captured bytes costs ~52.9us, isolating a
+    real ~51.4us fixed scheduler/orchestration boundary. `CLICKHOUSE` vs `NATIVE` at this row shape
+    differs by only ~2us once both use that same boundary. `fullR2dbcNative` is ~87.6us above
+    `clientV2RawResponse`, but those variants deliberately perform different work, so the benchmark
+    is not an additive model and that remainder must not be labeled SPI overhead by subtraction.
+    The scheduler boundary is nevertheless only ~2.4% of the full ~2.17ms request. **Final PR #99
+    decision: merge the diagnostic benchmark and documentation, make no production change, keep
+    `NATIVE` opt-in, and stop this optimization line.** Do not remove `RowDecodingScheduler` or move
+    the current InputStream-backed reader onto the Netty event loop. A direct incremental
+    `ByteBuffer` parser remains a separate future project requiring new workload evidence, not the
+    next step from this result.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,

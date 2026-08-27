@@ -731,6 +731,32 @@ quicker), a structural cross-check independent of the timing numbers themselves.
 > micro-optimization; the next step for the tail-latency gap itself is the still-deferred
 > `PointQueryPipelineIsolationBenchmark` isolation work, not another decoder change.
 
+> **Final follow-up (2026-08-27): the trusted-clean pipeline isolation is complete.**
+> `PointQueryPipelineIsolationBenchmark`, GitHub Actions run `33099710434` (3 forks/5 warmup/5
+> measurement, no profiler, one pinned ClickHouse, `poolSize=8`) produced:
+>
+> | Variant | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) |
+> | --- | ---: | ---: | ---: | ---: | ---: |
+> | `clientV2RawResponse` | 2081.411 | 2052.096 | 2260.992 | 2445.312 | 2830.336 |
+> | `ourTransportRawResponse` | 2075.412 | 2054.144 | 2199.552 | 2400.256 | 2715.648 |
+> | `nativeDecodeRaw` | 1.406 | 1.274 | 1.380 | 1.506 | 2.292 |
+> | `nativeDecodeScheduled` | 52.850 | 49.600 | 64.384 | 68.096 | 77.440 |
+> | `clickHouseDecodeScheduled` | 54.839 | 51.648 | 65.536 | 70.016 | 80.768 |
+> | `fullR2dbcNative` | 2168.968 | 2146.304 | 2297.856 | 2457.600 | 2838.528 |
+>
+> There is no measurable raw-transport deficit: means differ by ~6us (~0.3%), p50 by ~2us, and
+> our Reactor Netty path is nominally ahead at mean/p90/p95/p99. The one-row native reader itself
+> costs ~1.4us. Sending the same already-captured bytes through the production scheduler boundary
+> raises that to ~52.9us, a real fixed cost of ~51.4us; the scheduled `CLICKHOUSE` control is only
+> ~2us slower. `fullR2dbcNative` is ~87.6us above `clientV2RawResponse`, but those variants perform
+> different work and must not be treated as an additive model or used to assign that remainder to
+> SPI mapping. Most importantly, the isolated scheduler boundary is only ~2.4% of the full ~2.17ms
+> request. **Decision: merge PR #99 as diagnostic evidence, make no production change, and stop this
+> optimization line.** Keep `NATIVE` opt-in and keep `RowDecodingScheduler`; the current
+> InputStream-backed reader must not run on the Netty event loop. A direct incremental `ByteBuffer`
+> parser remains a separate future project only if new real-workload evidence justifies its much
+> larger cancellation/backpressure/fragmentation/resource-ownership risk.
+
 **Mechanistically, this resolves the `SELECT 1`/`point` inconsistency rather than deepening it.**
 Both single-row scenarios sit inside a ~1.6-2.3ms HTTP round trip, where a genuine but small
 per-row/per-column reader-layer saving (plausibly sub-microsecond to low-microsecond per column,
