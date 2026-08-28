@@ -1,6 +1,6 @@
 # clickhouse-r2dbc-reactive-macrobench
 
-Phase 12 (see the root [ROADMAP.md](../ROADMAP.md#phase-12--spring-boot-end-to-end-macrobenchmark-planned-not-started)):
+Phase 12 (see the root [ROADMAP.md](../ROADMAP.md#phase-12--spring-boot-end-to-end-macrobenchmark-in-progress)):
 a real Spring Boot WebFlux request path for end-to-end comparison between this driver and
 client-v2, complementing (not replacing) the JMH suite in `clickhouse-r2dbc-reactive-benchmarks`.
 

@@ -18,8 +18,9 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
 ## In progress
 
 - **0.2.2 (unreleased)** — HTTP response compression (LZ4, on by default, matching client-v2's own
-  default), and a fix so the bundled demo actually disposes the driver's `ConnectionFactory` at
-  Spring shutdown. See [CHANGELOG.md's Unreleased section](CHANGELOG.md#unreleased--022).
+  default), the opt-in native RowBinary scalar decoder, and a fix so the bundled demo actually
+  disposes the driver's `ConnectionFactory` at Spring shutdown. See
+  [CHANGELOG.md's Unreleased section](CHANGELOG.md#unreleased--022).
 - **Phase 8 — post-0.2.0 hardening.** Most items shipped in 0.2.1/0.2.2 (see table above). The
   non-idempotent `release.yml` `USER_MANAGED` finalization step is now fixed (`deployment_id`
   resume input, 2026-08-24). **client-v2 bumped 0.9.8 → 0.10.0** (2026-08-24): checked the 0.10.0
@@ -59,11 +60,12 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   throughput/latency, this driver ahead on allocation) substantially enough that the methodology
   itself needs hardening before any further driver optimization. Planned 2026-08-23. **Closed**
   2026-08-24, all five PRs done.
-- **[Phase 12 — Spring Boot end-to-end macrobenchmark](#phase-12--spring-boot-end-to-end-macrobenchmark-planned-not-started)**
+- **[Phase 12 — Spring Boot end-to-end macrobenchmark](#phase-12--spring-boot-end-to-end-macrobenchmark-in-progress)**
   — a real WebFlux application (`DatabaseClient` → this driver or client-v2 → ClickHouse) measuring
   what the JMH suite structurally can't: HTTP/JSON/cancellation overhead layered on top of the
-  driver. Proposed 2026-08-24, not started — the plan is fully written (module shape, fairness
-  config, four scenarios, PR1-PR5 sequence) but no code exists yet.
+  driver. PR1 infrastructure is complete for point/analytics/stream with matched pool sizing and a
+  manual smoke workflow. Next is PR2: an open-loop, paired A/B baseline with resource collection;
+  cancellation correlation remains an explicit follow-up.
 
 ## Later (deferred, was blocked on Phase 11)
 
@@ -680,17 +682,17 @@ path.
   parked — reusing client-v2's decoder remains the right trade-off (one proven parser to maintain,
   not two).
 
-## Phase 12 — Spring Boot end-to-end macrobenchmark (planned, not started)
+## Phase 12 — Spring Boot end-to-end macrobenchmark (in progress)
 
 Proposed 2026-08-24 via an external review doc (cross-checked against current `main`, same
 due-diligence pattern as the virtual-thread and `FluxInputStreamBridge` reviews above — see task
 list item "incorporate macrobench + performance review doc" for the full source). Everything in
 [Phase 11](#phase-11--benchmark-methodology-hardening) and the [mega
 sweep](docs/performance/results.md#full-mega-sweep--every-scenario-one-run-2026-08-24) measures
-this driver at the JMH/public-SPI level. The layer still missing: a real Spring Boot WebFlux
-application, `DatabaseClient`, HTTP server, JSON/NDJSON encoding — does the small JMH-level latency
-gap still matter once a whole request path is included, and does streaming/allocation/cancellation
-behavior hold up the same way end to end?
+this driver at the JMH/public-SPI level. PR1 now supplies the real Spring Boot WebFlux application,
+`DatabaseClient`, HTTP server, and JSON/NDJSON encoding. The layer still missing is a trusted
+open-loop measurement: does the small JMH-level latency gap still matter once that whole request
+path is included, and does streaming/allocation behavior hold up the same way end to end?
 
 **Goal:** `load generator → Spring Boot WebFlux → same endpoint contract → this driver or client-v2
 → same ClickHouse instance → same SQL/data/response DTO`. Complements the JMH suite, does not
@@ -722,15 +724,15 @@ published release the way `examples/spring-boot-webflux-demo` deliberately does)
   separate "HTTP end-to-end" from "ClickHouse execution time," process CPU/RSS/thread/GC collection
   per isolated run. Manual `macro-benchmark.yml` workflow, not on every PR.
 
-**Recommended PR sequence** (do not build this in one PR): PR1 infrastructure only (module,
-backends, dataset seeding, endpoints, smoke + trusted scripts, resource collector, manual CI
-workflow — no production driver changes) → PR2 run + document a baseline report → PR3 isolate the
-`asByteArray()`/`ByteBuf` copy question below → PR4 prototype decoupling transport
-acquisition from decoder-scheduler admission → PR5 the first actual production optimization, only
-once PR2-4 evidence identifies a real bottleneck, verified with JMH **and** the macrobenchmark
-before/after.
+**Current PR sequence:** PR1 infrastructure is complete. PR2 is the next step: add the open-loop
+load generator, paired A/B rounds, resource collector, then run and document a matched-pool
+baseline. The previously proposed copy/admission/decoder optimization sequence has already been
+investigated independently by PR #99 and produced no justified production change; do not revive it
+from this older plan. Any production optimization after PR2 requires new macrobenchmark evidence
+and a separate before/after design.
 
-**PR1 status (2026-08-24): infrastructure built, not yet run.** The `clickhouse-r2dbc-reactive-macrobench`
+**PR1 status (2026-08-24): infrastructure built and smoke/local-run verified.** The
+`clickhouse-r2dbc-reactive-macrobench`
 module exists with the `point`/`analytics`/`stream` scenarios, both backends, dataset seeding, the
 `BenchmarkController` endpoint contract, and a manual `.github/workflows/macro-benchmark.yml`
 smoke check (boots the app, seeds a small dataset, curls each active backend's endpoints — not a
@@ -744,10 +746,9 @@ small `scripts/run-ab.sh` was added for quick local iteration (warmup pass disca
 measured `ab` run per backend/scenario) — explicitly documented as a local tool only, not a
 substitute for PR2's open-loop methodology, since `ab` is closed-loop and can't show tail-latency
 behavior under real overload.
-Also not yet done in this sandbox: a real Gradle build/test run (no network for the Gradle wrapper
-distribution in this environment) — needs `./gradlew :clickhouse-r2dbc-reactive-macrobench:spotlessCheck
-:clickhouse-r2dbc-reactive-macrobench:test` before merging, same disclosed limitation as the
-9-benchmark-class dispose fix above.
+The module now participates in the repository's regular Gradle build and test gates; its controller,
+backend selection, and benchmark properties have unit coverage. The manual workflow remains a smoke
+check, not a trusted load test.
 
 **First real local run + a fairness bug it surfaced (2026-08-24).** The user ran
 `scripts/ab-summary.sh stress` (50000 requests, concurrency 200, warmup 5000) locally against both

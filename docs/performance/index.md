@@ -6,10 +6,20 @@ how should that change the way you use this driver (below). It does not narrate 
 the benchmark suite got here — see `git log -- docs/PERFORMANCE.md` (the file this section was
 split from) if that archaeology is ever needed. To reproduce these numbers yourself, see
 [running-benchmarks.md](running-benchmarks.md). Retracted/fully-superseded result sections live in
-[archive.md](archive.md), not deleted, not mixed in with current numbers. The still-open question of
-whether the "Protocol floor" row's small, consistent latency gap traces to a specific pipeline stage
-is being worked through a dedicated A/B/C/D benchmark ladder — see
-[latency-path-isolation.md](latency-path-isolation.md), in progress, not yet run.
+[archive.md](archive.md), not deleted, not mixed in with current numbers. The investigation into
+the "Protocol floor" row's small latency gap is complete — see
+[latency-path-isolation.md](latency-path-isolation.md) for the full elimination ladder and final
+pipeline-isolation result.
+
+> [!NOTE]
+> **2026-08-27 latency-path isolation result:** in a profiler-free, three-fork matched-pool run,
+> the native decoder was clearly faster at the isolated decoder boundary, but improved complete
+> public-API throughput by only about 0.4-1.3%. Raw Reactor Netty transport was statistically tied
+> with client-v2's raw response path. The production scheduler boundary cost about 51 us for the
+> captured one-row response, only about 2.4% of the roughly 2.17 ms full request. No single safe
+> production optimization explains the remaining noise-sized gap, so PR #99 deliberately made no
+> production-path change. The native decoder remains opt-in and the scheduler remains required for
+> the current InputStream-backed reader.
 
 > [!TIP]
 > **New here? Start with [results.md's "Full mega sweep" section](results.md#full-mega-sweep--every-scenario-one-run-2026-08-24)** —
@@ -59,17 +69,25 @@ for the complete table and every chart.
 | Blocking `.block()`-per-query calling style, matched pool | 🔴 same latency gap as above — don't call it this way, see below |
 | Decoder worker count widened past pool size | 🟡 no help — slightly *worse* than the coupled default |
 
+The table above is the 2026-08-24 mega-sweep snapshot. A later trusted-clean rerun of
+`PublicApiMatchedPoolThroughputBenchmark` narrowed the nominal client-v2 lead to 6.5%, 2.2%, and
+0.9% at concurrency 8, 32, and 128 respectively, with overlapping error intervals. The subsequent
+pipeline-isolation run found no raw-transport deficit and no decoder change large enough to explain
+the full request. See [the final latency-path decision](latency-path-isolation.md) rather than
+treating the older 3-20% range as a still-unlocalized production bottleneck.
+
 > [!IMPORTANT]
 > **What this sweep changed the story to, in one paragraph:** this driver's clearest, most
 > repeatable advantage today is **streaming large result sets** (11–12% lower latency at every
 > tier, 10k through 1M rows) and **allocation per query under concurrent load** (2.7–2.9x less,
 > growing with concurrency) — not raw throughput or per-query latency under a matched connection
-> pool, where client-v2 is currently ahead by a consistent, still-unresolved margin that *widens*
-> as the pool or concurrency grows. Four independent benchmark classes
+> pool, where the 2026-08-24 sweep put client-v2 ahead. Four independent benchmark classes
 > (`PublicApiMatchedPoolThroughputBenchmark`, `BoundedPoolConcurrencyBenchmark`,
 > `MatchedPoolThreadsConcurrencyBenchmark`, `PoolSizeSweepThroughputBenchmark`) now agree on that
-> gap, which makes it the single most concrete open question this project has — see
-> [Open follow-ups](results.md#open-follow-ups). An earlier "~4x more queries/sec" headline for
+> gap. The later PR #99 isolation work narrowed the trusted-clean public-API difference to
+> statistically overlapping ranges and found no raw-transport deficit or decoder-sized explanation;
+> the optimization line is therefore closed without a production change. An earlier "~4x more
+> queries/sec" headline for
 > the matched-pool scenario was retracted after being traced to a client-v2 benchmark-harness bug;
 > see [archive.md](archive.md) for the full record.
 

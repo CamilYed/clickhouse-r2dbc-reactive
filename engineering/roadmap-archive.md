@@ -719,11 +719,10 @@ fixed, not just documented.
   duplicating it here risks silent drift. A caller that needs a Java type per column derives one
   from an actually-decoded row's value instead. Fails loudly (no wrong guess), documented on both
   classes.
-- **`Connection.setStatementTimeout(Duration)` still throws `UnsupportedOperationException`.**
-  `ClickHouseHttpTransport` now supports a transport-wide `responseTimeout`, but per-statement
-  timeouts would need that value threaded per-request rather than baked into the `HttpClient`
-  instance at construction — a real architectural change, not a small fix, and out of scope for this
-  pass. Fails loudly (throws) rather than silently ignoring the call.
+- **`Connection.setStatementTimeout(Duration)` — resolved in Phase 7.** Implemented as
+  ClickHouse's per-query, server-side `max_execution_time` setting, distinct from the transport-wide
+  client-side `responseTimeout`. Statements snapshot the connection's configured value when they
+  are created; hermetic and real-ClickHouse tests cover the contract.
 - **Transactions/savepoints are unimplemented**, matching ClickHouse's HTTP interface having no real
   session affinity for its experimental transaction feature (see `ClickHouseConnection`'s class
   Javadoc for the full, checked-against-docs reasoning). Fails loudly.
@@ -800,26 +799,18 @@ fixed, not just documented.
 
 ### Open gaps, not yet addressed
 
-- **No server-error-code-aware retry** — `RetryPolicy` (see "Fixed this pass" above) only retries
-  failures that happened before the request was sent; it does not retry based on ClickHouse's own
-  retryable server error codes the way client-v2's `ServerRetryable` cause (added after our pinned
-  `v0.9.0`) does. Deliberately deferred: our pinned client-v2's `ServerException` has no
-  `isRetryable()` yet to model this against, and doing it well would need to distinguish
-  retry-safe-regardless-of-idempotency server errors from ones that aren't — a genuine design
-  question, not a small addition. `RetryPolicy`'s record shape was chosen to leave room to grow a
-  second mode later without a breaking change.
-- **No way to configure the transport's HTTP connection-pool size (`maxConnections`) through the
-  standard R2DBC `ConnectionFactoryOptions` bootstrap path** — only through constructing
-  `ClickHouseHttpTransport` directly. `CONNECT_TIMEOUT` is now wired (this pass); pool sizing isn't a
-  well-known R2DBC `Option`, so this would need a driver-specific custom `Option`. Configurability
-  gap, not a correctness bug.
-- **`Statement.add()` (bound-parameter batching) is still `UnsupportedOperationException`** in
-  `ClickHouseStatement` — related to, but not solved by, `insertStreaming` (see "Fixed this pass"
-  above): making `add()` genuinely performant would mean coalescing N bound-parameter sets into one
-  multi-row `INSERT` (ClickHouse's `{name:Type}` mechanism only binds one value per name per
-  request) rather than N sequential round-trips. Deliberately deferred — `insertStreaming` covers
-  the "I already have my data encoded, stream it efficiently" case; `add()`-based batching is a
-  different, not-yet-designed problem (building the multi-row SQL text safely).
+- **Retryable server errors — transport mechanism resolved, R2DBC exposure still open.** Core and
+  transport now support explicit per-query opt-in through
+  `ClickHouseQuery.withServerErrorRetryEnabled()`, gated on `ServerException.isRetryable()` and no
+  response bytes having been emitted. The standard R2DBC `Statement` path has no vendor extension
+  to enable that flag yet, so R2DBC callers retain pre-send-only retry behavior.
+- **Transport pool configuration through R2DBC — resolved in Phase 7.** Driver-specific
+  `ConnectionFactoryOptions` cover max connections, pending-acquire count/timeout, idle time, and
+  connection lifetime, including URL parsing and validation tests.
+- **`Statement.add()` bound-parameter batching — resolved in Phase 7.** Each complete binding set
+  is snapshotted and executed sequentially via `concatMap`, emitting one `Result` per set. Wire-level
+  coalescing into one multi-row `INSERT` remains deliberately separate; `insertStreaming` is still
+  the large-insert path.
 
 **Confirmed plan and order (2026-08-13), before Maven Central publishing:** raised directly —
 INSERT correctness was already implemented and tested against real ClickHouse

@@ -1,4 +1,4 @@
-# Results (newest first — last updated 2026-08-24)
+# Results (newest first — last updated 2026-08-27)
 
 Sections below are ordered by when that result was last (re-)measured, newest first, not grouped
 by benchmark category — so the current, trustworthy numbers are always at the top and older/
@@ -13,6 +13,38 @@ for what each benchmark class actually exercises.
 > exactly as it was measured and reported at the time — it's a literal record of what that CI run's
 > JMH output and this page's own analysis actually said, not a live label — so it is **not**
 > rewritten retroactively. Only benchmark runs from this point forward will show `thisDriver`.
+
+## Point-query pipeline isolation — no production bottleneck justified (2026-08-27)
+
+PR #99 followed the public-API latency gap through decoder-only, trusted-clean matched-pool, and
+captured-response pipeline benchmarks. The isolated native RowBinary decoder was about 14-15%
+faster than client-v2's decoder on 10k-1M-row inputs and allocated about 11% less, but that gain
+became only about 0.4-1.3% at the complete public API boundary. In the final matched-pool run,
+client-v2 was nominally ahead by 6.5%, 2.2%, and 0.9% at concurrency 8, 32, and 128 respectively;
+the error intervals overlapped at every level.
+
+The final `PointQueryPipelineIsolationBenchmark` then measured the fixed one-row path directly:
+
+| Boundary | Mean | p50 | p99 |
+| --- | ---: | ---: | ---: |
+| client-v2 raw response | 2081.4 us | 2052.1 us | 2830.3 us |
+| Reactor Netty raw response | 2075.4 us | 2054.1 us | 2715.6 us |
+| native decode, captured bytes, no scheduler | 1.4 us | 1.3 us | 2.3 us |
+| native decode, production scheduler boundary | 52.9 us | 49.6 us | 77.4 us |
+| client-v2 decode, production scheduler boundary | 54.8 us | 51.6 us | 80.8 us |
+| complete R2DBC native path | 2169.0 us | 2146.3 us | 2838.5 us |
+
+The raw transports are statistically tied. The scheduler hand-off adds about 51 us, but represents
+only about 2.4% of the roughly 2.17 ms full request and is required because the current
+InputStream-backed reader may wait for later network chunks and must not run on a Reactor Netty
+event loop. The full-R2DBC and raw-client variants perform different work, so their difference is
+not an additive estimate of SPI overhead.
+
+**Decision:** keep the native decoder opt-in, keep `RowDecodingScheduler`, and make no production
+optimization from this investigation. A direct incremental `ByteBuffer` parser would be a separate
+project affecting backpressure, cancellation, fragmentation, event-loop fairness, and resource
+ownership; it is not justified by these point-query measurements. See the complete
+[latency-path isolation report](latency-path-isolation.md) for all variants and confidence notes.
 
 ## Full mega sweep — every scenario, one run (2026-08-24)
 
@@ -425,15 +457,12 @@ a wash until a multi-fork run says otherwise in either direction.
   data to compare against client-v2's. Still not part of the mega sweep (task #295's 12 classes
   chose `MixedWorkloadRapidRefreshPileUpBenchmark` over its cancel-variant sibling for the sweep;
   see that task).
-- **Root-cause the latency gap** — now confirmed by **four** independent benchmark classes, not
-  two: `MatchedPoolThreadsConcurrencyBenchmark`'s blocking-caller regression, the cloud-verified
-  `PublicApiMatchedPoolThroughputBenchmark` result (real async on both sides, client-v2 ahead on
-  p50–p99 at every concurrency level, now measured three separate times), `BoundedPoolConcurrencyBenchmark`
-  (newly re-run, same direction), and `PoolSizeSweepThroughputBenchmark` (the gap widens as pool
-  size grows, a new data point for whatever's causing this). `RowDecodingScheduler`'s cross-thread
-  hand-off is the leading suspect (see the streaming-scan root cause above for the same mechanism at
-  a different scale) — `-prof gc` plus `async-profiler`/JFR on `PublicApiMatchedPoolThroughputBenchmark`
-  is still the next concrete step, now with four converging data points instead of one to justify it.
+- ~~**Root-cause the latency gap.**~~ — closed by PR #99's trusted-clean decoder and pipeline
+  isolation. The latest matched-pool public-API intervals overlap; raw Reactor Netty transport is
+  tied with client-v2, and the measurable scheduler boundary is only about 2.4% of the full request.
+  No production optimization is justified by the current evidence. Reopen only for new,
+  reproducible real-workload evidence; see
+  [Point-query pipeline isolation](#point-query-pipeline-isolation--no-production-bottleneck-justified-2026-08-27).
 - ~~**Re-run `BoundedPoolConcurrencyBenchmark`**~~ — done, 2026-08-24 mega sweep, `.useAsyncRequests(true)`
   fixed. Lands in the same direction as `PublicApiMatchedPoolThroughputBenchmark` as predicted
   (client-v2 ahead on latency, 3.5–20.2% depending on concurrency) — see the note under
