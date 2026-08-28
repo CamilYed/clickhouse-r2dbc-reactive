@@ -38,12 +38,12 @@ import reactor.core.publisher.Mono;
  * directly) from the start, but no benchmark class ever actually exercised it — every other class
  * in this suite ({@link PointQueryBenchmark} included) calls {@link
  * io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport}/{@link
- * io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder} directly, bypassing the {@code
- * connector} module (and therefore {@code QueryObservation}/{@code ClickHouseResult}) entirely.
- * This class is deliberately built through the public R2DBC SPI only ({@link Connection}/{@link
- * Statement}/{@link io.r2dbc.spi.Result}, obtained via {@link ClickHouseConnectionFactory#from},
- * never a package-private {@code connector} class) — exactly what an application using this driver
- * actually calls.
+ * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder} directly, bypassing the
+ * {@code connector} module (and therefore {@code QueryObservation}/{@code ClickHouseResult})
+ * entirely. This class is deliberately built through the public R2DBC SPI only ({@link
+ * Connection}/{@link Statement}/{@link io.r2dbc.spi.Result}, obtained via {@link
+ * ClickHouseConnectionFactory#from}, never a package-private {@code connector} class) — exactly
+ * what an application using this driver actually calls.
  *
  * <p>Built specifically to measure the 2026-08-19 NOOP-observability-fast-path fix (see
  * docs/PERFORMANCE.md's "second-opinion review" section): {@link #thisDriverNoopObservation} and

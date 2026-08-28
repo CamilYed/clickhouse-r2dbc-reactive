@@ -2,8 +2,8 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
-import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.RetryPolicy;

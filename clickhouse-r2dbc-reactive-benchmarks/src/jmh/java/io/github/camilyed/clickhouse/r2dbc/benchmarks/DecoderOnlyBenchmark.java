@@ -7,8 +7,8 @@ import com.clickhouse.client.api.query.QuerySettings;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.FluxInputStreamBridge;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions;
@@ -121,7 +121,7 @@ public class DecoderOnlyBenchmark {
   /**
    * This driver's production decode path at its default {@link RowBinaryDecoderMode#CLICKHOUSE}
    * (client-v2's own reader, wrapped by {@link
-   * io.github.camilyed.clickhouse.r2dbc.core.ListDecodingRowBinaryReader}) — {@link
+   * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.ListDecodingRowBinaryReader}) — {@link
    * RowBinaryDecoder#decodeRows}, over captured bytes.
    */
   @Benchmark
@@ -138,7 +138,7 @@ public class DecoderOnlyBenchmark {
    * Same production decode path and same captured bytes as {@link #thisDriver}, with the one
    * variable this pair exists to isolate switched: {@link RowBinaryDecoderMode#NATIVE} instead of
    * the default {@link RowBinaryDecoderMode#CLICKHOUSE} — {@link
-   * io.github.camilyed.clickhouse.r2dbc.core.NativeRowBinaryReader} decoding {@link
+   * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.NativeRowBinaryReader} decoding {@link
    * PointQueryTable}'s {@code UInt64}/{@code String}/{@code Decimal(18,4)} columns directly,
    * bypassing client-v2's reader machinery entirely (see that class's Javadoc). {@link #thisDriver}
    * vs this method is therefore the direct "native vs client-v2 reader" answer at the decode layer,
@@ -148,8 +148,8 @@ public class DecoderOnlyBenchmark {
    *
    * <p>Deliberately at {@link ResponseCompression#NONE}, matching every other method in this class
    * — compression happens one layer below reader selection ({@link
-   * io.github.camilyed.clickhouse.r2dbc.core.ClickHouseLz4InputStream} wraps the stream before
-   * either reader ever sees it), so it is orthogonal to this comparison and would only add
+   * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.ClickHouseLz4InputStream} wraps the stream
+   * before either reader ever sees it), so it is orthogonal to this comparison and would only add
    * decompression noise on top of the one variable being isolated here. A full-pipeline,
    * production-realistic ({@code LZ4}, real network, both {@link RowBinaryDecoderMode}s) comparison
    * belongs in a {@code LatencyPathVariantABenchmark}-style class instead — not yet built, tracked

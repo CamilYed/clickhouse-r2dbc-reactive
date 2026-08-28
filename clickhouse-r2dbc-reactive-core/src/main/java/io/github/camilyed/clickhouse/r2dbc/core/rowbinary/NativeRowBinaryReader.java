@@ -1,5 +1,6 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
+import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PushbackInputStream;

@@ -1,7 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.ConnectionFactoryProvider;

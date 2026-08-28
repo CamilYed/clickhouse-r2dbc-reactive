@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import com.clickhouse.client.api.ServerException;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
-import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;

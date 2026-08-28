@@ -1,4 +1,4 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;

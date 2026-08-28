@@ -181,7 +181,7 @@ That adapter is the one deliberate, contained compromise in this design:
     reader's internal state, not directly. Reading from it after the reader itself is no longer
     strongly reachable — which happened here simply from `Flux.generate`/`blockFirst()`
     cancelling the subscription after one element — threw a `NullPointerException` from inside
-    client-v2, not from our code. Fixed in `core.RowBinaryDecoder` by copying each row into a
+    client-v2, not from our code. Fixed in `core.rowbinary.RowBinaryDecoder` by copying each row into a
     plain `LinkedHashMap` the moment it's read, while the reader is still on the stack; documented
     in that class's Javadoc. `RowBinaryDecoderTest`/`SelectOneAgainstRealClickHouseTest` both
     exercise exactly this cancel-after-one-row shape, so this is already regression-covered, not
@@ -371,7 +371,7 @@ override — see "`Enum8`/`Enum16` resolved" below for how this was closed the s
 
 **`Array`/`Nested` resolved** — both route through `BinaryStreamReader.convertArray()`, which only
 returns a plain `List` when a `List.class` type hint is supplied, and the public `next()`/
-`readRecord()` path this driver used never passed one. Resolved by `core.ListDecodingRowBinaryReader`
+`readRecord()` path this driver used never passed one. Resolved by `core.rowbinary.ListDecodingRowBinaryReader`
 (new): overrides the reader's `protected readRecord(Object[])` hook — exposed by client-v2
 specifically for subclassing — to supply `List.class` as the type hint for `Array`/`Nested` columns
 only, leaving every other type's decoding untouched. This is a deliberate, narrow, tested dependency
@@ -384,7 +384,7 @@ shouldDecodeArrayType`).
 
 **`Enum8`/`Enum16` resolved (Phase 8 item 1, 2026-08-21).** Unlike `Array`/`Nested`, client-v2 has no
 type-hint mechanism for enums — `readValue(column, null)` always returns its own `.internal`
-`EnumValue`, hint or not. `core.ListDecodingRowBinaryReader` closes the same gap a different way:
+`EnumValue`, hint or not. `core.rowbinary.ListDecodingRowBinaryReader` closes the same gap a different way:
 after `readValue` returns for a column whose `ClickHouseDataType` is `Enum8`/`Enum16`, it calls
 `toString()` on the result (the previously-confirmed member-name behavior above) and stores the
 plain `String` instead — same "never leak a client-v2 `.internal` type through `Row`" goal as the
@@ -416,7 +416,7 @@ every transaction/savepoint method either fails with `UnsupportedOperationExcept
 spec explicitly allows it (`releaseSavepoint`), no-ops — this is the "explicit
 unsupported-transaction-semantics handling" this phase named up front, not an oversight.
 `createStatement(sql)` returns a real `ClickHouseStatement`, and `execute()` is now real too:
-`core.RowBinaryDecoder.decode(Flux<ByteBuffer>)` (new) returns a `Mono<DecodedResult>` pairing the
+`core.rowbinary.RowBinaryDecoder.decode(Flux<ByteBuffer>)` (new) returns a `Mono<DecodedResult>` pairing the
 column schema (`List<ColumnDescriptor>` — name + ClickHouse's own wire type string, e.g.
 `"Nullable(Int32)"`) with the row stream, from one reader instance and one subscription — unlike
 `decodeRows`, which only ever exposed rows. `connector` adapts that into r2dbc-spi's `Result` (
@@ -1369,7 +1369,7 @@ needs JMH re-runs, not a production-code defect blocking anything else in this p
 1. **Done in driver source (2026-08-21). Normalize `Enum8`/`Enum16` to a stable public `String` at
    the driver boundary**, instead of leaking client-v2's internal `EnumValue` through `Row`. See
    "`Enum8`/`Enum16` resolved" under [Phase 2](#phase-2--core-protocol--testkit-contract-tests) for
-   the implementation (`core.ListDecodingRowBinaryReader`) and test coverage
+   the implementation (`core.rowbinary.ListDecodingRowBinaryReader`) and test coverage
    (`RealWorldTableAgainstRealClickHouseTest.shouldDecodeEnumTypes`,
    `ClickHouseRowAssert.hasEnumName` now asserting the runtime type, not just `toString()`). **The
    demo still uses the `Object.class`/`.toString()` workaround, on purpose** — it depends on the last
@@ -1834,7 +1834,7 @@ regression at 1M rows) rather than acted on now:
   overriding the original "measure first" sequencing above.** `core.ResponseCompression` (`NONE`/
   `LZ4`, default `LZ4`) threads through `TransportOptions`/`ClickHouseHttpTransport` (sends
   `compress=1`) and `RowBinaryDecoder` (wraps the response body in the new
-  `core.ClickHouseLz4InputStream` before decoding, when compressed) — no new Reactor operators or
+  `core.rowbinary.ClickHouseLz4InputStream` before decoding, when compressed) — no new Reactor operators or
   schedulers, reusing `FluxInputStreamBridge`/`RowDecodingScheduler` unchanged, so streaming,
   bounded memory, backpressure, and cancellation semantics are inherited rather than reimplemented.
   New `responseCompression` R2DBC connection option (default `true`, opt out with

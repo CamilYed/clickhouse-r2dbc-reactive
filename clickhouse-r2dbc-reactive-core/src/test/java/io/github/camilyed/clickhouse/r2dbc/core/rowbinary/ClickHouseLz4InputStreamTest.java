@@ -1,4 +1,4 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;

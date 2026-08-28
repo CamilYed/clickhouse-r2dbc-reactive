@@ -5,7 +5,7 @@ import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 
 import io.github.camilyed.clickhouse.r2dbc.connector.fakes.RecordingDriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
-import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.R2dbcException;

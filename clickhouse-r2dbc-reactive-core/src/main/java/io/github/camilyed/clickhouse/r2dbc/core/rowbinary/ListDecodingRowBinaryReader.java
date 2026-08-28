@@ -1,10 +1,12 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import com.clickhouse.client.api.data_formats.RowBinaryWithNamesAndTypesFormatReader;
 import com.clickhouse.client.api.data_formats.internal.BinaryStreamReader;
 import com.clickhouse.client.api.query.QuerySettings;
 import com.clickhouse.data.ClickHouseColumn;
 import com.clickhouse.data.ClickHouseDataType;
+import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
+import io.github.camilyed.clickhouse.r2dbc.core.FluxInputStreamBridge;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;

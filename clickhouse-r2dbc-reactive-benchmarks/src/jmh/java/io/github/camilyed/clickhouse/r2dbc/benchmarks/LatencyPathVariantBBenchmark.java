@@ -52,7 +52,7 @@ import reactor.netty.ByteBufFlux;
  *
  * <p><b>Response compression is disabled ({@link ResponseCompression#NONE}), unlike Variant A's
  * production-default {@link ResponseCompression#LZ4}.</b> This is a deliberate, disclosed
- * simplification, not an oversight: {@code core.ClickHouseLz4InputStream} (the production
+ * simplification, not an oversight: {@code core.rowbinary.ClickHouseLz4InputStream} (the production
  * LZ4-unwrapping class) is package-private in {@code core} and out of reach from this module
  * without widening core's visibility purely for a benchmark, which this pass's "no production code
  * changes" scope rules out. Decompression is itself a copy — a separate question from the one this

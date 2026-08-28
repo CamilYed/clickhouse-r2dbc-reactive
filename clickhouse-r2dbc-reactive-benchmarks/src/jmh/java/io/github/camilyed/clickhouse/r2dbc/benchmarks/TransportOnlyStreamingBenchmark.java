@@ -30,10 +30,10 @@ import org.openjdk.jmh.infra.Blackhole;
  * contributor too.
  *
  * <p>This driver: {@link ClickHouseHttpTransport#query} as normal, but the response {@code Flux} is
- * only summed for byte count — no {@link io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder}
- * involved at all, so this exercises exactly the same {@code ByteBuf -> byte[]} path (H3)
- * production code takes ({@code ClickHouseResult} uses the identical {@code .asByteArray()} shape)
- * without decode on top of it.
+ * only summed for byte count — no {@link
+ * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder} involved at all, so this
+ * exercises exactly the same {@code ByteBuf -> byte[]} path (H3) production code takes ({@code
+ * ClickHouseResult} uses the identical {@code .asByteArray()} shape) without decode on top of it.
  *
  * <p>client-v2: {@link QueryResponse#getInputStream()} — its own lowest-level access to the raw
  * response body, read in a plain byte-counting loop, no {@code ClickHouseBinaryFormatReader}

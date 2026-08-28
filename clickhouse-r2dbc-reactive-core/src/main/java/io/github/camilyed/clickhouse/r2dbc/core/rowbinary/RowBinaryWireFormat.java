@@ -1,4 +1,4 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import java.io.EOFException;
 import java.io.IOException;

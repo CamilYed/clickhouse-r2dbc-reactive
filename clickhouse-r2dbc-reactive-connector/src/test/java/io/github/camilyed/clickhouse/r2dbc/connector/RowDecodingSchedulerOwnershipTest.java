@@ -3,8 +3,8 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
-import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ClickHouseWireFixtures;
 import io.github.camilyed.clickhouse.r2dbc.testkit.fakes.ControlledClickHouseServer;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;

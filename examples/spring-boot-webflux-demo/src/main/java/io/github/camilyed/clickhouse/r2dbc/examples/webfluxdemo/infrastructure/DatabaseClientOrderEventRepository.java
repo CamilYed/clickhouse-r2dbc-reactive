@@ -45,11 +45,11 @@ import reactor.core.publisher.Mono;
  * against a real server.
  *
  * <p>{@code status} ({@code Enum8}) is read as a plain {@link String} directly — {@code
- * core.ListDecodingRowBinaryReader} decodes {@code Enum8}/{@code Enum16} as {@link String} (see
- * ROADMAP.md's Phase 8 item 1, and {@link OrderStatus}'s own Javadoc). This module depends on the
- * published Maven Central release (see this build's {@code build.gradle.kts}), currently {@code
- * 0.2.1}, which contains that fix; the earlier {@code Object.class}/{@code toString()} workaround
- * was needed only while this module was still pinned to {@code 0.2.0}.
+ * core.rowbinary.ListDecodingRowBinaryReader} decodes {@code Enum8}/{@code Enum16} as {@link
+ * String} (see ROADMAP.md's Phase 8 item 1, and {@link OrderStatus}'s own Javadoc). This module
+ * depends on the published Maven Central release (see this build's {@code build.gradle.kts}),
+ * currently {@code 0.2.1}, which contains that fix; the earlier {@code Object.class}/{@code
+ * toString()} workaround was needed only while this module was still pinned to {@code 0.2.0}.
  */
 @Repository
 class DatabaseClientOrderEventRepository implements OrderEventRepository {
