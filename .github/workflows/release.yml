@@ -92,6 +92,34 @@ jobs:
           echo "Release version: $RELEASE_VERSION"
           echo "Central Portal publishing type: $PUBLISHING_TYPE"
 
+      # Validate and capture the release notes before any build, signing, upload, publication, or
+      # tag mutation. A malformed/missing CHANGELOG section must fail while the run is still fully
+      # reversible, not after Central Portal has published immutable artifacts.
+      - name: Extract release notes from CHANGELOG.md
+        id: release-notes
+        run: |
+          set -euo pipefail
+
+          NOTES_FILE="$(mktemp)"
+          awk -v version="$RELEASE_VERSION" '
+            /^## / {
+              if (in_section) { exit }
+              if ($0 ~ "\\[" version "\\]") { in_section = 1; next }
+            }
+            in_section { print }
+          ' CHANGELOG.md > "$NOTES_FILE"
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "No CHANGELOG.md section found for version $RELEASE_VERSION - add one before releasing."
+            exit 1
+          fi
+
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            cat "$NOTES_FILE"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Verify root project
         if: env.RESUME_DEPLOYMENT_ID == ''
         run: ./gradlew spotlessCheck clean build jacocoTestReport "-PreleaseVersion=$RELEASE_VERSION" --stacktrace
@@ -269,38 +297,13 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$RELEASE_VERSION" -m "Release v$RELEASE_VERSION"
-          git push origin "v$RELEASE_VERSION"
 
-      - name: Extract release notes from CHANGELOG.md
-        if: steps.wait-for-central.outputs.final_state == 'PUBLISHED'
-        id: release-notes
-        run: |
-          set -euo pipefail
-
-          # CHANGELOG.md sections are headed "## [X.Y.Z] - ..." or "## [Unreleased] - X.Y.Z (...)".
-          # Extract the body between this release's heading and the next "## " heading, so release
-          # notes always come from the same file a human reading the repo would read - never
-          # hand-retyped and liable to drift from it.
-          NOTES_FILE="$(mktemp)"
-          awk -v version="$RELEASE_VERSION" '
-            /^## / {
-              if (in_section) { exit }
-              if ($0 ~ "\\[" version "\\]") { in_section = 1; next }
-            }
-            in_section { print }
-          ' CHANGELOG.md > "$NOTES_FILE"
-
-          if [ ! -s "$NOTES_FILE" ]; then
-            echo "No CHANGELOG.md section found for version $RELEASE_VERSION - add one before releasing."
-            exit 1
+          if git ls-remote --exit-code --tags origin "refs/tags/v$RELEASE_VERSION" >/dev/null; then
+            echo "Tag v$RELEASE_VERSION already exists; keeping it unchanged."
+          else
+            git tag -a "v$RELEASE_VERSION" -m "Release v$RELEASE_VERSION"
+            git push origin "v$RELEASE_VERSION"
           fi
-
-          {
-            echo "notes<<RELEASE_NOTES_EOF"
-            cat "$NOTES_FILE"
-            echo "RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         if: steps.wait-for-central.outputs.final_state == 'PUBLISHED'
@@ -311,6 +314,10 @@ jobs:
           set -euo pipefail
 
           printf '%s\n' "$RELEASE_NOTES" > release-notes.md
-          gh release create "v$RELEASE_VERSION" \
-            --title "v$RELEASE_VERSION" \
-            --notes-file release-notes.md
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "GitHub Release v$RELEASE_VERSION already exists; keeping it unchanged."
+          else
+            gh release create "v$RELEASE_VERSION" \
+              --title "v$RELEASE_VERSION" \
+              --notes-file release-notes.md
+          fi

@@ -5,12 +5,14 @@ All notable changes to this project are documented here. Format loosely follows
 releases of `clickhouse-r2dbc-reactive-{core,transport-http,connector,testkit}`.
 
 `.github/workflows/release.yml` reads this file to build GitHub Release notes: before triggering
-that workflow, rename the `## [Unreleased] — X.Y.Z (...)` heading below to `## [X.Y.Z] — YYYY-MM-DD`
-and commit it to `main` first — the workflow looks for a `## ` heading containing `[X.Y.Z]` matching
-the version it was given and fails the release if it can't find one. See
+that workflow, move the release's notes under a `## [X.Y.Z] — YYYY-MM-DD` heading and commit it to
+`main` first — the workflow looks for a `## ` heading containing `[X.Y.Z]` matching the version it
+was given and fails before building or publishing if it can't find one. See
 [CONTRIBUTING.md](CONTRIBUTING.md#cutting-a-release) for the full release checklist.
 
-## [Unreleased] — 0.2.2
+## [Unreleased]
+
+## [0.2.2] — 2026-08-28
 
 ### Added
 
