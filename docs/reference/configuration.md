@@ -38,6 +38,17 @@ Javadoc for how all four relate.
 | `retryMaxAttempts` | `3` | Retries for failures before any request bytes reached the server — see [`RetryPolicy`](../../clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java) for exactly what qualifies |
 | `retryDelay` | `50ms` | Fixed delay between retry attempts |
 
+The core/transport API also supports opt-in retry of a retryable ClickHouse server error through
+`ClickHouseQuery.withServerErrorRetryEnabled()`, provided no response bytes were emitted. That
+opt-in is not currently exposed by the R2DBC `Statement` API; queries executed through standard
+R2DBC therefore use the pre-send-only behavior described in the table.
+
+## Row decoder
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `rowDecoder` | `clickhouse` | `clickhouse` uses client-v2's reader. `native` uses this driver's native scalar RowBinary reader when every result column is supported and falls back to client-v2 for the whole result otherwise. Both modes produce the same values and Java types; `native` remains opt-in. |
+
 Spring Boot users configuring `spring.r2dbc.url=r2dbc:clickhouse://...` get all of the above for
 free through Spring's own R2DBC auto-configuration — see [../guide/spring-boot.md](../guide/spring-boot.md)
 for the full Spring Boot guide, including the one thing Spring's auto-configuration does *not* get

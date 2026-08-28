@@ -126,8 +126,9 @@ public final class ClickHouseHttpTransport {
    * limit on query execution unless a caller explicitly asks for one. An earlier version of this
    * class hardcoded a 2-second response timeout with no way to change it, which would have failed
    * every real query that took longer than that — corrected here. A caller that wants a hard
-   * per-query time limit should configure one explicitly via this constructor (or, once
-   * implemented, per statement via {@code Connection.setStatementTimeout}).
+   * per-query time limit should configure one explicitly via this constructor; the R2DBC connector
+   * separately supports a server-side limit through {@code Connection.setStatementTimeout} and
+   * ClickHouse's {@code max_execution_time} setting.
    */
   public ClickHouseHttpTransport(
       final String baseUrl,
@@ -366,8 +367,9 @@ public final class ClickHouseHttpTransport {
    * code. {@link ClickHouseQuery#queryId()} is passed as {@link ServerException}'s own {@code
    * queryId} constructor argument (available since client-v2 0.9.8 — see the version catalog), so
    * it is available via {@link ServerException#getQueryId()} rather than folded into the message
-   * text. {@link ServerException#isRetryable()} is also available on this client-v2 version, but
-   * this transport does not yet act on it — see {@link RetryPolicy}'s Javadoc.
+   * text. This transport also honors {@link ServerException#isRetryable()} when the caller opts in
+   * through {@link ClickHouseQuery#withServerErrorRetryEnabled()} and no response bytes have been
+   * emitted yet — see the retry contract below and {@link RetryPolicy}'s Javadoc.
    *
    * <p>{@link ClickHouseQuery#parameters()} — already encoded into ClickHouse's own wire format by
    * {@link ClickHouseQuery#withParameters(java.util.Map)} — are sent one {@code

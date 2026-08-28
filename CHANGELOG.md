@@ -14,6 +14,14 @@ the version it was given and fails the release if it can't find one. See
 
 ### Added
 
+- **Opt-in native RowBinary scalar decoder** — the new `rowDecoder=native` R2DBC option selects
+  `NativeRowBinaryReader` whenever every result column is supported, with an automatic whole-result
+  fallback to client-v2's reader otherwise. `rowDecoder=clickhouse` remains the default. Trusted
+  decoder-only runs measured roughly 14-15% lower latency and 11% lower allocation on 10k-1M-row
+  scans, while public-API point-query throughput remained statistically tied; the native path is
+  therefore available but deliberately not the default. The complete decoding subsystem now lives
+  in `core.rowbinary`, keeping query/lifecycle domain types separate from wire decoding without
+  widening package-private internals.
 - **HTTP response compression, on by default** — this driver now sends `compress=1` and decodes
   ClickHouse's own custom LZ4 block framing (distinct from standard HTTP `Content-Encoding`),
   matching client-v2's own default of `COMPRESS_SERVER_RESPONSE=true`. New `core.ResponseCompression`

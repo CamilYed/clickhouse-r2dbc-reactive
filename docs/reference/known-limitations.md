@@ -62,10 +62,13 @@ cancelled) still exists, just far less often than before this was implemented �
 > terminates with an error. This driver guarantees the query never silently completes as if the
 > result were whole, and that genuine rows already emitted are never retroactively dropped or
 > reordered — but it cannot guarantee every emitted row is genuine. If your application cannot
-> tolerate that risk, set ClickHouse's own `wait_end_of_query=1` setting via
+> tolerate that risk and uses the core API directly, set ClickHouse's own `wait_end_of_query=1`
+> setting via
 > [`ClickHouseQuery.withSettings(Map.of("wait_end_of_query", "1"))`](../../clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ClickHouseQuery.java),
 > which trades incremental streaming for having ClickHouse buffer the whole response server-side and
-> only ever send a clean error. See
+> only ever send a clean error. This arbitrary-setting hook is not currently exposed through the
+> R2DBC `Statement` API; R2DBC users need a future vendor extension before they can select this
+> mitigation without dropping to the core API. See
 > [`MidStreamQueryFailureAgainstRealClickHouseTest`](../../clickhouse-r2dbc-reactive-connector/src/test/java/io/github/camilyed/clickhouse/r2dbc/connector/MidStreamQueryFailureAgainstRealClickHouseTest.java)
 > for the regression tests proving both behaviors.
 
@@ -78,8 +81,11 @@ cancelled) still exists, just far less often than before this was implemented �
 > the query is a `SELECT` or an `INSERT`: since the server never received any bytes of a pre-send-
 > failed attempt, retrying it cannot make the query run twice server-side, so no idempotency guessing
 > is needed. A failure *after* the request was sent — a connection reset mid-response, a server error
-> — is never retried, precisely to avoid the risk of applying a non-idempotent statement twice. Set
-> `retryMaxAttempts=0` to disable entirely. See
+> — is never retried by a standard R2DBC statement, precisely to avoid the risk of applying a
+> non-idempotent statement twice. The core API has a narrower per-query opt-in for retryable server
+> errors before any response bytes are emitted (`ClickHouseQuery.withServerErrorRetryEnabled()`),
+> but that opt-in is not yet exposed through R2DBC `Statement`. Set `retryMaxAttempts=0` to disable
+> retrying entirely. See
 > [`RetryPolicy`](../../clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java)'s
 > Javadoc for the full reasoning.
 
