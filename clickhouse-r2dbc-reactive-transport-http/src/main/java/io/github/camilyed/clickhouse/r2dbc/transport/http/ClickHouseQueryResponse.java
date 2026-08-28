@@ -12,8 +12,8 @@ import reactor.netty.ByteBufFlux;
  * body} is lazy (nothing is sent until it's subscribed), so the actual count isn't known yet at the
  * point this record is constructed — only once the response headers have actually arrived, which
  * happens partway through consuming {@code body}. Call {@code writtenRows().getAsLong()} only after
- * {@code body} has started being consumed (e.g. {@code core.RowBinaryDecoder#decode} already
- * guarantees this — it reads the schema, which only happens after headers arrive, before
+ * {@code body} has started being consumed (e.g. {@code core.rowbinary.RowBinaryDecoder#decode}
+ * already guarantees this — it reads the schema, which only happens after headers arrive, before
  * resolving).
  */
 public record ClickHouseQueryResponse(LongSupplier writtenRows, ByteBufFlux body) {}

@@ -1,4 +1,4 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 /**
  * Which {@link RowBinaryReader} implementation {@link RowBinaryDecoder} uses to decode a {@code

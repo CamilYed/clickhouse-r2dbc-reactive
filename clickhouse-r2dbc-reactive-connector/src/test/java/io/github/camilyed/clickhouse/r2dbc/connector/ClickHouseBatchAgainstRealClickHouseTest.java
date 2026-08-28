@@ -2,7 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import java.time.Duration;

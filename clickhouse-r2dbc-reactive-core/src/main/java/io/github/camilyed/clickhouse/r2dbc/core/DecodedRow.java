@@ -1,5 +1,6 @@
 package io.github.camilyed.clickhouse.r2dbc.core;
 
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder;
 import java.util.Arrays;
 
 /**

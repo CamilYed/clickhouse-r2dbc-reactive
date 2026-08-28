@@ -4,7 +4,7 @@ import static io.github.camilyed.clickhouse.r2dbc.testkit.assertions.ClickHouseR
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
 
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.testkit.BaseClickHouseIntegrationTest;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.abilities.RealClickHouseQueryAbility;
 import java.net.InetAddress;

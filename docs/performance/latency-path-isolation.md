@@ -298,7 +298,7 @@ reason, not because it doesn't work. `ZeroCopyByteBufInputStreamBridge`/
   question; comparing this class's numbers against Variant A's separately-run class would not — two
   independent JMH invocations carry run-to-run noise Variant A's own retracted tail-latency finding
   already showed is real.
-- **Response compression forced to `NONE`, not the production `LZ4` default.** `core.ClickHouseLz4InputStream`
+- **Response compression forced to `NONE`, not the production `LZ4` default.** `core.rowbinary.ClickHouseLz4InputStream`
   (the LZ4 unwrapper) is package-private in `core`; reusing it from the benchmarks module would mean
   widening core's visibility purely for a benchmark, which this pass's "no production code changes"
   scope rules out. Decompression is itself a copy — a separate question from the one this variant

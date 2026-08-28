@@ -1,8 +1,12 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
+import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.io.IOException;
 import java.math.BigInteger;

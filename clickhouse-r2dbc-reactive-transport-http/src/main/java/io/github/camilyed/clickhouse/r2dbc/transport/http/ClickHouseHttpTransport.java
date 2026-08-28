@@ -270,9 +270,9 @@ public final class ClickHouseHttpTransport {
    * Whether this transport asks ClickHouse to compress response bodies with its own custom LZ4
    * block framing (sent as {@code compress=1}, see {@link #queryWithSummary}) — {@link
    * TransportOptions#defaults()}'s default of {@link ResponseCompression#LZ4} unless overridden.
-   * Read by {@code core.RowBinaryDecoder}'s caller so the decode side knows whether to unwrap the
-   * same framing before decoding — see {@link ResponseCompression}'s Javadoc for why one value
-   * threads both directions.
+   * Read by {@code core.rowbinary.RowBinaryDecoder}'s caller so the decode side knows whether to
+   * unwrap the same framing before decoding — see {@link ResponseCompression}'s Javadoc for why one
+   * value threads both directions.
    */
   public ResponseCompression responseCompression() {
     return responseCompression;
@@ -655,8 +655,8 @@ public final class ClickHouseHttpTransport {
    * in its non-standard-HTTP-compression mode (verified against client-v2 0.9.8's real source, not
    * assumed): a plain ClickHouse query parameter, not a standard HTTP {@code Accept-Encoding}
    * header, is what actually turns on ClickHouse's own custom LZ4 response framing (see {@code
-   * core.ClickHouseLz4InputStream}'s Javadoc for the wire format this then requires the decode side
-   * to unwrap).
+   * core.rowbinary.ClickHouseLz4InputStream}'s Javadoc for the wire format this then requires the
+   * decode side to unwrap).
    */
   private String compressionQueryString() {
     return responseCompression == ResponseCompression.LZ4 ? "&compress=1" : "";

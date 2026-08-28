@@ -1,7 +1,8 @@
-package io.github.camilyed.clickhouse.r2dbc.core;
+package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import java.io.ByteArrayInputStream;
 import java.util.List;
 import org.junit.jupiter.api.Test;

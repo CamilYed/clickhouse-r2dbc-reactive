@@ -19,7 +19,7 @@ the version it was given and fails the release if it can't find one. See
   matching client-v2's own default of `COMPRESS_SERVER_RESPONSE=true`. New `core.ResponseCompression`
   (`NONE`/`LZ4`) threads the setting through `TransportOptions`/`ClickHouseHttpTransport` (which
   query parameter to send) and `RowBinaryDecoder` (whether to unwrap the response body through the
-  new `core.ClickHouseLz4InputStream` before decoding) — zero new Reactor operators or schedulers,
+  new `core.rowbinary.ClickHouseLz4InputStream` before decoding) — zero new Reactor operators or schedulers,
   the existing `FluxInputStreamBridge`/`RowDecodingScheduler` machinery handles it unchanged. New
   R2DBC connection option `responseCompression` (default `true`), e.g.
   `r2dbc:clickhouse://host?responseCompression=false` to opt out. `ClickHouseCityHash`/`LZ4Factory`

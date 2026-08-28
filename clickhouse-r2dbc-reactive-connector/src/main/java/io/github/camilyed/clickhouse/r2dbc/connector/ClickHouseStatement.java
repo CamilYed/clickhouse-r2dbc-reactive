@@ -4,9 +4,9 @@ import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
-import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
-import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Parameter;
 import io.r2dbc.spi.Result;
@@ -104,7 +104,7 @@ final class ClickHouseStatement implements Statement {
    * <p>{@code decodingScheduler} is forwarded, unchanged, to every {@link RowBinaryDecoder#decode}
    * call this statement's {@link #execute()} makes — owned by, and shared across every
    * statement/batch/connection produced by, the same {@code ClickHouseConnectionFactory}; see
-   * {@link io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler}'s Javadoc.
+   * {@link io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler}'s Javadoc.
    *
    * <p>{@code observationListener} is notified of one {@link OperationKind#QUERY} lifecycle per
    * binding set this statement's {@link #execute()} runs — see {@link DriverObservationListener}'s
