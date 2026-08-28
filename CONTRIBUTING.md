@@ -74,9 +74,10 @@ the deployment is confirmed `PUBLISHED` — creates a Git tag and a GitHub Relea
 Portal version, the tag, and the Release always point at the same commit
 ([ROADMAP archive Phase 7 item 13](engineering/roadmap-archive.md#phase-7--operational-control--r2dbc-correctness-020)).
 
-1. On `main`, rename [CHANGELOG.md](CHANGELOG.md)'s `## [Unreleased] — X.Y.Z (...)` heading to
-   `## [X.Y.Z] — YYYY-MM-DD` and commit it — the release workflow reads this file for GitHub
-   Release notes and fails fast if it can't find a heading matching the version you give it.
+1. On `main`, move the release notes in [CHANGELOG.md](CHANGELOG.md) under a
+   `## [X.Y.Z] — YYYY-MM-DD` heading and commit it — the release workflow reads this file for
+   GitHub Release notes and fails before building or publishing if it can't find a heading matching
+   the version you give it.
 2. Trigger `release.yml` (Actions tab → "Release" → "Run workflow") with the version (e.g.
    `0.2.0`) and a `publishing_type`:
    - `AUTOMATIC` — Central Portal publishes as soon as validation passes; the workflow waits for

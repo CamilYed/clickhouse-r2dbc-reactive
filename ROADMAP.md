@@ -11,16 +11,13 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Date | Highlights |
 | --- | --- | --- |
+| [0.2.2](CHANGELOG.md#022--2026-08-28) | 2026-08-28 | HTTP response compression, opt-in native RowBinary scalar decoder, decoder package isolation, and reliable Spring shutdown disposal. |
 | [0.2.1](CHANGELOG.md#021--2026-08-22) | 2026-08-22 | Post-0.2.0 hardening: Enum8/Enum16 normalized to `String`, connection-reuse fix, Netty leak-detection lane, parameter-binding type matrix, demo NDJSON streaming fix. |
 | [0.2.0](CHANGELOG.md#020--2026-08-20-phase-7-operational-control--r2dbc-correctness) | 2026-08-20 | Operational control & R2DBC correctness: driver observability SPI, R2DBC compatibility lane (TCK), transport pool options, statement timeout, release/documentation sync. |
 | [0.1.0](CHANGELOG.md#010--2026-08-14) | 2026-08-14 | First Maven Central release: fully reactive `SELECT`/`INSERT`/batch, R2DBC SPI surface, Spring WebFlux demo, first performance pass. |
 
 ## In progress
 
-- **0.2.2 (unreleased)** — HTTP response compression (LZ4, on by default, matching client-v2's own
-  default), the opt-in native RowBinary scalar decoder, and a fix so the bundled demo actually
-  disposes the driver's `ConnectionFactory` at Spring shutdown. See
-  [CHANGELOG.md's Unreleased section](CHANGELOG.md#unreleased--022).
 - **Phase 8 — post-0.2.0 hardening.** Most items shipped in 0.2.1/0.2.2 (see table above). The
   non-idempotent `release.yml` `USER_MANAGED` finalization step is now fixed (`deployment_id`
   resume input, 2026-08-24). **client-v2 bumped 0.9.8 → 0.10.0** (2026-08-24): checked the 0.10.0
