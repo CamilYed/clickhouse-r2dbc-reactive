@@ -82,7 +82,8 @@ import reactor.core.publisher.Mono;
  * averages this line's value across forks, but that is now only averaging a handful of
  * already-exact per-fork percentiles, not dozens of approximate per-iteration ones.
  *
- * <h2>Why {@link ThisDriverState}/{@link ClientV2State} are separate {@code @State} classes</h2>
+ * <h2>Why {@link ThisDriverState}/{@link ThisDriverNativeState}/{@link ClientV2State} are separate
+ * {@code @State} classes</h2>
  *
  * Earlier versions of this class used one shared {@code @State(Scope.Benchmark)} holding both
  * clients, built and prewarmed together in a single {@code @Setup(Level.Trial)} regardless of which
@@ -95,10 +96,20 @@ import reactor.core.publisher.Mono;
  * the state a given fork's {@code @Benchmark} method actually declares as a parameter — see JMH's
  * own state-injection contract (a {@code @State} class not referenced, directly or transitively, by
  * the executing benchmark method is never constructed). The environment bootstrap ({@link
- * BenchmarkEnvironment}, {@link PointQueryTable#seed}) stays duplicated across both state classes
- * rather than factored out to a third shared state, since both are already idempotent/synchronized
- * (see their own Javadoc) and a shared state would reintroduce the same fork-pollution problem this
- * split exists to avoid.
+ * BenchmarkEnvironment}, {@link PointQueryTable#seed}) stays duplicated across all three state
+ * classes rather than factored out to a shared one, since all three are already
+ * idempotent/synchronized (see their own Javadoc) and a shared state would reintroduce the same
+ * fork-pollution problem this split exists to avoid. {@link ThisDriverNativeState} (added
+ * 2026-08-27) followed the same split for the same reason once a third path existed.
+ *
+ * <h2>{@code thisDriverNative} and {@code scripts/benchmarks/analyze.py}</h2>
+ *
+ * {@code analyze.py}'s parsed summary/chart step only recognizes the log lines {@code thisDriver}
+ * and {@code clientV2} produce (see its {@code DRIVER_LABELS}/regex, hard-coded to those two
+ * literal names) — {@code thisDriverNative}'s per-query latency and TRUE MERGED lines still appear
+ * in the raw log/JMH {@code results.json}, and its own JMH throughput {@code Score} is reported
+ * normally, but they are not yet folded into the generated chart/table. Read them directly from the
+ * log until {@code analyze.py} is extended to a third driver.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -186,6 +197,86 @@ public class PublicApiMatchedPoolThroughputBenchmark {
     }
   }
 
+  /**
+   * This driver's client with {@code rowDecoder=native}, connection pool, and per-query latency
+   * recorder, isolated per fork — otherwise identical to {@link ThisDriverState}, differing only in
+   * {@link OurDriverPointQueryClient.NativeDecoder} vs. the plain {@code int} constructor, so a
+   * comparison against {@link ThisDriverState} isolates {@code rowDecoder} as the only variable.
+   * See the class Javadoc's "Why {@code ThisDriverState}/{@code ClientV2State} are separate
+   * {@code @State} classes" section for why this needs its own state class rather than a shared
+   * one, plus {@link OurDriverPointQueryClient.NativeDecoder}'s Javadoc for why this third path
+   * exists at all — {@code DecoderOnlyBenchmark} already showed {@code RowBinaryDecoderMode.NATIVE}
+   * decoding faster in isolation (2026-08-27 trusted run: ~13.6-15.2% lower mean latency, ~11.4%
+   * lower allocation across 10k/100k/1M rows); this state exists to answer whether that isolated
+   * gain survives the full public R2DBC path (network, transport, decoder scheduler, connection
+   * pool) rather than being absorbed by everything else in that path.
+   */
+  @State(Scope.Benchmark)
+  public static class ThisDriverNativeState {
+
+    /**
+     * Physical connection pool size — kept in lockstep with {@link ThisDriverState#poolSize}/{@link
+     * ClientV2State#poolSize} so all three paths always sweep the same values.
+     */
+    @Param({"8"})
+    public int poolSize;
+
+    /** How many logical queries are allowed in flight at once, bounded by {@link #poolSize}. */
+    @Param({"8", "32", "128"})
+    public int concurrency;
+
+    private long[] ids;
+    private final AtomicLong idCursor = new AtomicLong();
+    private OurDriverPointQueryClient client;
+    private Recorder latencyRecorder;
+    private Histogram mergedHistogram;
+
+    /**
+     * Starts the shared/external server, seeds {@link PointQueryTable}, builds this driver's client
+     * at an explicit {@link #poolSize} with {@code rowDecoder=native}, then prewarms it — moves DNS
+     * resolution, class loading, and first connection-pool expansion out of what gets measured.
+     */
+    @Setup(Level.Trial)
+    public void setUpTrial() {
+      BenchmarkEnvironment.start();
+      PointQueryTable.seed(ROWS);
+      ids = PointQueryTable.deterministicIds(ROWS, ID_POOL_SIZE, ID_SEED);
+      client = new OurDriverPointQueryClient(new OurDriverPointQueryClient.NativeDecoder(poolSize));
+      client.prewarm(ids, PREWARM_CALLS);
+      latencyRecorder = new Recorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
+      mergedHistogram = new Histogram(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
+    }
+
+    /**
+     * Logs this fork's exact merged per-query latency (see the class Javadoc's "TRUE MERGED"
+     * section), then closes the client's connection and disposes its owning factory.
+     */
+    @TearDown(Level.Trial)
+    public void tearDownTrial() {
+      logMergedLatencySummary("thisDriverNative", mergedHistogram);
+      client.close();
+    }
+
+    /**
+     * Merges this iteration's interval histogram into {@link #mergedHistogram}, then logs and
+     * resets this driver's per-query latency distribution.
+     */
+    @TearDown(Level.Iteration)
+    public void tearDownIteration() {
+      final Histogram interval = latencyRecorder.getIntervalHistogram();
+      mergedHistogram.add(interval);
+      logLatencySummary("thisDriverNative", interval);
+    }
+
+    /**
+     * Advances through the pre-generated {@link #ids} pool - thread-safe via {@link AtomicLong}.
+     */
+    private long nextId() {
+      final int index = (int) (idCursor.getAndIncrement() & (ID_POOL_SIZE - 1));
+      return ids[index];
+    }
+  }
+
   /** client-v2's client, connection pool, and per-query latency recorder, isolated per fork. */
   @State(Scope.Benchmark)
   public static class ClientV2State {
@@ -257,6 +348,16 @@ public class PublicApiMatchedPoolThroughputBenchmark {
   @Benchmark
   @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
   public long thisDriver(final ThisDriverState state) {
+    return runWorkload(state.client, state.latencyRecorder, state.concurrency, state::nextId);
+  }
+
+  /**
+   * This driver with {@code rowDecoder=native}, through the public R2DBC SPI only - see {@link
+   * ThisDriverNativeState}'s Javadoc for why this path exists alongside {@link #thisDriver}.
+   */
+  @Benchmark
+  @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
+  public long thisDriverNative(final ThisDriverNativeState state) {
     return runWorkload(state.client, state.latencyRecorder, state.concurrency, state::nextId);
   }
 

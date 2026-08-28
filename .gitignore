@@ -15,3 +15,7 @@ node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 __pycache__/
+
+# JMH -prof jfr output: local diagnostic run artifacts (like results.json, not committed
+# per this project's convention - see docs/performance/latency-path-isolation.md).
+*.jfr

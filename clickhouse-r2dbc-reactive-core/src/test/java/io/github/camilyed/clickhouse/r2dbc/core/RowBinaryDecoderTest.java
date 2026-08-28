@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
+import java.io.IOException;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
@@ -71,6 +73,165 @@ class RowBinaryDecoderTest {
 
     // then
     assertThat(row.valueAt(0)).isInstanceOf(String.class).isEqualTo("b");
+  }
+
+  @Test
+  void shouldDecodeAMultiColumnRowThroughTheNativeReader() {
+    // given - Int32 and UInt64 both resolve natively, so this exercises NativeRowBinaryReader
+    // rather than the client-v2-backed fallback
+    final byte[] wireBytes =
+        RowBinaryFixtures.rowBinaryWithNamesAndTypes(
+            new String[] {"a", "b"},
+            new String[] {"Int32", "UInt64"},
+            new byte[] {
+              0x2A,
+              0x00,
+              0x00,
+              0x00, // Int32 42
+              (byte) 0xE8,
+              0x03,
+              0x00,
+              0x00,
+              0x00,
+              0x00,
+              0x00,
+              0x00 // UInt64 1000
+            });
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(wireBytes));
+
+    // when - RowBinaryDecoderMode.NATIVE explicitly, since the default (CLICKHOUSE) never
+    // constructs NativeRowBinaryReader at all
+    final DecodedRow row =
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
+            .blockFirst(Duration.ofSeconds(5));
+
+    // then
+    assertThat(row.valueAt(0)).isEqualTo(42);
+    // and
+    assertThat(row.valueAt(1)).isEqualTo(BigInteger.valueOf(1000));
+  }
+
+  @Test
+  void shouldFallBackToListDecodingWhenAnyColumnInTheRowIsUnsupported() {
+    // given - Int32 resolves natively, but Array(Int32) does not: NativeColumnTypeResolver has no
+    // fallback for a single unsupported column, so RowBinaryDecoder must route the WHOLE row
+    // through ListDecodingRowBinaryReader, including the otherwise-native Int32 column
+    final byte[] wireBytes =
+        RowBinaryFixtures.rowBinaryWithNamesAndTypes(
+            new String[] {"a", "arr"},
+            new String[] {"Int32", "Array(Int32)"},
+            new byte[] {
+              0x07,
+              0x00,
+              0x00,
+              0x00, // Int32 7
+              0x02, // array length 2
+              0x0A,
+              0x00,
+              0x00,
+              0x00, // 10
+              0x14,
+              0x00,
+              0x00,
+              0x00 // 20
+            });
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(wireBytes));
+
+    // when - RowBinaryDecoderMode.NATIVE explicitly: the default (CLICKHOUSE) would route this
+    // through ListDecodingRowBinaryReader unconditionally, which would make this test pass for
+    // the wrong reason (never exercising NativeColumnTypeResolver's all-or-nothing decision)
+    final DecodedRow row =
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
+            .blockFirst(Duration.ofSeconds(5));
+
+    // then - the native-eligible column still decodes correctly via the fallback path
+    assertThat(row.valueAt(0)).isEqualTo(7);
+    // and
+    @SuppressWarnings("unchecked")
+    final List<Integer> arrayValue = (List<Integer>) row.valueAt(1);
+    assertThat(arrayValue).containsExactly(10, 20);
+  }
+
+  @Test
+  void shouldDecodeANullableNativeColumnAcrossMultipleRows() {
+    // given - Nullable(Int32): first row null, second row value 5
+    final byte[] wireBytes =
+        RowBinaryFixtures.rowBinaryWithNamesAndTypes(
+            new String[] {"n"},
+            new String[] {"Nullable(Int32)"},
+            new byte[] {0x01}, // null
+            new byte[] {0x00, 0x05, 0x00, 0x00, 0x00} // not null, value 5
+            );
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(wireBytes));
+
+    // when - RowBinaryDecoderMode.NATIVE explicitly, to exercise NativeRowBinaryReader's own
+    // Nullable handling rather than client-v2's
+    final List<DecodedRow> rows =
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
+            .collectList()
+            .block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(rows).extracting(r -> r.valueAt(0)).containsExactly(null, 5);
+  }
+
+  @Test
+  void shouldEmitNoRowsForAResponseWithNoHeaderAtAll() {
+    // given - an empty body, e.g. a DDL statement's response, never sends the
+    // RowBinaryWithNamesAndTypes header at all
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(new byte[0]));
+
+    // when / then
+    StepVerifier.create(RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE))
+        .verifyComplete();
+  }
+
+  @Test
+  void shouldExposeEmptyColumnsForAResponseWithNoHeaderAtAll() {
+    // given
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(new byte[0]));
+
+    // when
+    final DecodedResult result =
+        RowBinaryDecoder.decode(source, decodingScheduler, ResponseCompression.NONE)
+            .block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(result.columns()).isEmpty();
+    // and
+    StepVerifier.create(result.rows()).verifyComplete();
+  }
+
+  @Test
+  void shouldEmitNoRowsForAResponseWithNoHeaderAtAllInNativeMode() {
+    // given - same DDL/empty-body case as shouldEmitNoRowsForAResponseWithNoHeaderAtAll, but
+    // routed through EmptyRowBinaryReader (RowBinaryDecoderMode.NATIVE) instead of
+    // ListDecodingRowBinaryReader's own null-schema handling (RowBinaryDecoderMode.CLICKHOUSE) -
+    // both must agree on the observable outcome
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(new byte[0]));
+
+    // when / then
+    StepVerifier.create(
+            RowBinaryDecoder.decodeRows(
+                source, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE))
+        .verifyComplete();
+  }
+
+  @Test
+  void shouldExposeEmptyColumnsForAResponseWithNoHeaderAtAllInNativeMode() {
+    // given
+    final Flux<ByteBuffer> source = Flux.just(ByteBuffer.wrap(new byte[0]));
+
+    // when
+    final DecodedResult result =
+        RowBinaryDecoder.decode(
+                source, decodingScheduler, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
+            .block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(result.columns()).isEmpty();
+    // and
+    StepVerifier.create(result.rows()).verifyComplete();
   }
 
   @Test
@@ -254,9 +415,14 @@ class RowBinaryDecoderTest {
 
       // then
       assertThat(droppedErrors).hasSize(1);
-      // and
+      // and - RowBinaryDecoderCloseException wraps the IOException that ListDecodingRowBinaryReader
+      // #close() itself narrows client-v2's inherited close() throws Exception into (see that
+      // method's Javadoc), which in turn wraps the original IllegalStateException from cancel() -
+      // two wrapping hops, not one, since that narrowing was introduced
       assertThat(droppedErrors.get(0))
           .hasMessageContaining("Failed to close the row decoder's underlying stream")
+          .cause()
+          .isInstanceOf(IOException.class)
           .cause()
           .isInstanceOf(IllegalStateException.class)
           .hasMessage("cancel failed");

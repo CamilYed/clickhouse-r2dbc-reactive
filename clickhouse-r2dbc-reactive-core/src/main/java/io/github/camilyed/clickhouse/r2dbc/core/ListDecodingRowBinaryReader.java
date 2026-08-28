@@ -40,7 +40,8 @@ import org.jspecify.annotations.Nullable;
  * serves. A {@code null} value (a {@code Nullable(Enum8)} column with no row set) is left as {@code
  * null} rather than the literal string {@code "null"}.
  */
-final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormatReader {
+final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormatReader
+    implements RowBinaryReader {
 
   // Both fixed for the lifetime of this reader once the header is parsed - see columns()/
   // listHints()'s Javadoc for why caching them here, instead of recomputing per row, is safe.
@@ -57,7 +58,7 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
 
   @Override
   protected boolean readRecord(final Object[] values) throws IOException {
-    final List<ClickHouseColumn> columns = columns();
+    final List<ClickHouseColumn> columns = clickHouseColumns();
     if (columns.isEmpty()) {
       return false;
     }
@@ -87,14 +88,39 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
    * {@code R} times (once per row) for a fixed answer was pure repeated work, not something the
    * decode contract requires. See docs/PERFORMANCE.md's "second-opinion review" section (finding 4)
    * for how this was found.
+   *
+   * <p>{@link #getSchema()} itself is {@code null} rather than an empty schema for a response with
+   * no {@code RowBinaryWithNamesAndTypes} header at all (a DDL statement) — see {@link
+   * RowBinaryHeader}'s Javadoc. In {@link RowBinaryDecoderMode#NATIVE}, {@link RowBinaryDecoder}
+   * only ever constructs this reader once that case has already been routed to {@link
+   * EmptyRowBinaryReader} instead, but in {@link RowBinaryDecoderMode#CLICKHOUSE} this reader is
+   * constructed directly, with no such pre-check, so the {@code null} case can genuinely reach here
+   * — treated the same way {@link RowBinaryDecoder}'s old {@code columnsOf} helper always did,
+   * before this method existed: an empty column list, not a {@link NullPointerException}.
    */
-  private List<ClickHouseColumn> columns() {
+  private List<ClickHouseColumn> clickHouseColumns() {
     List<ClickHouseColumn> columns = cachedColumns;
     if (columns == null) {
-      columns = getSchema().getColumns();
+      final var schema = getSchema();
+      columns = schema == null ? List.of() : schema.getColumns();
       cachedColumns = columns;
     }
     return columns;
+  }
+
+  /**
+   * This result's column schema, in wire order — {@link RowBinaryReader}'s contract. Empty for a
+   * response with no header at all — see {@link #clickHouseColumns()}'s Javadoc.
+   */
+  @Override
+  public List<ColumnDescriptor> columns() {
+    return clickHouseColumns().stream()
+        .map(ListDecodingRowBinaryReader::toColumnDescriptor)
+        .toList();
+  }
+
+  private static ColumnDescriptor toColumnDescriptor(final ClickHouseColumn column) {
+    return new ColumnDescriptor(column.getColumnName(), column.getOriginalTypeName());
   }
 
   /**
@@ -172,8 +198,29 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
    * because exactly one dedicated worker thread ever drives this reader (see {@link
    * FluxInputStreamBridge}'s own Javadoc for why).
    */
-  Object[] nextRowValues() {
+  @Override
+  public Object[] nextRowValues() {
     next();
     return currentRecord.clone();
+  }
+
+  /**
+   * Narrows client-v2's inherited {@code close() throws Exception} ({@code
+   * AbstractBinaryFormatReader.close()}, which only ever closes the underlying {@link InputStream})
+   * down to {@link IOException} — the specific type {@link RowBinaryReader}'s contract declares.
+   * {@code super.close()} cannot itself throw anything but an {@link IOException} in practice (it
+   * only calls {@code InputStream.close()}), so this translation is exhaustive, not a guess: an
+   * unexpected checked exception from a future client-v2 version would still surface, wrapped,
+   * rather than silently satisfying a narrower contract it doesn't actually meet.
+   */
+  @Override
+  public void close() throws IOException {
+    try {
+      super.close();
+    } catch (final IOException e) {
+      throw e;
+    } catch (final Exception e) {
+      throw new IOException(e);
+    }
   }
 }

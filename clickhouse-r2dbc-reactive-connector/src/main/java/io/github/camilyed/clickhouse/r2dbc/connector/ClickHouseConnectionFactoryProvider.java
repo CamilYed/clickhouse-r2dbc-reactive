@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
+import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.ConnectionFactoryProvider;
@@ -70,6 +71,23 @@ public final class ClickHouseConnectionFactoryProvider implements ConnectionFact
    * for the wire format this turns on.
    */
   public static final Option<Boolean> RESPONSE_COMPRESSION = Option.valueOf("responseCompression");
+
+  /**
+   * Which {@link RowBinaryDecoderMode} decodes every query run over a {@link ClickHouseConnection}
+   * this factory produces — {@code "clickhouse"} (the default, case-insensitive) or {@code
+   * "native"}. Applied identically to {@link ClickHouseStatement#execute()} and {@link
+   * ClickHouseBatch#execute()}.
+   *
+   * <p><b>Defaults to {@link RowBinaryDecoderMode#CLICKHOUSE}</b>: every column, of every type,
+   * decodes through client-v2's own reader exactly as this driver always has. Set {@code
+   * rowDecoder=native} to opt into {@link RowBinaryDecoderMode#NATIVE} — see that constant's
+   * Javadoc for exactly which types decode natively today and the automatic, per-result fallback
+   * for anything outside that set. Both modes decode every result to identical values and Java
+   * types; only the decode path taken to get there differs. An unrecognized value fails fast with
+   * {@link IllegalArgumentException} at factory-construction time, rather than silently falling
+   * back to the default.
+   */
+  public static final Option<String> ROW_DECODER = Option.valueOf("rowDecoder");
 
   /**
    * A trusted TLS certificate for {@code ssl=true} connections, as a classpath resource path or a

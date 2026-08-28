@@ -5,6 +5,7 @@ import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Parameter;
@@ -83,6 +84,7 @@ final class ClickHouseStatement implements Statement {
   private final @Nullable Duration statementTimeout;
   private final RowDecodingScheduler decodingScheduler;
   private final DriverObservationListener observationListener;
+  private final RowBinaryDecoderMode rowDecoderMode;
   private Map<String, Object> boundValues = new LinkedHashMap<>();
 
   ClickHouseStatement(
@@ -114,12 +116,34 @@ final class ClickHouseStatement implements Statement {
       final @Nullable Duration statementTimeout,
       final RowDecodingScheduler decodingScheduler,
       final DriverObservationListener observationListener) {
+    this(
+        transport,
+        sql,
+        statementTimeout,
+        decodingScheduler,
+        observationListener,
+        RowBinaryDecoderMode.CLICKHOUSE);
+  }
+
+  /**
+   * {@code rowDecoderMode} decides which {@code RowBinaryReader} decodes every {@link #execute()}
+   * call this statement makes — see {@code ClickHouseConnectionFactoryProvider#ROW_DECODER}'s
+   * Javadoc for the full contract.
+   */
+  ClickHouseStatement(
+      final ClickHouseHttpTransport transport,
+      final String sql,
+      final @Nullable Duration statementTimeout,
+      final RowDecodingScheduler decodingScheduler,
+      final DriverObservationListener observationListener,
+      final RowBinaryDecoderMode rowDecoderMode) {
     this.transport = transport;
     this.sql = sql;
     this.parameterNames = ClickHouseQuery.parameterNamesIn(sql);
     this.statementTimeout = statementTimeout;
     this.decodingScheduler = decodingScheduler;
     this.observationListener = observationListener;
+    this.rowDecoderMode = rowDecoderMode;
   }
 
   @Override
@@ -214,7 +238,8 @@ final class ClickHouseStatement implements Statement {
         .queryWithSummary(query)
         .flatMap(
             response ->
-                ClickHouseResult.decode(response, decodingScheduler, observation, compression))
+                ClickHouseResult.decode(
+                    response, decodingScheduler, observation, compression, rowDecoderMode))
         .doOnError(observation::failed)
         .doOnCancel(observation::cancelled);
   }

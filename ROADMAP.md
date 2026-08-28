@@ -843,9 +843,202 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     explicit "no production change justified yet"). Falls back to profiling
     `ClickHouseStatement`/`ClickHouseQuery` construction (the third informal bullet above) only if
     A/B/C/D don't explain the gap.
-  - **Status: planned, not started.** Waiting on the user's go-ahead once the current macrobench PR
-    (`feature/305-phase12-macrobench-pr1`) is merged — do not begin implementation before that
-    signal.
+  - **Status: Variant D confirms a real per-row/per-column reader-layer cost at 10k-row scale
+    (~21.6% faster, ~79x combined error, cross-checked) — the strongest lead in the ladder.
+    `point`'s earlier single-row "win" retracted (sign-flipped on a second trusted `-t8` run, same
+    fate as Variant C).** Production decision (2026-08-25): rather than continue benchmarking
+    (network-free type matrix, profiler, maintenance-cost estimate), `stream10k`'s decisive,
+    cross-validated result was taken as sufficient grounds to implement a real native
+    `RowBinaryWithNamesAndTypes` decoder directly in `core`, scoped to a safe, incremental rollout:
+    `NativeRowBinaryReader` decodes ClickHouse's scalar types natively (`Int8`-`Int64`/`UInt8`-`UInt64`,
+    `Int128`/`UInt128`/`Int256`/`UInt256`,
+    `Float32`/`64`, `Bool`, `String`, `FixedString(n)`, `Decimal(P,S)`/`32`/`64`/`128`/`256`, and
+    `Nullable(T)` wrapping any of those — semantics cross-checked byte-for-byte against client-v2's
+    own `BinaryStreamReader`), while `RowBinaryDecoder` parses the `RowBinaryWithNamesAndTypes`
+    header exactly once and falls back to the existing, unmodified `ListDecodingRowBinaryReader`
+    (fed a `SequenceInputStream` replaying the already-consumed header bytes) for any result
+    containing even one column outside that native set — `Date*`/`DateTime*`/`Time*`,
+    `Interval*`, `IPv4`/`IPv6`, `UUID`, `Enum8`/`16`, `Array`, `Map`,
+    `Tuple`, `Nested`, `LowCardinality`, `JSON`, `Variant`/`Dynamic`, geo types,
+    `AggregateFunction`/`SimpleAggregateFunction`, `QBit`, `BFloat16` all still decode exactly as
+    before, byte-for-byte identical to today's production path. `EmptyRowBinaryReader` handles the
+    DDL/no-header-at-all case the same way it always has. Implemented test-first (`RowBinaryWireFormat`,
+    `ColumnDecoder`/`ScalarColumnDecoder`/`DecimalColumnDecoder`/`FixedStringColumnDecoder`,
+    `NativeColumnTypeResolver`, `RowBinaryHeader`, `NativeRowBinaryReader`, `EmptyRowBinaryReader` each
+    with dedicated unit tests, plus `RowBinaryDecoderTest` extended with native-path,
+    mixed-native-plus-unsupported fallback, `Nullable`, and no-header end-to-end cases). Not yet
+    compiled/run in this sandbox (JDK 11 only, no network) — pending the user's own
+    `./gradlew spotlessApply spotlessCheck clean build`, which also re-runs
+    `RealWorldTableAgainstRealClickHouseTest` as the regression net for every type not natively
+    covered.
+  - **Correction (2026-08-27, external review of PR #99):** the `~21.6% faster` `stream10k` number
+    above is **retracted** — the review found `MinimalRowBinaryReader` decoded `UInt8`/`UInt64` as
+    `Long` (not the production decoder's `Short`/`BigInteger`) and that the benchmark blackholed
+    client-v2's typed-getter output against this prototype's raw array: different Java
+    representations and different consumption work on each side, not decode cost alone. That type
+    mismatch is fixed (`MinimalRowBinaryReader`, `RowBinaryReaderTypeMatrixBenchmark` now documents
+    the remaining getter-choice asymmetry), and real ClickHouse type-coverage correctness between
+    `CLICKHOUSE`/`NATIVE` modes is proven (`RealWorldTableAgainstRealClickHouseTest`, parametrized
+    over both, including `Int128`/`UInt128`/`Int256`/`UInt256` as of `88020ed`).
+  - **Trusted decoder-only result (2026-08-27, commit `88020ed`, 3 forks/5 warmup/3 measurement,
+    `gc,jfr`):** the symmetric, apples-to-apples comparison against the exact production
+    `RowBinaryDecoder` path (`DecoderOnlyBenchmark#thisDriver` vs `#thisDriverNative`, same captured
+    `RowBinaryWithNamesAndTypes` bytes, same `FluxInputStreamBridge`, only `RowBinaryDecoderMode`
+    differing) confirms `NATIVE` is faster at the isolated decode boundary for a `UInt64 + String +
+    Decimal(18,4)` row shape: ~15.18%/13.62%/14.57% lower mean latency and ~11.5%/11.4%/11.4% lower
+    allocation than `CLICKHOUSE`, at 10k/100k/1M rows respectively, with mean/p50/p90/p95 all
+    agreeing on direction. **This proves the decode layer is faster in isolation — it does not yet
+    prove the whole driver is faster for real point queries**, since network, transport, the decoder
+    scheduler, and connection pooling all sit between the decoder and an application. That question
+    is what `PublicApiMatchedPoolThroughputBenchmark#thisDriverNative` (added alongside this
+    correction — see `OurDriverPointQueryClient.NativeDecoder`) exists to answer next.
+  - **Trusted public-API result (2026-08-27, commit `3d66d62`, 3 forks/5 warmup/3 measurement,
+    `gc,jfr`, `poolSize=8`, `concurrency=8/32/128`):** run against a single pinned external
+    ClickHouse (`scripts/start-benchmark-clickhouse.sh`), not per-fork Testcontainers, so all three
+    paths (`clientV2`/`thisDriver`/`thisDriverNative`) shared one server instance. **Small
+    success, not strong success — matches the "small success" branch of the decision rule above.**
+    JMH throughput for `thisDriver` vs `thisDriverNative` is statistically indistinguishable at
+    every concurrency level (differences of 1-4% against ±18-23% error bars). Merged per-query
+    latency (mean/p50/p90/p95) shows `NATIVE` consistently ~1-2% lower at `concurrency=8`/`32`, and
+    essentially flat (p99 marginally worse) at `concurrency=128` — real but modest, nowhere near the
+    isolated decoder's ~14-15%: network, transport, `RowDecodingScheduler`, and the 8-connection
+    pool dominate this benchmark's cost, diluting the decoder's share of total latency. The one
+    clean, consistent signal is allocation: `NATIVE` uses ~7-8% less per query
+    (`gc.alloc.rate.norm`) than `CLICKHOUSE` at all three concurrency levels (e.g. 18933→17449 B/op
+    at `concurrency=128`) — smaller than the isolated ~11.4% (more allocation happens outside the
+    decoder at this layer — `Row`/`Result`/Reactor plumbing — diluting the decoder's own share) but
+    directionally unambiguous, unlike the noisy throughput/latency numbers. **Decision (matching
+    section 19's "small success" branch): keep `NATIVE` opt-in; do not prioritize the JFR-suggested
+    decoder micro-optimizations (`UInt64` `readReversed`, `String` scratch buffer, `PushbackInputStream`
+    peek removal) over other work — the isolated 14-15% win is real but doesn't clearly translate into
+    a public-API win worth chasing further right now.** Both R2DBC modes also trail `clientV2` in
+    this same run, more so at `concurrency≥32` (e.g. `clientV2` p90 ≈34.8ms vs `thisDriver`/
+    `thisDriverNative` ≈41-42ms at `concurrency=32`) — a pre-existing, already-documented gap
+    unrelated to the decoder question this benchmark exists to answer. See `NativeRowBinaryReader`'s
+    Javadoc for the same caveat at the code level.
+  - **Trusted-clean public-API result (2026-08-27, commit `8c64d73`, 3 forks/5 warmup/5 measurement,
+    no profiler, `poolSize=8`, `concurrency=8/32/128`):** step (1)-(2) of the refined execution order
+    below, done. Same pinned external ClickHouse as the profiled trusted run above, but with
+    `-prof gc,jfr` removed and 5 measurement iterations instead of 3, specifically to rule out
+    profiler overhead as a confound on this latency-sensitive comparison. Throughput for
+    `thisDriver`/`thisDriverNative` is again statistically indistinguishable at every concurrency
+    (824.7/848.1/850.8 ops/s vs 815.5/844.7/840.2 ops/s - a ~0.4-1.3% spread against +/-23-61 ops/s
+    error bars), both still trailing `clientV2` (882.0/867.5/858.3 ops/s) by the same ~2-8% margin as
+    before. Merged per-query latency, computed by hand from the raw per-fork `TRUE MERGED` log lines
+    (`analyze.py` still only recognizes `thisDriver`/`clientV2` - the documented gap in
+    `PublicApiMatchedPoolThroughputBenchmark`'s own Javadoc, not fixed as part of this run): `NATIVE`
+    vs `CLICKHOUSE` (`thisDriver`) p50 is now flat-to-marginally-worse (+0.5%/+0.6%/+0.75% at
+    `concurrency=8/32/128`, not the ~1-2% lower this profiled run previously suggested - that earlier
+    edge did not reproduce cleanly and may itself have been partly a profiler-interaction artifact),
+    while p99 is marginally better (-1.9%/-0.6%/-1.5%) - both effects small enough to be within
+    ordinary run-to-run noise, not a repeatable win either direction. **The one clean, decision-useful
+    signal: the tail-latency gap vs `clientV2` is essentially identical regardless of decode mode.**
+    p99 for `thisDriverNative` is 27.9%/21.8%/22.0% higher than `clientV2` at `concurrency=8/32/128`;
+    p99 for `thisDriver` (`CLICKHOUSE`) is 30.4%/22.5%/23.9% higher - the same gap, within a couple of
+    points, whichever decoder runs. That's a clean (no profiler confound this time), independent
+    confirmation of this investigation's standing hypothesis: the tail-latency deficit against
+    `clientV2` sits upstream of decoding entirely (bridge/scheduler/pool/transport), so no decoder
+    change - `NATIVE` or further micro-optimization of it - will close it. No allocation figures this
+    run (profiler intentionally disabled). **Decision: step (2)'s "stop here" condition (`NATIVE`
+    clearly ahead end to end) did not hold - still effectively tied with `CLICKHOUSE`, both still
+    behind `clientV2` on tail latency by the same margin.** Step (3), the focused
+    `PointQueryPipelineIsolationBenchmark`, has since completed; see the trusted-clean isolation
+    result below. It found transport parity and a measurable but small scheduler boundary, leaving no
+    production optimization justified by this investigation.
+    `feature/305-phase12-macrobench-pr1` merged (`fc494a0`),
+    go-ahead received. Working on branch `feature/314-latency-path-isolation`. Deliverable 1 (exact
+    pipeline diagram + boundary locations) and **Variant A** (`LatencyPathVariantABenchmark`, trusted
+    3-fork runs at both `-t 1`/`-t 8`) are done — a flat ~2.6-4.9% `thisDriver` mean deficit vs.
+    client-v2 on `SELECT 1`/point, streaming already ~9-17% faster with no change needed. **Variant B**
+    (avoid the `ByteBuf`→`byte[]`→`ByteBuffer` copy) is also done and **settled, not adopted**:
+    `ZeroCopyByteBufInputStreamBridge`'s ownership is proven correct (leak-clean real-HTTP run), but a
+    dedicated network-free microbenchmark isolated the copy's true cost at real `SELECT 1`/point
+    response sizes to 15-35ns/call — real and reproducible, but negligible against the ~600-1150µs
+    real round trip, and not the source of Variant A's deficit. Both classes stay as diagnostic,
+    benchmark-local artifacts. See
+    [docs/performance/latency-path-isolation.md](docs/performance/latency-path-isolation.md) for the
+    full diagram, variant status table, and both variants' full result tables/reasoning. **Task #309**
+    (profiling `ClickHouseStatement`/`ClickHouseQuery` construction) is also done and rejected:
+    `QueryConstructionMicrobenchmark` measured `ClickHouseQuery.of`/`.withParameters`/UUID-generation
+    cost (including under 8-way contention) at 20-150x too small to explain either concurrency level's
+    deficit. Elimination list now complete (GC, the copy, and construction cost all ruled out) —
+    **Variant C** (transport-acquisition-before-decoder-admission) is the only remaining hypothesis:
+    `LatencyPathVariantCBenchmark` prototypes calling `FluxInputStreamBridge.subscribeTo`
+    (subscription = HTTP send) eagerly on the calling thread, before `subscribeOn(decodeScheduler)`,
+    instead of inside it as production does today. **Done, verdict: inconclusive, not adopted.**
+    Single-fork sanity at `-t8` looked promising (~1.5-2.0% faster for early acquisition) but did not
+    reproduce in the trusted 3-fork `-t8` rerun (SELECT 1 ~0.1% noise-level, point flipped to ~1.3%
+    slower). The trusted `-t1` run then showed the opposite of the predicted signature entirely — a
+    real, sizeable effect (~3.65%/~1.22% faster for early acquisition, 9x/3.5x combined error) at the
+    concurrency level where an admission-gate-contention mechanism shouldn't apply at all (nothing
+    contends for the pool or decoder scheduler at `-t1`). All four (scenario, concurrency)
+    combinations flip character between single-fork and trusted runs, and the two trusted rows per
+    scenario disagree with each other too — no coherent direction survives across independent runs.
+    Retracted/set aside per this project's standing discipline, same practical outcome as Variant
+    B/task #309 but for a different reason: not "effect too small," but "effect inconsistent and
+    non-reproducible at a magnitude too large to just average away." **All four original candidate
+    hypotheses (GC, the copy, construction cost, admission-gate ordering) now examined; none reliably
+    explains Variant A's deficit — "no production change justified yet" per this investigation's own
+    plan.** Variant D not started.
+  - **Deferred architectural candidate (measured 2026-08-27, not adopted): bypass
+    `FluxInputStreamBridge`/`RowDecodingScheduler` for the native path, not just the reader.**
+    `FluxInputStreamBridge` (bridges reactive `Flux<ChunkBuffer>` to a blocking `InputStream`) and
+    `RowDecodingScheduler` (the thread hop that lets a blocking reader run off the Netty event loop)
+    are shared by `CLICKHOUSE` and `NATIVE` alike — swapping the reader never touched them. For a
+    large scan this fixed per-request setup cost is amortized across thousands of rows, which is
+    exactly why `DecoderOnlyBenchmark`'s ~14-15% per-row win showed up clearly there; for a
+    point-query (one row), that same fixed cost is paid once and amortized over nothing, so it can
+    dominate total latency far more than the ~1-2 rows' worth of decode time `NativeRowBinaryReader`
+    actually saves — matching the 2026-08-27 public-API result above almost exactly (large isolated
+    win, negligible-to-small end-to-end win). The proposed target shape: decode directly off Reactor
+    Netty's `ByteBuf`/`Flux<ByteBuffer>` via a genuinely non-blocking streaming parser, with no
+    blocking-`InputStream` adaptation and no dedicated decode-scheduler thread hop, so `NATIVE`
+    becomes an actually different execution model, not just a different reader plugged into the same
+    pipeline. This is a materially bigger undertaking than anything done in this investigation so
+    far — it means redesigning `RowBinaryDecoder`'s execution model (cancellation, backpressure, and
+    the virtual-thread decoder option were all built around today's blocking-pull-on-a-worker-thread
+    shape), not adding another `RowBinaryReader` implementation. The completed isolation benchmark
+    below measured the scheduler boundary at ~51us mean for a one-row response, but that is only
+    ~2.4% of the full ~2.17ms R2DBC request. That evidence is not strong enough to justify this
+    redesign's cancellation, backpressure, fragmentation, buffer-ownership, and event-loop-fairness
+    risk. Keep this as a possible separate future project only if a real workload or new profile
+    demonstrates a materially larger benefit; do not start it as a continuation of PR #99.
+    **Refined execution order (2026-08-27, updated 2026-08-27 after the trusted-clean run below):**
+    (1) **done** — added a `trusted-clean` JMH profile (3 forks/5 warmup/5 measurement, no JFR/GC
+    profiler — the current `trusted` profile's JFR overhead is itself a confound for a
+    latency-sensitive point-query comparison) alongside the existing `trusted` (commit `8c64d73`);
+    `scripts/benchmarks/analyze.py` was *not* extended to chart `thisDriverNative` as originally
+    planned (still only recognizes `thisDriver`/`clientV2` — see
+    `PublicApiMatchedPoolThroughputBenchmark`'s own Javadoc) — the trusted-clean result below was
+    instead computed by hand from the raw `TRUE MERGED` log lines, which was cheap enough for one run
+    that fixing the script wasn't worth blocking on; (2) **done, "stop here" condition not met** — see
+    the "Trusted-clean public-API result" entry below: `NATIVE` is not clearly ahead end to end,
+    still effectively tied with `CLICKHOUSE`; (3) **done — trusted-clean pipeline isolation** —
+    `PointQueryPipelineIsolationBenchmark`, GitHub Actions run `33099710434`, 3 forks/5 warmup/5
+    measurement, no profiler, one pinned ClickHouse, `poolSize=8`. Full result:
+
+    | Variant | Mean (us) | p50 (us) | p90 (us) | p95 (us) | p99 (us) |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | `clientV2RawResponse` | 2081.411 | 2052.096 | 2260.992 | 2445.312 | 2830.336 |
+    | `ourTransportRawResponse` | 2075.412 | 2054.144 | 2199.552 | 2400.256 | 2715.648 |
+    | `nativeDecodeRaw` | 1.406 | 1.274 | 1.380 | 1.506 | 2.292 |
+    | `nativeDecodeScheduled` | 52.850 | 49.600 | 64.384 | 68.096 | 77.440 |
+    | `clickHouseDecodeScheduled` | 54.839 | 51.648 | 65.536 | 70.016 | 80.768 |
+    | `fullR2dbcNative` | 2168.968 | 2146.304 | 2297.856 | 2457.600 | 2838.528 |
+
+    The raw transport means differ by only ~6us (~0.3%) and p50 by ~2us, with our transport
+    nominally ahead on mean/p90/p95/p99: no transport deficit is present before decoding. The actual
+    one-row native reader costs ~1.4us; scheduling the same captured bytes costs ~52.9us, isolating a
+    real ~51.4us fixed scheduler/orchestration boundary. `CLICKHOUSE` vs `NATIVE` at this row shape
+    differs by only ~2us once both use that same boundary. `fullR2dbcNative` is ~87.6us above
+    `clientV2RawResponse`, but those variants deliberately perform different work, so the benchmark
+    is not an additive model and that remainder must not be labeled SPI overhead by subtraction.
+    The scheduler boundary is nevertheless only ~2.4% of the full ~2.17ms request. **Final PR #99
+    decision: merge the diagnostic benchmark and documentation, make no production change, keep
+    `NATIVE` opt-in, and stop this optimization line.** Do not remove `RowDecodingScheduler` or move
+    the current InputStream-backed reader onto the Netty event loop. A direct incremental
+    `ByteBuffer` parser remains a separate future project requiring new workload evidence, not the
+    next step from this result.
 - **Benchmark-only teardown leak, found and fixed 2026-08-24** (broader than the doc's own single-class
   claim): all 9 "manual pipeline" benchmark classes (`AggregationBenchmark`,
   `BoundedPoolConcurrencyBenchmark`, `ConcurrencyBenchmark`, `MatchedPoolThreadsConcurrencyBenchmark`,

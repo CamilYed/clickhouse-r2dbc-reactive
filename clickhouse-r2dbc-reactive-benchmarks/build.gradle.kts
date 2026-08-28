@@ -94,6 +94,9 @@ jmh {
     if (project.hasProperty("jmh.warmupIterations")) {
         warmupIterations.set((project.property("jmh.warmupIterations") as String).toInt())
     }
+    if (project.hasProperty("jmh.iterations")) {
+        iterations.set((project.property("jmh.iterations") as String).toInt())
+    }
     // -Pjmh.jvmArgsAppend=-Djdk.tracePinnedThreads=full is how VirtualThreadDecoderThroughputBenchmark's
     // trusted CI run catches virtual-thread pinning empirically (see that class's Javadoc and
     // RowDecodingScheduler#virtualThreads's own pinning-risk analysis) - the forked JMH JVM prints a
@@ -102,5 +105,12 @@ jmh {
     // like `profilers` above, in case more than one JVM arg is ever needed at once.
     if (project.hasProperty("jmh.jvmArgsAppend")) {
         jvmArgsAppend.set((project.property("jmh.jvmArgsAppend") as String).split(","))
+    }
+    // Added for the latency-path-isolation A/B/C/D ladder (docs/performance/latency-path-isolation.md):
+    // that plan's "Concurrency" section needs the same class run at -t 1 and -t 8 against one shared
+    // @State(Scope.Benchmark) instance. Wired the same way as jmh.forks/jmh.warmupIterations above -
+    // see this file's own comment on those for why an unwired -P flag is a silent no-op, not an error.
+    if (project.hasProperty("jmh.threads")) {
+        threads.set((project.property("jmh.threads") as String).toInt())
     }
 }

@@ -2,6 +2,7 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
+import io.github.camilyed.clickhouse.r2dbc.core.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.core.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -18,6 +19,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Locale;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,14 +60,29 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   private final ClickHouseHttpTransport transport;
   private final RowDecodingScheduler decodingScheduler;
   private final DriverObservationListener observationListener;
+  private final RowBinaryDecoderMode rowDecoderMode;
 
   ClickHouseConnectionFactory(
       final ClickHouseHttpTransport transport,
       final RowDecodingScheduler decodingScheduler,
       final DriverObservationListener observationListener) {
+    this(transport, decodingScheduler, observationListener, RowBinaryDecoderMode.CLICKHOUSE);
+  }
+
+  /**
+   * {@code rowDecoderMode} is shared, unchanged, with every {@link ClickHouseConnection} this
+   * factory produces — see {@link ClickHouseConnectionFactoryProvider#ROW_DECODER}'s Javadoc for
+   * the full contract.
+   */
+  ClickHouseConnectionFactory(
+      final ClickHouseHttpTransport transport,
+      final RowDecodingScheduler decodingScheduler,
+      final DriverObservationListener observationListener,
+      final RowBinaryDecoderMode rowDecoderMode) {
     this.transport = transport;
     this.decodingScheduler = decodingScheduler;
     this.observationListener = observationListener;
+    this.rowDecoderMode = rowDecoderMode;
   }
 
   /**
@@ -122,6 +140,10 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
    * TransportOptions#responseCompression()} — defaults to {@code true} ({@link
    * ResponseCompression#LZ4}) when not set, matching client-v2's own default; see that option's
    * Javadoc.
+   *
+   * <p>{@link ClickHouseConnectionFactoryProvider#ROW_DECODER} selects the {@link
+   * RowBinaryDecoderMode} every query run over a produced {@link ClickHouseConnection} decodes with
+   * — defaults to {@link RowBinaryDecoderMode#CLICKHOUSE} when not set; see that option's Javadoc.
    *
    * <p>There is deliberately no {@code statementTimeout} option here: that needs to apply per
    * statement, not per factory — see {@code ClickHouseConnection.setStatementTimeout}.
@@ -208,6 +230,9 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
         observationListenerOption(
             options, ClickHouseConnectionFactoryProvider.OBSERVATION_LISTENER);
 
+    final RowBinaryDecoderMode rowDecoderMode =
+        rowDecoderModeOption(options, ClickHouseConnectionFactoryProvider.ROW_DECODER);
+
     final Integer decoderWorkerCountOverride =
         intOption(options, ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT);
 
@@ -230,7 +255,8 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
     return new ClickHouseConnectionFactory(
         new ClickHouseHttpTransport(baseUrl, transportOptions),
         decodingScheduler,
-        observationListener);
+        observationListener,
+        rowDecoderMode);
   }
 
   /**
@@ -311,6 +337,33 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
     }
     throw new IllegalArgumentException(
         option.name() + " must be a DriverObservationListener instance, got: " + raw);
+  }
+
+  /**
+   * Parses {@link ClickHouseConnectionFactoryProvider#ROW_DECODER} case-insensitively against
+   * {@link RowBinaryDecoderMode}'s own constant names, defaulting to {@link
+   * RowBinaryDecoderMode#CLICKHOUSE} when unset — see that option's Javadoc for the full contract.
+   */
+  private static RowBinaryDecoderMode rowDecoderModeOption(
+      final ConnectionFactoryOptions options, final Option<?> option) {
+    final Object raw = options.getValue(option);
+    if (raw == null) {
+      return RowBinaryDecoderMode.CLICKHOUSE;
+    }
+    if (raw instanceof final String text) {
+      try {
+        return RowBinaryDecoderMode.valueOf(text.toUpperCase(Locale.ROOT));
+      } catch (final IllegalArgumentException e) {
+        throw new IllegalArgumentException(
+            option.name()
+                + " must be one of "
+                + Arrays.toString(RowBinaryDecoderMode.values())
+                + " (case-insensitive), got: "
+                + text,
+            e);
+      }
+    }
+    throw new IllegalArgumentException(option.name() + " must be a string, got: " + raw);
   }
 
   // ConnectionFactoryOptions.parse(url) has no way to know a custom (non-R2DBC-well-known)
@@ -397,7 +450,9 @@ public final class ClickHouseConnectionFactory implements ConnectionFactory {
   @Override
   public Mono<ClickHouseConnection> create() {
     return Mono.fromSupplier(
-        () -> new ClickHouseConnection(transport, decodingScheduler, observationListener));
+        () ->
+            new ClickHouseConnection(
+                transport, decodingScheduler, observationListener, rowDecoderMode));
   }
 
   /**
