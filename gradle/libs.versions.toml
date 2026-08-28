@@ -1,7 +1,7 @@
 [versions]
 junit = "6.1.2"
 assertj = "3.27.7"
-reactor = "3.7.9"
+reactor = "3.8.6"
 reactor-netty = "1.2.6"
 r2dbc-spi = "1.0.0.RELEASE"
 r2dbc-pool = "1.0.2.RELEASE"
