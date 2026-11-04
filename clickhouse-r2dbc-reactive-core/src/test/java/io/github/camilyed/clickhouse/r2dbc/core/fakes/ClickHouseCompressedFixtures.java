@@ -1,39 +1,49 @@
 package io.github.camilyed.clickhouse.r2dbc.core.fakes;
 
 import com.clickhouse.data.ClickHouseCityHash;
+import com.github.luben.zstd.Zstd;
 import java.io.ByteArrayOutputStream;
 import java.io.UncheckedIOException;
 import net.jpountz.lz4.LZ4Compressor;
 import net.jpountz.lz4.LZ4Factory;
 
 /**
- * Builds real ClickHouse-wire-format LZ4-compressed byte fixtures for {@code core}'s own
- * decompression tests, using the exact same primitives ({@code ClickHouseCityHash}, {@code
- * LZ4Factory}) the production decoder verifies against — the only way to produce a fixture the
- * decoder should accept without a real ClickHouse server in the loop.
+ * Builds real ClickHouse-wire-format LZ4- and ZSTD-compressed byte fixtures for {@code core}'s own
+ * decompression tests, using the same compression and checksum primitives as the production
+ * decoder.
  *
  * <p>Wire format (one block): 16 bytes CityHash128 checksum, 1 byte magic ({@code 0x82}), 4 bytes
  * little-endian {@code compressedSizeWithHeader} (9 + compressed data length), 4 bytes
- * little-endian {@code uncompressedSize}, then the LZ4-compressed data itself. Verified directly
- * against client-v2 0.9.8's own {@code ClickHouseLZ4OutputStream} — see {@code
- * ClickHouseLz4InputStream}'s Javadoc for the same format from the decode side.
+ * little-endian {@code uncompressedSize}, then data compressed with the method named by the magic
+ * byte. See {@code ClickHouseCompressedInputStream}'s Javadoc for the decode side.
  */
-public final class ClickHouseLz4Fixtures {
+public final class ClickHouseCompressedFixtures {
 
-  private static final byte MAGIC = (byte) 0x82;
+  private static final byte LZ4_MAGIC = (byte) 0x82;
+  private static final byte ZSTD_MAGIC = (byte) 0x90;
   private static final int BLOCK_HEADER_LENGTH = 9;
 
-  private ClickHouseLz4Fixtures() {}
+  private ClickHouseCompressedFixtures() {}
 
   /** {@code uncompressed} framed as a single ClickHouse LZ4 block. */
   public static byte[] compressAsSingleBlock(final byte[] uncompressed) {
     final LZ4Compressor compressor = LZ4Factory.fastestInstance().fastCompressor();
     final byte[] compressed = compressor.compress(uncompressed, 0, uncompressed.length);
+    return frameBlock(LZ4_MAGIC, compressed, uncompressed.length);
+  }
+
+  /** {@code uncompressed} framed as a single ClickHouse ZSTD block. */
+  public static byte[] compressAsSingleZstdBlock(final byte[] uncompressed) {
+    return frameBlock(ZSTD_MAGIC, Zstd.compress(uncompressed), uncompressed.length);
+  }
+
+  private static byte[] frameBlock(
+      final byte magic, final byte[] compressed, final int uncompressedSize) {
     final int compressedSizeWithHeader = BLOCK_HEADER_LENGTH + compressed.length;
     final byte[] block = new byte[compressedSizeWithHeader];
-    block[0] = MAGIC;
+    block[0] = magic;
     writeInt32LE(block, 1, compressedSizeWithHeader);
-    writeInt32LE(block, 5, uncompressed.length);
+    writeInt32LE(block, 5, uncompressedSize);
     System.arraycopy(compressed, 0, block, BLOCK_HEADER_LENGTH, compressed.length);
     final long[] checksum = ClickHouseCityHash.cityHash128(block, 0, compressedSizeWithHeader);
     final byte[] wire = new byte[16 + compressedSizeWithHeader];

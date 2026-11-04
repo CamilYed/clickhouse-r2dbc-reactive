@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import com.clickhouse.data.ClickHouseCityHash;
+import com.github.luben.zstd.Zstd;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -8,42 +9,41 @@ import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.lz4.LZ4FastDecompressor;
 
 /**
- * Decompresses a ClickHouse HTTP response body sent with {@code compress=1} — ClickHouse's own
- * custom LZ4 block framing, not standard HTTP {@code Content-Encoding}. Wraps a raw, still-framed
- * {@code source} and presents the decompressed bytes to whatever reads from this stream instead.
+ * Decompresses a ClickHouse HTTP response body sent with {@code compress=1} — ClickHouse's native
+ * checksummed block framing, not standard HTTP {@code Content-Encoding}. Each block identifies its
+ * own compression method: older servers normally send LZ4 ({@code 0x82}), while ClickHouse 26.9+
+ * normally sends ZSTD ({@code 0x90}).
  *
- * <p>Wire format, verified byte-for-byte against client-v2 0.9.8's own {@code
- * ClickHouseLZ4InputStream}/{@code ClickHouseLZ4OutputStream} (encode and decode sides
- * cross-checked against real source, not assumed): the body is one or more <em>blocks</em>
- * concatenated back to back, each shaped as:
+ * <p>Wire format, verified byte-for-byte against client-v2's compressed block streams: the body is
+ * one or more <em>blocks</em> concatenated back to back, each shaped as:
  *
  * <ul>
  *   <li>bytes 0-15: a CityHash128 checksum of everything from byte 16 onward in this block (two
  *       little-endian {@code int64}s, low half then high half)
- *   <li>byte 16: a magic byte, always {@code 0x82}
+ *   <li>byte 16: the compression method ({@code 0x82} for LZ4 or {@code 0x90} for ZSTD)
  *   <li>bytes 17-20: {@code compressedSizeWithHeader} (little-endian {@code int32}) — {@code 9}
  *       (this "block header": magic + this field + the next field) plus the length of the
- *       LZ4-compressed data that follows
+ *       compressed data that follows
  *   <li>bytes 21-24: {@code uncompressedSize} (little-endian {@code int32}) — the exact
  *       decompressed byte count, required upfront because {@link LZ4FastDecompressor} is
  *       block-based, not a self-delimiting streaming format
- *   <li>then {@code compressedSizeWithHeader - 9} bytes of LZ4-compressed data
+ *   <li>then {@code compressedSizeWithHeader - 9} bytes compressed with the method from byte 16
  * </ul>
  *
- * <p>Reused rather than reimplemented: {@link ClickHouseCityHash} (checksum) and {@link LZ4Factory}
- * (block decompression) are already transitively resolvable via this project's existing {@code
- * client-v2} dependency (see {@code gradle/verification-metadata.xml}), and hand-porting either
- * algorithm from scratch, without a compiler in the loop to catch a transcription bug, would be far
- * riskier than depending on the same primitives client-v2 itself uses for this exact purpose.
+ * <p>Reused rather than reimplemented: {@link ClickHouseCityHash} (checksum), {@link LZ4Factory}
+ * and {@link Zstd} are already transitively resolvable via this project's existing {@code
+ * client-v2} dependency (see {@code gradle/verification-metadata.xml}). Hand-porting any of these
+ * algorithms would be riskier than depending on the same primitives client-v2 uses.
  *
  * <p>Reads the whole next block into memory before serving any of its bytes — simple and correct,
  * at the cost of one extra byte-array allocation per block; each block is bounded (ClickHouse caps
  * how much it buffers before flushing one), so this never holds more than a few tens of kilobytes
  * at a time. See ROADMAP.md's deferred benchmark item if this ever needs to avoid that allocation.
  */
-final class ClickHouseLz4InputStream extends InputStream {
+final class ClickHouseCompressedInputStream extends InputStream {
 
-  private static final byte MAGIC = (byte) 0x82;
+  private static final byte LZ4_MAGIC = (byte) 0x82;
+  private static final byte ZSTD_MAGIC = (byte) 0x90;
   private static final int HEADER_LENGTH = 25;
   private static final int BLOCK_HEADER_LENGTH = 9;
 
@@ -56,7 +56,7 @@ final class ClickHouseLz4InputStream extends InputStream {
   private int position;
   private int limit;
 
-  ClickHouseLz4InputStream(final InputStream source) {
+  ClickHouseCompressedInputStream(final InputStream source) {
     this.source = source;
     this.decompressor = LZ4Factory.fastestInstance().fastDecompressor();
   }
@@ -99,8 +99,9 @@ final class ClickHouseLz4InputStream extends InputStream {
     if (!readFully(headerBuffer, 0, HEADER_LENGTH)) {
       return false;
     }
-    if (headerBuffer[16] != MAGIC) {
-      throw new IOException("Invalid ClickHouse LZ4 block magic byte: " + headerBuffer[16]);
+    final byte compressionMethod = headerBuffer[16];
+    if (compressionMethod != LZ4_MAGIC && compressionMethod != ZSTD_MAGIC) {
+      throw new IOException("Unsupported ClickHouse compression method byte: " + compressionMethod);
     }
     final int compressedSizeWithHeader = readInt32LE(headerBuffer, 17);
     final int uncompressedSize = readInt32LE(headerBuffer, 21);
@@ -109,11 +110,18 @@ final class ClickHouseLz4InputStream extends InputStream {
     System.arraycopy(headerBuffer, 16, block, 0, BLOCK_HEADER_LENGTH);
     if (!readFully(block, BLOCK_HEADER_LENGTH, compressedDataLength)) {
       throw new EOFException(
-          "Truncated ClickHouse LZ4 stream: expected " + compressedDataLength + " more bytes");
+          "Truncated ClickHouse compressed stream: expected "
+              + compressedDataLength
+              + " more bytes");
     }
     verifyChecksum(block, compressedSizeWithHeader);
     final byte[] decompressed = new byte[uncompressedSize];
-    decompressor.decompress(block, BLOCK_HEADER_LENGTH, decompressed, 0, uncompressedSize);
+    if (compressionMethod == LZ4_MAGIC) {
+      decompressor.decompress(block, BLOCK_HEADER_LENGTH, decompressed, 0, uncompressedSize);
+    } else {
+      Zstd.decompressByteArray(
+          decompressed, 0, uncompressedSize, block, BLOCK_HEADER_LENGTH, compressedDataLength);
+    }
     currentBlock = decompressed;
     position = 0;
     limit = uncompressedSize;
@@ -126,7 +134,7 @@ final class ClickHouseLz4InputStream extends InputStream {
     final long expectedLow = readInt64LE(headerBuffer, 0);
     final long expectedHigh = readInt64LE(headerBuffer, 8);
     if (checksum[0] != expectedLow || checksum[1] != expectedHigh) {
-      throw new IOException("Corrupted ClickHouse LZ4 response: block checksum mismatch");
+      throw new IOException("Corrupted ClickHouse compressed response: block checksum mismatch");
     }
   }
 
@@ -148,7 +156,11 @@ final class ClickHouseLz4InputStream extends InputStream {
           return false;
         }
         throw new EOFException(
-            "Truncated ClickHouse LZ4 stream: read " + read + " of " + length + " expected bytes");
+            "Truncated ClickHouse compressed stream: read "
+                + read
+                + " of "
+                + length
+                + " expected bytes");
       }
       read += n;
     }

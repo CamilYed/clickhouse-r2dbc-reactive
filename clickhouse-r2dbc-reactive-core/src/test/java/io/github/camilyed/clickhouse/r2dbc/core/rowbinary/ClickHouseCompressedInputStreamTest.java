@@ -3,7 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 
-import io.github.camilyed.clickhouse.r2dbc.core.fakes.ClickHouseLz4Fixtures;
+import io.github.camilyed.clickhouse.r2dbc.core.fakes.ClickHouseCompressedFixtures;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,17 +11,33 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
-class ClickHouseLz4InputStreamTest {
+class ClickHouseCompressedInputStreamTest {
 
   @Test
   void shouldDecompressASingleBlock() throws IOException {
     // given
     final byte[] original = "hello, clickhouse".getBytes(StandardCharsets.UTF_8);
-    final byte[] wire = ClickHouseLz4Fixtures.compressAsSingleBlock(original);
+    final byte[] wire = ClickHouseCompressedFixtures.compressAsSingleBlock(original);
 
     // when
     final byte[] decompressed;
-    try (InputStream stream = new ClickHouseLz4InputStream(new ByteArrayInputStream(wire))) {
+    try (InputStream stream = new ClickHouseCompressedInputStream(new ByteArrayInputStream(wire))) {
+      decompressed = stream.readAllBytes();
+    }
+
+    // then
+    assertThat(decompressed).isEqualTo(original);
+  }
+
+  @Test
+  void shouldDecompressAZstdBlockProducedByNewClickHouseServers() throws IOException {
+    // given
+    final byte[] original = "hello from clickhouse 26.9".getBytes(StandardCharsets.UTF_8);
+    final byte[] wire = ClickHouseCompressedFixtures.compressAsSingleZstdBlock(original);
+
+    // when
+    final byte[] decompressed;
+    try (InputStream stream = new ClickHouseCompressedInputStream(new ByteArrayInputStream(wire))) {
       decompressed = stream.readAllBytes();
     }
 
@@ -32,11 +48,11 @@ class ClickHouseLz4InputStreamTest {
   @Test
   void shouldDecompressAnEmptyBlock() throws IOException {
     // given
-    final byte[] wire = ClickHouseLz4Fixtures.compressAsSingleBlock(new byte[0]);
+    final byte[] wire = ClickHouseCompressedFixtures.compressAsSingleBlock(new byte[0]);
 
     // when
     final byte[] decompressed;
-    try (InputStream stream = new ClickHouseLz4InputStream(new ByteArrayInputStream(wire))) {
+    try (InputStream stream = new ClickHouseCompressedInputStream(new ByteArrayInputStream(wire))) {
       decompressed = stream.readAllBytes();
     }
 
@@ -48,11 +64,11 @@ class ClickHouseLz4InputStreamTest {
   void shouldDecompressMultipleBlocksConcatenatedInOneStream() throws IOException {
     // given
     final byte[] original = "x".repeat(200_000).getBytes(StandardCharsets.UTF_8);
-    final byte[] wire = ClickHouseLz4Fixtures.compressAsBlocksOf(original, 64 * 1024);
+    final byte[] wire = ClickHouseCompressedFixtures.compressAsBlocksOf(original, 64 * 1024);
 
     // when
     final byte[] decompressed;
-    try (InputStream stream = new ClickHouseLz4InputStream(new ByteArrayInputStream(wire))) {
+    try (InputStream stream = new ClickHouseCompressedInputStream(new ByteArrayInputStream(wire))) {
       decompressed = stream.readAllBytes();
     }
 
@@ -63,13 +79,13 @@ class ClickHouseLz4InputStreamTest {
   @Test
   void shouldReadOneByteAtATimeViaTheSingleByteReadOverload() throws IOException {
     // given
-    final byte[] wire = ClickHouseLz4Fixtures.compressAsSingleBlock(new byte[] {'h', 'i'});
+    final byte[] wire = ClickHouseCompressedFixtures.compressAsSingleBlock(new byte[] {'h', 'i'});
 
     // when
     final int first;
     final int second;
     final int end;
-    try (InputStream stream = new ClickHouseLz4InputStream(new ByteArrayInputStream(wire))) {
+    try (InputStream stream = new ClickHouseCompressedInputStream(new ByteArrayInputStream(wire))) {
       first = stream.read();
       second = stream.read();
       end = stream.read();
@@ -82,7 +98,7 @@ class ClickHouseLz4InputStreamTest {
   }
 
   @Test
-  void shouldRejectAStreamNotStartingWithTheLz4MagicByte() {
+  void shouldRejectAnUnsupportedCompressionMethod() {
     // given
     final byte[] garbage = new byte[25];
     Arrays.fill(garbage, (byte) 0x00);
@@ -92,20 +108,21 @@ class ClickHouseLz4InputStreamTest {
         catchThrowable(
             () -> {
               try (InputStream stream =
-                  new ClickHouseLz4InputStream(new ByteArrayInputStream(garbage))) {
+                  new ClickHouseCompressedInputStream(new ByteArrayInputStream(garbage))) {
                 stream.readAllBytes();
               }
             });
 
     // then
-    assertThat(thrown).isInstanceOf(IOException.class).hasMessageContaining("magic");
+    assertThat(thrown).isInstanceOf(IOException.class).hasMessageContaining("compression method");
   }
 
   @Test
   void shouldRejectATruncatedBlock() {
     // given
     final byte[] wire =
-        ClickHouseLz4Fixtures.compressAsSingleBlock("hello".getBytes(StandardCharsets.UTF_8));
+        ClickHouseCompressedFixtures.compressAsSingleBlock(
+            "hello".getBytes(StandardCharsets.UTF_8));
     final byte[] truncated = Arrays.copyOf(wire, wire.length - 1);
 
     // when
@@ -113,7 +130,7 @@ class ClickHouseLz4InputStreamTest {
         catchThrowable(
             () -> {
               try (InputStream stream =
-                  new ClickHouseLz4InputStream(new ByteArrayInputStream(truncated))) {
+                  new ClickHouseCompressedInputStream(new ByteArrayInputStream(truncated))) {
                 stream.readAllBytes();
               }
             });
@@ -126,7 +143,8 @@ class ClickHouseLz4InputStreamTest {
   void shouldRejectACorruptedChecksum() {
     // given
     final byte[] wire =
-        ClickHouseLz4Fixtures.compressAsSingleBlock("hello".getBytes(StandardCharsets.UTF_8));
+        ClickHouseCompressedFixtures.compressAsSingleBlock(
+            "hello".getBytes(StandardCharsets.UTF_8));
     wire[0] ^= 0x01; // flip a bit inside the checksum
 
     // when
@@ -134,7 +152,7 @@ class ClickHouseLz4InputStreamTest {
         catchThrowable(
             () -> {
               try (InputStream stream =
-                  new ClickHouseLz4InputStream(new ByteArrayInputStream(wire))) {
+                  new ClickHouseCompressedInputStream(new ByteArrayInputStream(wire))) {
                 stream.readAllBytes();
               }
             });

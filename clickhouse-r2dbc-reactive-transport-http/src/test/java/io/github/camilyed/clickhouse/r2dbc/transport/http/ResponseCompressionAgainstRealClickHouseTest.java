@@ -14,20 +14,20 @@ import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
 /**
- * Proves this driver's LZ4 response decompression against a real ClickHouse server, not just the
- * hand-built fixtures {@code ClickHouseLz4InputStreamTest} uses — the one place a genuine encoding
- * bug (wrong checksum byte order, wrong block-header offset, and similar) would actually surface,
- * since {@code core}'s own fixture builder shares the same primitives the decoder verifies against
- * and so cannot catch a mismatch between this driver's understanding of the wire format and
+ * Proves this driver's native response decompression against a real ClickHouse server, not just the
+ * hand-built fixtures {@code ClickHouseCompressedInputStreamTest} uses — the one place a genuine
+ * encoding bug (wrong checksum byte order, wrong block-header offset, and similar) would actually
+ * surface, since {@code core}'s own fixture builder shares the same primitives the decoder verifies
+ * against and so cannot catch a mismatch between this driver's understanding of the wire format and
  * ClickHouse's own.
  *
  * <p>Queries {@code system.numbers} for 100,000 rows specifically because a single row is far too
- * small to span more than one LZ4 block — {@code compressAsSingleBlock}-shaped hermetic tests
- * already cover that trivial case (see {@link SelectOneAgainstRealClickHouseTest}). 100,000 {@code
- * UInt64} rows is several hundred KB of {@code RowBinaryWithNamesAndTypes} wire data, comfortably
- * exceeding client-v2's own {@code ClickHouseLZ4OutputStream.UNCOMPRESSED_BUFF_SIZE} (64KB) —
- * ClickHouse's server-side compressor is the same shape, so this genuinely proves the multi-block
- * path this driver's {@code ClickHouseLz4InputStream} implements, not just a single block.
+ * small to span more than one compressed block — {@code compressAsSingleBlock}-shaped hermetic
+ * tests already cover that trivial case (see {@link SelectOneAgainstRealClickHouseTest}). 100,000
+ * {@code UInt64} rows is several hundred KB of {@code RowBinaryWithNamesAndTypes} wire data,
+ * comfortably exceeding the server compressor's block size, so this genuinely proves the
+ * multi-block path this driver's {@code ClickHouseCompressedInputStream} implements, not just one
+ * codec in one block.
  */
 class ResponseCompressionAgainstRealClickHouseTest extends BaseClickHouseIntegrationTest {
 
@@ -36,7 +36,7 @@ class ResponseCompressionAgainstRealClickHouseTest extends BaseClickHouseIntegra
   @Test
   void shouldDecodeALargeMultiBlockCompressedResponse() {
     // given - TransportOptions.defaults() sends compress=1 (ResponseCompression.LZ4 is this
-    // driver's default), so this transport genuinely receives an LZ4-compressed response body.
+    // driver's default), so this transport genuinely receives a server-compressed response body.
     final ClickHouseHttpTransport transport =
         new ClickHouseHttpTransport(
             clickHouseHttpUrl(), clickHouseUsername(), clickHousePassword());

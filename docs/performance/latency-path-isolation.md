@@ -298,7 +298,7 @@ reason, not because it doesn't work. `ZeroCopyByteBufInputStreamBridge`/
   question; comparing this class's numbers against Variant A's separately-run class would not — two
   independent JMH invocations carry run-to-run noise Variant A's own retracted tail-latency finding
   already showed is real.
-- **Response compression forced to `NONE`, not the production `LZ4` default.** `core.rowbinary.ClickHouseLz4InputStream`
+- **Response compression forced to `NONE`, not the production `LZ4` default.** `core.rowbinary.ClickHouseCompressedInputStream`
   (the LZ4 unwrapper) is package-private in `core`; reusing it from the benchmarks module would mean
   widening core's visibility purely for a benchmark, which this pass's "no production code changes"
   scope rules out. Decompression is itself a copy — a separate question from the one this variant
@@ -340,7 +340,7 @@ caffeinate -d -i ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
 last remaining hypothesis after GC, the `asByteArray()` copy (Variant B), and fixed
 query/statement construction cost (task #309) were each ruled out. Same self-contained-pair shape
 as `LatencyPathVariantBBenchmark`: one class, same transport instance, same client-v2 reader,
-`ResponseCompression.NONE` (same package-private-`ClickHouseLz4InputStream` reason as Variant B),
+`ResponseCompression.NONE` (same package-private-`ClickHouseCompressedInputStream` reason as Variant B),
 `POOL_SIZE=8`.
 
 **What differs between the two scenarios** (see class Javadoc for the full reasoning): today,

@@ -1825,7 +1825,7 @@ regression at 1M rows) rather than acted on now:
   overriding the original "measure first" sequencing above.** `core.ResponseCompression` (`NONE`/
   `LZ4`, default `LZ4`) threads through `TransportOptions`/`ClickHouseHttpTransport` (sends
   `compress=1`) and `RowBinaryDecoder` (wraps the response body in the new
-  `core.rowbinary.ClickHouseLz4InputStream` before decoding, when compressed) — no new Reactor operators or
+  `core.rowbinary.ClickHouseCompressedInputStream` before decoding, when compressed) — no new Reactor operators or
   schedulers, reusing `FluxInputStreamBridge`/`RowDecodingScheduler` unchanged, so streaming,
   bounded memory, backpressure, and cancellation semantics are inherited rather than reimplemented.
   New `responseCompression` R2DBC connection option (default `true`, opt out with

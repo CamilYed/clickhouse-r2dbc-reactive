@@ -657,8 +657,8 @@ public final class ClickHouseHttpTransport {
    * in its non-standard-HTTP-compression mode (verified against client-v2 0.9.8's real source, not
    * assumed): a plain ClickHouse query parameter, not a standard HTTP {@code Accept-Encoding}
    * header, is what actually turns on ClickHouse's own custom LZ4 response framing (see {@code
-   * core.rowbinary.ClickHouseLz4InputStream}'s Javadoc for the wire format this then requires the
-   * decode side to unwrap).
+   * core.rowbinary.ClickHouseCompressedInputStream}'s Javadoc for the wire format this then
+   * requires the decode side to unwrap).
    */
   private String compressionQueryString() {
     return responseCompression == ResponseCompression.LZ4 ? "&compress=1" : "";
