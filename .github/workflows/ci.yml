@@ -53,4 +53,4 @@ jobs:
 
       - name: Run SonarCloud analysis
         if: env.SONAR_TOKEN != ''
-        run: ./gradlew sonar --info
+        run: ./gradlew sonar --info -Dsonar.scanner.skipJreProvisioning=true
