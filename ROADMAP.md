@@ -41,9 +41,8 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   transport; they do
   mean that historical client-v2 benchmark numbers remain tied to the version recorded with each
   run and must not be relabelled as 0.11.0 results without a fresh measurement. Still open: Phase 8
-  P2 doc/policy items (TLS scope, minimum
-  ClickHouse version, multi-host contract, compound statements), a current-`main` demo integration
-  lane alongside the published-release lane, and a public vendor extension for per-statement
+  P2 doc/policy items (TLS scope, minimum ClickHouse version, multi-host contract, compound
+  statements), and a public vendor extension for per-statement
   ClickHouse settings. Full detail:
   [roadmap-archive.md's Phase 8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
