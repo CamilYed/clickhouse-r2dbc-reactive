@@ -256,7 +256,7 @@ public record TransportOptions(
   }
 
   /**
-   * Whether ClickHouse should compress the response body with its own custom LZ4 block framing
+   * Whether ClickHouse should compress the response body with its native checksummed block framing
    * ({@link ResponseCompression#LZ4}, sent as the {@code compress=1} query parameter — see {@link
    * ClickHouseHttpTransport}) or send it uncompressed ({@link ResponseCompression#NONE}). {@link
    * ResponseCompression#LZ4} is this transport's default (see {@link #defaults()}) — pass {@link

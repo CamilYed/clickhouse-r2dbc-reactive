@@ -46,7 +46,7 @@ import reactor.netty.ByteBufFlux;
  * answered.
  *
  * <p>Same self-contained-pair shape as Variant B/C: one class, same transport instance, {@link
- * ResponseCompression#NONE} (same package-private-{@code ClickHouseLz4InputStream} reason as
+ * ResponseCompression#NONE} (same package-private-{@code ClickHouseCompressedInputStream} reason as
  * those), {@code POOL_SIZE=8}. Scenarios: {@code SELECT 1} (single {@code UInt8} column) and the
  * same point lookup ({@code label String}, {@code amount Decimal(18,4)}) Variant B/C use.
  *

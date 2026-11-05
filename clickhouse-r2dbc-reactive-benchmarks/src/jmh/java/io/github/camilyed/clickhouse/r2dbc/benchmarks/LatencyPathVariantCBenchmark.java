@@ -55,8 +55,8 @@ import reactor.core.scheduler.Schedulers;
  *
  * <p><b>Scenarios</b> (mirrors {@link LatencyPathVariantBBenchmark}'s self-contained-pair shape —
  * same transport instance, same client-v2 reader, same {@link ResponseCompression#NONE}
- * simplification for the same package-private-{@code ClickHouseLz4InputStream} reason documented
- * there):
+ * simplification for the same package-private-{@code ClickHouseCompressedInputStream} reason
+ * documented there):
  *
  * <ul>
  *   <li>{@link #currentOrderingSelect1}/{@link #currentOrderingPoint} — today's production

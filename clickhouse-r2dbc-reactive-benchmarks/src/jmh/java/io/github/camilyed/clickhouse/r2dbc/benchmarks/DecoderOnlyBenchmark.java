@@ -148,9 +148,9 @@ public class DecoderOnlyBenchmark {
    *
    * <p>Deliberately at {@link ResponseCompression#NONE}, matching every other method in this class
    * — compression happens one layer below reader selection ({@link
-   * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.ClickHouseLz4InputStream} wraps the stream
-   * before either reader ever sees it), so it is orthogonal to this comparison and would only add
-   * decompression noise on top of the one variable being isolated here. A full-pipeline,
+   * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.ClickHouseCompressedInputStream} wraps the
+   * stream before either reader ever sees it), so it is orthogonal to this comparison and would
+   * only add decompression noise on top of the one variable being isolated here. A full-pipeline,
    * production-realistic ({@code LZ4}, real network, both {@link RowBinaryDecoderMode}s) comparison
    * belongs in a {@code LatencyPathVariantABenchmark}-style class instead — not yet built, tracked
    * as a follow-up.

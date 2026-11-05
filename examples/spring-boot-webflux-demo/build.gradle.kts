@@ -40,11 +40,9 @@ dependencies {
     // Deliberately the *published* Maven Central coordinate, not project(":clickhouse-r2dbc-reactive-connector"):
     // this demo exists to show exactly what an external consumer's build file looks like, so it
     // depends on the driver the same way they would. Trade-off, stated plainly: this module no
-    // longer catches a regression in core/transport-http/connector on every root build - it now
-    // proves "the last published release still works end to end", not "today's local change
-    // works end to end". The whole-driver black-box proof for local changes still lives in
-    // connector's own real-ClickHouse tests (see ROADMAP.md's module map). Bump this version
-    // alongside every release.
+    // keeps the runnable demo representative of the last published release. The test runtime below
+    // substitutes the current connector project so the root build also catches integration
+    // regressions before the next release. Bump this version alongside every release.
     runtimeOnly("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.2")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
@@ -67,6 +65,17 @@ dependencies {
     testImplementation(platform(libs.testcontainers.bom))
     testImplementation(libs.testcontainers.junit.jupiter)
     testImplementation(libs.testcontainers.clickhouse)
+}
+
+configurations.named("testRuntimeClasspath") {
+    resolutionStrategy.dependencySubstitution {
+        substitute(module("io.github.camilyed:clickhouse-r2dbc-reactive-connector"))
+            .using(project(":clickhouse-r2dbc-reactive-connector"))
+            .because(
+                "repository tests must validate the current driver while the runnable demo " +
+                    "continues to model a Maven Central consumer",
+            )
+    }
 }
 
 tasks.named("bootJar") {

@@ -34,7 +34,7 @@ Javadoc for how all four relate.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `responseCompression` | `true` | Ask ClickHouse to compress response bodies with its own custom LZ4 block framing (`compress=1`, not standard HTTP `Content-Encoding`) and transparently decompress them. Matches client-v2's own default (`COMPRESS_SERVER_RESPONSE=true`); set to `false` to send/receive uncompressed. See [`ResponseCompression`](../../clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ResponseCompression.java)'s Javadoc for the wire format |
+| `responseCompression` | `true` | Ask ClickHouse to use its native checksummed response-compression blocks (`compress=1`, not standard HTTP `Content-Encoding`) and transparently decompress LZ4 blocks from older servers or ZSTD blocks from ClickHouse 26.9+. Matches client-v2's own default (`COMPRESS_SERVER_RESPONSE=true`); set to `false` to send/receive uncompressed. See [`ResponseCompression`](../../clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ResponseCompression.java)'s Javadoc for the wire format |
 | `retryMaxAttempts` | `3` | Retries for failures before any request bytes reached the server — see [`RetryPolicy`](../../clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java) for exactly what qualifies |
 | `retryDelay` | `50ms` | Fixed delay between retry attempts |
 

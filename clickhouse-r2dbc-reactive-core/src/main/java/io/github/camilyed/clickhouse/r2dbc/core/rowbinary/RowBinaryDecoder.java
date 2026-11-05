@@ -103,9 +103,9 @@ public final class RowBinaryDecoder {
    * that path goes through {@link #decode}, not this method, specifically to get {@link
    * RowDecodingScheduler}'s off-event-loop guarantee.
    *
-   * <p>{@code compression} says whether {@code source}'s bytes are still ClickHouse's own LZ4 block
-   * framing (see {@link ClickHouseLz4InputStream}) or already plain — see {@link
-   * ResponseCompression}'s Javadoc.
+   * <p>{@code compression} says whether {@code source}'s bytes are still ClickHouse's native
+   * compressed block framing (see {@link ClickHouseCompressedInputStream}) or already plain — see
+   * {@link ResponseCompression}'s Javadoc.
    *
    * <p>Decodes via {@link RowBinaryDecoderMode#CLICKHOUSE} — see the {@link #decodeRows(Flux,
    * ResponseCompression, RowBinaryDecoderMode)} overload to choose explicitly.
@@ -144,9 +144,9 @@ public final class RowBinaryDecoder {
    * that originally subscribed. See {@link RowDecodingScheduler}'s Javadoc for who owns {@code
    * scheduler} and disposes it.
    *
-   * <p>{@code compression} says whether {@code source}'s bytes are still ClickHouse's own LZ4 block
-   * framing (see {@link ClickHouseLz4InputStream}) or already plain — see {@link
-   * ResponseCompression}'s Javadoc.
+   * <p>{@code compression} says whether {@code source}'s bytes are still ClickHouse's native
+   * compressed block framing (see {@link ClickHouseCompressedInputStream}) or already plain — see
+   * {@link ResponseCompression}'s Javadoc.
    *
    * <p>Decodes via {@link RowBinaryDecoderMode#CLICKHOUSE} — see the {@link #decode(Flux,
    * RowDecodingScheduler, ResponseCompression, RowBinaryDecoderMode)} overload to choose
@@ -193,7 +193,7 @@ public final class RowBinaryDecoder {
       final RowBinaryDecoderMode mode) {
     final InputStream body = FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND);
     final InputStream decompressed =
-        compression == ResponseCompression.LZ4 ? new ClickHouseLz4InputStream(body) : body;
+        compression == ResponseCompression.LZ4 ? new ClickHouseCompressedInputStream(body) : body;
     return mode == RowBinaryDecoderMode.NATIVE
         ? newNativeOrFallbackReader(decompressed)
         : newClickHouseReader(decompressed);

@@ -12,6 +12,13 @@ was given and fails before building or publishing if it can't find one. See
 
 ## [Unreleased]
 
+### Fixed
+
+- **Response compression now works across the ClickHouse 26.9 codec transition.** The native
+  `compress=1` block reader selects LZ4 (`0x82`) or ZSTD (`0x90`) from every block's method byte,
+  preserving compatibility with older servers while accepting the new ZSTD default. The stream
+  remains bounded to one compressed and one decompressed block at a time.
+
 ## [0.2.2] — 2026-08-28
 
 ### Added
@@ -29,7 +36,7 @@ was given and fails before building or publishing if it can't find one. See
   matching client-v2's own default of `COMPRESS_SERVER_RESPONSE=true`. New `core.ResponseCompression`
   (`NONE`/`LZ4`) threads the setting through `TransportOptions`/`ClickHouseHttpTransport` (which
   query parameter to send) and `RowBinaryDecoder` (whether to unwrap the response body through the
-  new `core.rowbinary.ClickHouseLz4InputStream` before decoding) — zero new Reactor operators or schedulers,
+  new `core.rowbinary.ClickHouseCompressedInputStream` before decoding) — zero new Reactor operators or schedulers,
   the existing `FluxInputStreamBridge`/`RowDecodingScheduler` machinery handles it unchanged. New
   R2DBC connection option `responseCompression` (default `true`), e.g.
   `r2dbc:clickhouse://host?responseCompression=false` to opt out. `ClickHouseCityHash`/`LZ4Factory`

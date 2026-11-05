@@ -18,8 +18,8 @@ import reactor.core.publisher.Flux;
  *
  * <p>Also the simplest real-server proof that response compression round-trips correctly: {@code
  * transport}'s {@link TransportOptions#defaults()} sends {@code compress=1} by default (see {@link
- * ResponseCompression#LZ4}), so this decodes a genuinely LZ4-compressed response — not a hand-built
- * fixture — through {@code core}'s {@code ClickHouseLz4InputStream}.
+ * ResponseCompression#LZ4}), so this decodes a genuinely server-compressed response — not a
+ * hand-built fixture — through {@code core}'s {@code ClickHouseCompressedInputStream}.
  */
 class SelectOneAgainstRealClickHouseTest extends BaseClickHouseIntegrationTest {
 

@@ -32,9 +32,17 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   `Decimal128`/`Decimal256` (the `BigInteger`-backed wide tiers) had no test coverage at all.
   Closed with `shouldDecodeLargeDecimalTypes` in `RealWorldTableAgainstRealClickHouseTest`. Only the
   `benchmarks` module's `Client.Builder` baseline setup and 503-retry comparison need a look after
-  this bump — flagged, not yet done. Still open: Phase 8 P2 doc/policy items (TLS scope, minimum
-  ClickHouse version, multi-host contract, compound statements), a current-`main` demo integration
-  lane alongside the published-release lane, and a public vendor extension for per-statement
+  this bump — flagged, not yet done. **client-v2 bumped 0.10.0 → 0.11.0** (2026-11-04): the full
+  build, real-ClickHouse integration suite, cancellation and ByteBuf leak tests, and JMH compilation
+  pass. That validation also caught ClickHouse 26.9's new ZSTD default for native `compress=1`
+  response blocks: the driver's block reader now dispatches on the wire method byte, retaining LZ4
+  compatibility with older servers while decoding ZSTD from 26.9+. The release's socket-buffer and
+  server-error-159 retry changes affect client-v2's own HTTP client, not this driver's Reactor Netty
+  transport; they do
+  mean that historical client-v2 benchmark numbers remain tied to the version recorded with each
+  run and must not be relabelled as 0.11.0 results without a fresh measurement. Still open: Phase 8
+  P2 doc/policy items (TLS scope, minimum ClickHouse version, multi-host contract, compound
+  statements), and a public vendor extension for per-statement
   ClickHouse settings. Full detail:
   [roadmap-archive.md's Phase 8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
