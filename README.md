@@ -179,6 +179,21 @@ the bound value, this driver does not reinterpret or validate it. `String`, nume
 [`ClickHouseQuery.withParameters`](clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ClickHouseQuery.java)'s
 Javadoc for exactly how each parameter type is encoded.
 
+ClickHouse server settings that are specific to one statement are available through the driver's
+small vendor extension:
+
+```java
+import io.github.camilyed.clickhouse.r2dbc.connector.ClickHouseStatement;
+
+ClickHouseStatement statement =
+    (ClickHouseStatement) connection.createStatement("SELECT * FROM events");
+statement.setClickHouseSetting("max_threads", "2");
+```
+
+The standard R2DBC `Statement` API has no generic server-settings method. See the
+[configuration reference](docs/reference/configuration.md#per-statement-clickhouse-settings) for
+the precedence and reserved-parameter rules.
+
 ### Using DatabaseClient (Spring)
 
 Spring's own `DatabaseClient` works too, once wired past one auto-configuration gap Spring has for
@@ -215,6 +230,7 @@ site at [camilyed.github.io/clickhouse-r2dbc-reactive](https://camilyed.github.i
 | Topic | Where |
 | --- | --- |
 | Every connection option | [docs/reference/configuration.md](docs/reference/configuration.md) |
+| Verified ClickHouse type support | [docs/reference/type-support.md](docs/reference/type-support.md) |
 | Known limitations, honestly triaged | [docs/reference/known-limitations.md](docs/reference/known-limitations.md) |
 | What "fully reactive" means, and how it's verified | [docs/concepts/fully-reactive.md](docs/concepts/fully-reactive.md) |
 | Connection pooling (this driver's own, and the optional `io.r2dbc.pool` layer) | [docs/operations/connection-pooling.md](docs/operations/connection-pooling.md) |

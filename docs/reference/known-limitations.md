@@ -62,13 +62,18 @@ cancelled) still exists, just far less often than before this was implemented â€
 > terminates with an error. This driver guarantees the query never silently completes as if the
 > result were whole, and that genuine rows already emitted are never retroactively dropped or
 > reordered â€” but it cannot guarantee every emitted row is genuine. If your application cannot
-> tolerate that risk and uses the core API directly, set ClickHouse's own `wait_end_of_query=1`
-> setting via
+> tolerate that risk, set ClickHouse's own `wait_end_of_query=1`. Through R2DBC, use the public
+> statement extension:
+>
+> ```java
+> ((ClickHouseStatement) connection.createStatement(sql))
+>     .setClickHouseSetting("wait_end_of_query", "1");
+> ```
+>
+> Core API users can set the same value via
 > [`ClickHouseQuery.withSettings(Map.of("wait_end_of_query", "1"))`](../../clickhouse-r2dbc-reactive-core/src/main/java/io/github/camilyed/clickhouse/r2dbc/core/ClickHouseQuery.java),
 > which trades incremental streaming for having ClickHouse buffer the whole response server-side and
-> only ever send a clean error. This arbitrary-setting hook is not currently exposed through the
-> R2DBC `Statement` API; R2DBC users need a future vendor extension before they can select this
-> mitigation without dropping to the core API. See
+> only ever send a clean error. See
 > [`MidStreamQueryFailureAgainstRealClickHouseTest`](../../clickhouse-r2dbc-reactive-connector/src/test/java/io/github/camilyed/clickhouse/r2dbc/connector/MidStreamQueryFailureAgainstRealClickHouseTest.java)
 > for the regression tests proving both behaviors.
 
@@ -85,9 +90,19 @@ cancelled) still exists, just far less often than before this was implemented â€
 > non-idempotent statement twice. The core API has a narrower per-query opt-in for retryable server
 > errors before any response bytes are emitted (`ClickHouseQuery.withServerErrorRetryEnabled()`),
 > but that opt-in is not yet exposed through R2DBC `Statement`. Set `retryMaxAttempts=0` to disable
-> retrying entirely. See
+> retrying entirely. As of client-v2 0.11.0, error 159 (`TIMEOUT_EXCEEDED`) is not classified as
+> retryable by that core opt-in either; repeating a query with the same execution limit normally
+> fails for the same reason, while retrying an insert can duplicate rows. See
 > [`RetryPolicy`](../../clickhouse-r2dbc-reactive-transport-http/src/main/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RetryPolicy.java)'s
 > Javadoc for the full reasoning.
+
+> [!NOTE]
+> **Normal R2DBC statements own their response format.** The driver always requests
+> `RowBinaryWithNamesAndTypes` with `X-ClickHouse-Format` because the decoder requires that schema
+> header. Do not add a SQL `FORMAT` clause to a normal `Statement`: before ClickHouse 26.8 the SQL
+> clause won, while 26.8+ gives the request header priority, so the combination is not portable.
+> Use `ClickHouseConnection.insertStreaming(...)` when an `INSERT` intentionally supplies an
+> explicit input format and a streamed body.
 
 > [!NOTE]
 > **`ssl=true` supports a custom trust store via `sslRootCert`, for self-signed/internal-CA

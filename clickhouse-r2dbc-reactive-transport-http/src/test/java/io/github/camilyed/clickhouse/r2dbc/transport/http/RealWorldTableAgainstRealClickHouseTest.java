@@ -25,8 +25,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Every test uses the production client-v2-backed decoding path through {@link
  * RealClickHouseQueryAbility#queryRows(String)}. Together they prove that the one supported reader
- * handles the driver's complete real-server type matrix without leaking client-v2 internal value
- * classes through the public row API.
+ * handles the driver's verified real-server type matrix without leaking client-v2 internal value
+ * classes through the public row API. Types listed below as untested are not part of that claim.
  *
  * <p>Extends {@link BaseClickHouseIntegrationTest}: the ClickHouse container is shared across every
  * test class that extends it (started once per JVM), and every table created by a test method here
@@ -43,12 +43,9 @@ import org.junit.jupiter.api.Test;
  *   <li><b>String</b> — covered ({@link #shouldDecodeStringTypes()}): {@code String}, {@code
  *       FixedString}.
  *   <li><b>Date and time</b> — partially covered ({@link #shouldDecodeDateAndTimeTypes()}): {@code
- *       Date}/{@code Date32} (decode as {@link java.time.LocalDate} as of client-v2 0.9.8 — see the
- *       version catalog and that test's own comment) and {@code DateTime}/{@code DateTime64}
- *       (decode as {@link java.time.ZonedDateTime}). {@code Time}/{@code Time64} gained a real case
- *       in client-v2's {@code BinaryStreamReader} {@code readValue} switch as of 0.9.8 (absent at
- *       0.9.0, where a column of that type would throw {@code IllegalArgumentException("Unsupported
- *       data type")}) but are still untested here — now a genuine test gap, not a version gap.
+ *       Date}/{@code Date32} (decode as {@link java.time.LocalDate}) and {@code DateTime}/{@code
+ *       DateTime64} (decode as {@link java.time.ZonedDateTime}). {@code Time}/{@code Time64} are
+ *       still untested here — a genuine driver test gap, not a claim inferred from the dependency.
  *   <li><b>Network</b> — covered ({@link #shouldDecodeNetworkTypes()}): {@code IPv4}, {@code IPv6}.
  *   <li><b>Composite</b> ({@code Array}/{@code Tuple}/{@code Map}/{@code Nested}) — {@code Map},
  *       {@code Tuple}, and {@code Array} covered ({@link #shouldDecodeMapType()}, {@link
@@ -88,9 +85,10 @@ import org.junit.jupiter.api.Test;
  *       at the driver boundary the same way it already does for {@code Array}/{@code Nested} (see
  *       that class's Javadoc), so a caller can ask for {@code String.class} directly instead of
  *       {@code Object.class} plus a {@code toString()} call. Geo types, vector-search types ({@code
- *       QBit}), and domains not attempted yet (next likely quick win: {@code readGeoPoint()}/{@code
- *       readGeoRing()} etc. also return plain arrays, same shape as {@code Map}/{@code Tuple}
- *       above).
+ *       QBit}), {@code BFloat16}, and domains not attempted yet. client-v2 0.11.0 added support for
+ *       {@code BFloat16}, {@code QBit}, and {@code MultiPoint}, but this driver does not claim them
+ *       until its own real-server tests prove their values survive this reader and the public row
+ *       boundary.
  *   <li><b>Aggregate function</b> ({@code AggregateFunction}/{@code SimpleAggregateFunction}) — not
  *       attempted; these store intermediate aggregation state, not plain literal-insertable values,
  *       so proving them needs a different test shape (insert via an aggregate query, not a

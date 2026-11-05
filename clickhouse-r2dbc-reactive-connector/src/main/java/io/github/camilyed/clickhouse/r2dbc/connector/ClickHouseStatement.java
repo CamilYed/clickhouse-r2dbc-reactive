@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
@@ -54,6 +56,10 @@ import reactor.core.publisher.Mono;
  * #add()}-batched statements into one wire-level {@code INSERT} is explicitly deferred, separately
  * scoped future work.
  *
+ * <p>{@link #setClickHouseSetting(String, String)} is the ClickHouse-specific extension for server
+ * settings that the standard R2DBC {@link Statement} API cannot represent. It is statement-wide:
+ * every binding set executed by this instance receives the same settings.
+ *
  * <p>If {@link ClickHouseConnection#setStatementTimeout} was called on the owning connection before
  * this statement was created, every query this statement runs (each set in a batched {@link #add()}
  * sequence included) carries that limit as ClickHouse's own {@code max_execution_time} server
@@ -72,9 +78,19 @@ import reactor.core.publisher.Mono;
  * mutating bindings while {@link #execute()} is reading them, is undefined behavior this class does
  * not guard against.
  */
-final class ClickHouseStatement implements Statement {
+public final class ClickHouseStatement implements Statement {
 
   private static final String MAX_EXECUTION_TIME_SETTING = "max_execution_time";
+  private static final Pattern CLICKHOUSE_SETTING_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+  private static final Set<String> DRIVER_OWNED_REQUEST_PARAMETERS =
+      Set.of(
+          "query",
+          "query_id",
+          "compress",
+          "format",
+          "default_format",
+          "database",
+          "output_format_binary_write_json_as_string");
 
   private final ClickHouseHttpTransport transport;
   private final String sql;
@@ -83,6 +99,7 @@ final class ClickHouseStatement implements Statement {
   private final @Nullable Duration statementTimeout;
   private final RowDecodingScheduler decodingScheduler;
   private final DriverObservationListener observationListener;
+  private final Map<String, String> clickHouseSettings = new LinkedHashMap<>();
   private Map<String, Object> boundValues = new LinkedHashMap<>();
 
   ClickHouseStatement(
@@ -120,6 +137,43 @@ final class ClickHouseStatement implements Statement {
     this.statementTimeout = statementTimeout;
     this.decodingScheduler = decodingScheduler;
     this.observationListener = observationListener;
+  }
+
+  /**
+   * Adds or replaces one ClickHouse server setting for every execution of this statement.
+   *
+   * <p>The setting is sent as a plain HTTP query parameter, without the {@code param_} prefix used
+   * for bound SQL values. Calling this method again with the same {@code name} replaces the
+   * previous value. A statement-specific {@code max_execution_time} set here takes precedence over
+   * a timeout inherited from {@link ClickHouseConnection#setStatementTimeout}. Request parameters
+   * owned by the driver — query text/id, bound-parameter names, compression, database, and response
+   * format — are reserved and rejected because changing them would break the transport or decoder
+   * contract rather than configure query execution.
+   *
+   * @param name ClickHouse server-setting name
+   * @param value textual setting value accepted by ClickHouse
+   * @return this statement
+   * @throws IllegalArgumentException if either argument is {@code null}, the name is malformed, or
+   *     the name belongs to a request parameter owned by the driver
+   */
+  public ClickHouseStatement setClickHouseSetting(final String name, final String value) {
+    if (name == null || value == null) { // NOSONAR - public API defensive check under @NullMarked
+      throw new IllegalArgumentException("name and value must not be null");
+    }
+    if (!CLICKHOUSE_SETTING_NAME.matcher(name).matches()) {
+      throw new IllegalArgumentException(
+          "ClickHouse setting name must contain only letters, digits, and underscores and must "
+              + "not start with a digit: "
+              + name);
+    }
+    final String normalizedName = name.toLowerCase(Locale.ROOT);
+    if (DRIVER_OWNED_REQUEST_PARAMETERS.contains(normalizedName)
+        || normalizedName.startsWith("param_")) {
+      throw new IllegalArgumentException(
+          "ClickHouse setting name is reserved by the driver: " + name);
+    }
+    clickHouseSettings.put(name, value);
+    return this;
   }
 
   @Override
@@ -203,9 +257,13 @@ final class ClickHouseStatement implements Statement {
 
   private Mono<ClickHouseResult> executeOneBindingSet(final Map<String, Object> parameters) {
     ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(parameters);
+    final Map<String, String> settings = new LinkedHashMap<>();
     if (statementTimeout != null) {
-      query =
-          query.withSettings(Map.of(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout)));
+      settings.put(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout));
+    }
+    settings.putAll(clickHouseSettings);
+    if (!settings.isEmpty()) {
+      query = query.withSettings(Map.copyOf(settings));
     }
     final QueryObservation observation =
         QueryObservation.start(observationListener, query.queryId(), OperationKind.QUERY, sql);
