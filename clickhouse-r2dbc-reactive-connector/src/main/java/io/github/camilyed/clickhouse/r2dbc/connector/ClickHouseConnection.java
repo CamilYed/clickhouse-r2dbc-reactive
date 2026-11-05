@@ -3,7 +3,6 @@ package io.github.camilyed.clickhouse.r2dbc.connector;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
-import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
@@ -59,7 +58,6 @@ public final class ClickHouseConnection implements Connection {
   private final ClickHouseHttpTransport transport;
   private final RowDecodingScheduler decodingScheduler;
   private final DriverObservationListener observationListener;
-  private final RowBinaryDecoderMode rowDecoderMode;
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private @Nullable Duration statementTimeout;
 
@@ -84,23 +82,9 @@ public final class ClickHouseConnection implements Connection {
       final ClickHouseHttpTransport transport,
       final RowDecodingScheduler decodingScheduler,
       final DriverObservationListener observationListener) {
-    this(transport, decodingScheduler, observationListener, RowBinaryDecoderMode.CLICKHOUSE);
-  }
-
-  /**
-   * {@code rowDecoderMode} is shared, unchanged, with every {@link Statement}/{@link Batch} this
-   * connection creates — see {@link ClickHouseConnectionFactoryProvider#ROW_DECODER}'s Javadoc for
-   * the full contract.
-   */
-  ClickHouseConnection(
-      final ClickHouseHttpTransport transport,
-      final RowDecodingScheduler decodingScheduler,
-      final DriverObservationListener observationListener,
-      final RowBinaryDecoderMode rowDecoderMode) {
     this.transport = transport;
     this.decodingScheduler = decodingScheduler;
     this.observationListener = observationListener;
-    this.rowDecoderMode = rowDecoderMode;
   }
 
   @Override
@@ -126,7 +110,7 @@ public final class ClickHouseConnection implements Connection {
   @Override
   public Batch createBatch() {
     requireOpen();
-    return new ClickHouseBatch(transport, decodingScheduler, observationListener, rowDecoderMode);
+    return new ClickHouseBatch(transport, decodingScheduler, observationListener);
   }
 
   @Override
@@ -144,7 +128,7 @@ public final class ClickHouseConnection implements Connection {
     }
     requireOpen();
     return new ClickHouseStatement(
-        transport, sql, statementTimeout, decodingScheduler, observationListener, rowDecoderMode);
+        transport, sql, statementTimeout, decodingScheduler, observationListener);
   }
 
   @Override

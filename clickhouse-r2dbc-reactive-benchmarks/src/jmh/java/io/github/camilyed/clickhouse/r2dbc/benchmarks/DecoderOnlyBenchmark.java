@@ -8,7 +8,6 @@ import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.FluxInputStreamBridge;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder;
-import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions;
@@ -54,12 +53,6 @@ import reactor.core.publisher.SynchronousSink;
  * itself — one dimension changed at a time, rather than lumping it all under "bridge overhead": see
  * docs/PERFORMANCE.md's Phase 5 "Optimization phase" section for the full H2a–H2d breakdown and the
  * numbers once this matrix has been run.
- *
- * <p>{@link #thisDriverNative} extends this class for a different, later question: once the
- * production native RowBinary decoder ({@link RowBinaryDecoderMode#NATIVE}, ROADMAP.md's "native
- * decoder" section) existed, {@link #thisDriver} vs {@link #thisDriverNative} became the natural
- * place to compare it against the client-v2-wrapping default — same captured bytes, same tiers,
- * same isolation from transport/compression this class already provides for every other pair.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.SampleTime)
@@ -119,8 +112,7 @@ public class DecoderOnlyBenchmark {
   }
 
   /**
-   * This driver's production decode path at its default {@link RowBinaryDecoderMode#CLICKHOUSE}
-   * (client-v2's own reader, wrapped by {@link
+   * This driver's production decode path (client-v2's reader, wrapped by {@link
    * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.ListDecodingRowBinaryReader}) — {@link
    * RowBinaryDecoder#decodeRows}, over captured bytes.
    */
@@ -129,37 +121,6 @@ public class DecoderOnlyBenchmark {
     final Flux<ByteBuffer> body = Flux.just(ByteBuffer.wrap(capturedResponseBytes));
     final long rowCount =
         RowBinaryDecoder.decodeRows(body, ResponseCompression.NONE)
-            .count()
-            .block(Duration.ofSeconds(60));
-    blackhole.consume(rowCount);
-  }
-
-  /**
-   * Same production decode path and same captured bytes as {@link #thisDriver}, with the one
-   * variable this pair exists to isolate switched: {@link RowBinaryDecoderMode#NATIVE} instead of
-   * the default {@link RowBinaryDecoderMode#CLICKHOUSE} — {@link
-   * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.NativeRowBinaryReader} decoding {@link
-   * PointQueryTable}'s {@code UInt64}/{@code String}/{@code Decimal(18,4)} columns directly,
-   * bypassing client-v2's reader machinery entirely (see that class's Javadoc). {@link #thisDriver}
-   * vs this method is therefore the direct "native vs client-v2 reader" answer at the decode layer,
-   * with every other variable (bytes, compression, tier, JVM, fork) held identical — the same
-   * decode-layer isolation this class already established for {@link #thisDriver} vs {@link
-   * #clientV2}, just for the new reader instead of the old client-v2-wrapping one.
-   *
-   * <p>Deliberately at {@link ResponseCompression#NONE}, matching every other method in this class
-   * — compression happens one layer below reader selection ({@link
-   * io.github.camilyed.clickhouse.r2dbc.core.rowbinary.ClickHouseCompressedInputStream} wraps the
-   * stream before either reader ever sees it), so it is orthogonal to this comparison and would
-   * only add decompression noise on top of the one variable being isolated here. A full-pipeline,
-   * production-realistic ({@code LZ4}, real network, both {@link RowBinaryDecoderMode}s) comparison
-   * belongs in a {@code LatencyPathVariantABenchmark}-style class instead — not yet built, tracked
-   * as a follow-up.
-   */
-  @Benchmark
-  public void thisDriverNative(final Blackhole blackhole) {
-    final Flux<ByteBuffer> body = Flux.just(ByteBuffer.wrap(capturedResponseBytes));
-    final long rowCount =
-        RowBinaryDecoder.decodeRows(body, ResponseCompression.NONE, RowBinaryDecoderMode.NATIVE)
             .count()
             .block(Duration.ofSeconds(60));
     blackhole.consume(rowCount);

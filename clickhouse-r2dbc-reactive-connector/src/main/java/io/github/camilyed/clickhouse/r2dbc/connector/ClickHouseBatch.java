@@ -4,7 +4,6 @@ import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
 import io.github.camilyed.clickhouse.r2dbc.core.DriverObservationListener;
 import io.github.camilyed.clickhouse.r2dbc.core.OperationKind;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
-import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.r2dbc.spi.Batch;
@@ -38,7 +37,6 @@ final class ClickHouseBatch implements Batch {
   private final ClickHouseHttpTransport transport;
   private final RowDecodingScheduler decodingScheduler;
   private final DriverObservationListener observationListener;
-  private final RowBinaryDecoderMode rowDecoderMode;
   private final List<String> statements = new ArrayList<>();
 
   ClickHouseBatch(
@@ -55,23 +53,9 @@ final class ClickHouseBatch implements Batch {
       final ClickHouseHttpTransport transport,
       final RowDecodingScheduler decodingScheduler,
       final DriverObservationListener observationListener) {
-    this(transport, decodingScheduler, observationListener, RowBinaryDecoderMode.CLICKHOUSE);
-  }
-
-  /**
-   * {@code rowDecoderMode} decides which {@code RowBinaryReader} decodes every statement this
-   * batch's {@link #execute()} runs — see {@code ClickHouseConnectionFactoryProvider#ROW_DECODER}'s
-   * Javadoc for the full contract.
-   */
-  ClickHouseBatch(
-      final ClickHouseHttpTransport transport,
-      final RowDecodingScheduler decodingScheduler,
-      final DriverObservationListener observationListener,
-      final RowBinaryDecoderMode rowDecoderMode) {
     this.transport = transport;
     this.decodingScheduler = decodingScheduler;
     this.observationListener = observationListener;
-    this.rowDecoderMode = rowDecoderMode;
   }
 
   // sql is declared non-null under this module's @NullMarked contract, but this overrides a
@@ -100,8 +84,7 @@ final class ClickHouseBatch implements Batch {
         .queryWithSummary(query)
         .flatMap(
             response ->
-                ClickHouseResult.decode(
-                    response, decodingScheduler, observation, compression, rowDecoderMode))
+                ClickHouseResult.decode(response, decodingScheduler, observation, compression))
         .doOnError(observation::failed)
         .doOnCancel(observation::cancelled)
         .onErrorMap(ClickHouseR2dbcException::wrap);

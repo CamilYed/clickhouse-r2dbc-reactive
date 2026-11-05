@@ -40,10 +40,12 @@ InputStream-backed reader may wait for later network chunks and must not run on 
 event loop. The full-R2DBC and raw-client variants perform different work, so their difference is
 not an additive estimate of SPI overhead.
 
-**Decision:** keep the native decoder opt-in, keep `RowDecodingScheduler`, and make no production
-optimization from this investigation. A direct incremental `ByteBuffer` parser would be a separate
-project affecting backpressure, cancellation, fragmentation, event-loop fairness, and resource
-ownership; it is not justified by these point-query measurements. See the complete
+**Decision at the time:** keep the native decoder opt-in, keep `RowDecodingScheduler`, and make no
+production optimization from this investigation. That decoder was removed on 2026-11-05: its
+small end-to-end effect did not justify maintaining a second wire-format implementation. A direct
+incremental `ByteBuffer` parser would be a separate project affecting backpressure, cancellation,
+fragmentation, event-loop fairness, and resource ownership; it is not justified by these
+point-query measurements. See the complete
 [latency-path isolation report](latency-path-isolation.md) for all variants and confidence notes.
 
 ## Full mega sweep — every scenario, one run (2026-08-24)

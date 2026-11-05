@@ -43,11 +43,9 @@ The core/transport API also supports opt-in retry of a retryable ClickHouse serv
 opt-in is not currently exposed by the R2DBC `Statement` API; queries executed through standard
 R2DBC therefore use the pre-send-only behavior described in the table.
 
-## Row decoder
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `rowDecoder` | `clickhouse` | `clickhouse` uses client-v2's reader. `native` uses this driver's native scalar RowBinary reader when every result column is supported and falls back to client-v2 for the whole result otherwise. Both modes produce the same values and Java types; `native` remains opt-in. |
+Rows are decoded through the client-v2-backed reader. The experimental `rowDecoder` option was
+removed after its isolated decoder improvement did not produce a meaningful end-to-end gain;
+configurations that still set it fail fast instead of being silently ignored.
 
 Spring Boot users configuring `spring.r2dbc.url=r2dbc:clickhouse://...` get all of the above for
 free through Spring's own R2DBC auto-configuration — see [../guide/spring-boot.md](../guide/spring-boot.md)
