@@ -12,6 +12,17 @@ was given and fails before building or publishing if it can't find one. See
 
 ## [Unreleased]
 
+### Removed
+
+- **The experimental native RowBinary decoder and `rowDecoder` connection option.** All results
+  now use the single client-v2-backed reader path. The native reader improved isolated large-scan
+  decoding by roughly 14-15%, but changed complete point-query throughput by only about 0.4-1.3%
+  within overlapping error intervals, so its duplicate wire-format implementation was not worth
+  the compatibility and maintenance surface. Existing configurations that still set `rowDecoder`
+  fail fast instead of silently ignoring the removed option. The reactive transport, bounded
+  bridge, decode scheduler, cancellation semantics, and LZ4/ZSTD response decompression are
+  unchanged.
+
 ### Fixed
 
 - **Response compression now works across the ClickHouse 26.9 codec transition.** The native

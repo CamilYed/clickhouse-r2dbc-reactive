@@ -31,18 +31,17 @@ import org.jspecify.annotations.Nullable;
  * repo's diagnostic-only convention for latency investigation work; see {@code
  * LatencyPathVariantDBenchmark}'s own Javadoc for how it's used.
  *
- * <p><b>Type-parity fix (2026-08-26 PR #99 review).</b> An external code review of the production
- * native decoder this class inspired ({@code NativeRowBinaryReader}) found that this class's {@code
- * UInt8}/{@code UInt64} decoding did not match the Java representations production settled on
- * ({@code Short}/{@code BigInteger}, matching client-v2's own typed getters) — this class
- * originally returned {@code Long} for both. That mismatch mattered for benchmark validity, not
- * just correctness: every benchmark that blackholed this class's raw values against client-v2's
- * typed getters (e.g. {@code getLong(1)} for {@code UInt64}) was comparing different boxing/
- * allocation work on top of decode cost, not decode cost alone. Fixed to remove that confound.
- * {@code docs/performance/latency-path-isolation.md}'s Variant D {@code stream10k} result (~21.6%
- * faster) predates this fix and should be treated as <b>unverified</b> until re-run against the
- * corrected type mapping — see that document and {@code NativeRowBinaryReader}'s own Javadoc for
- * the caveat.
+ * <p><b>Type-parity fix (2026-08-26 PR #99 review).</b> An external review found that this class's
+ * {@code UInt8}/{@code UInt64} decoding did not match client-v2's Java representations ({@code
+ * Short}/{@code BigInteger}) — this class originally returned {@code Long} for both. That mismatch
+ * mattered for benchmark validity, not just correctness: every benchmark that blackholed this
+ * class's raw values against client-v2's typed getters (e.g. {@code getLong(1)} for {@code UInt64})
+ * was comparing different boxing/allocation work on top of decode cost, not decode cost alone.
+ * Fixed to remove that confound. {@code docs/performance/latency-path-isolation.md}'s Variant D
+ * {@code stream10k} result (~21.6% faster) predates this fix and should be treated as
+ * <b>unverified</b> until re-run against the corrected type mapping; see that document for the
+ * caveat. The later production-native-decoder experiment was removed after its end-to-end benefit
+ * proved negligible; this benchmark-local diagnostic remains only to preserve the investigation.
  */
 final class MinimalRowBinaryReader implements AutoCloseable {
 
@@ -107,12 +106,12 @@ final class MinimalRowBinaryReader implements AutoCloseable {
 
   private Object decode(final ColumnType type, final int decimalScale) throws IOException {
     return switch (type) {
-      // UInt8 -> Short and UInt64 -> BigInteger match production's ColumnDecoder/
-      // NativeRowBinaryReader exactly (see class Javadoc's "Type-parity fix" note) - this
-      // benchmark-local decoder used to return Long for both, a real representation mismatch a
-      // 2026-08-26 review of PR #99 caught: it let the diagnostic benchmark's win margin include a
-      // free boxing/allocation difference against client-v2's own typed getters, not just decode
-      // cost. Fixed to remove that confound, not to change this class's own scope.
+      // UInt8 -> Short and UInt64 -> BigInteger match client-v2's representations (see the class
+      // Javadoc's "Type-parity fix" note). This benchmark-local decoder used to return Long for
+      // both, a real representation mismatch a 2026-08-26 review of PR #99 caught: it let the
+      // diagnostic benchmark's win margin include a free boxing/allocation difference against
+      // client-v2's own typed getters, not just decode cost. Fixed to remove that confound, not to
+      // change this class's own scope.
       case UINT8 -> (short) (readRequiredByte(in) & 0xFF);
       case UINT64 -> readUnsignedBigIntegerLE8(in, scratch8);
       case STRING -> readString(in);

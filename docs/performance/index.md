@@ -18,8 +18,10 @@ pipeline-isolation result.
 > with client-v2's raw response path. The production scheduler boundary cost about 51 us for the
 > captured one-row response, only about 2.4% of the roughly 2.17 ms full request. No single safe
 > production optimization explains the remaining noise-sized gap, so PR #99 deliberately made no
-> production-path change. The native decoder remains opt-in and the scheduler remains required for
-> the current InputStream-backed reader.
+> production-path change. The experimental native decoder was subsequently removed on 2026-11-05
+> to eliminate a duplicate wire-format implementation whose isolated gain did not translate into a
+> meaningful end-to-end improvement. The scheduler remains required for the current
+> InputStream-backed client-v2 reader.
 
 > [!TIP]
 > **New here? Start with [results.md's "Full mega sweep" section](results.md#full-mega-sweep--every-scenario-one-run-2026-08-24)** —

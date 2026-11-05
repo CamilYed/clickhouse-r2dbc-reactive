@@ -7,7 +7,6 @@ import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
 import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder;
-import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoderMode;
 import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
@@ -39,19 +38,18 @@ import reactor.core.publisher.Flux;
  *   <li>{@link #clientV2RawResponse(ClientV2RawResponseState, Blackhole)} vs {@link
  *       #ourTransportRawResponse(OurTransportRawResponseState, Blackhole)}: is a meaningful gap
  *       already present before row decoding?
- *   <li>{@link #nativeDecodeRaw(CapturedResponseState, Blackhole)} vs {@link
- *       #nativeDecodeScheduled(CapturedResponseState, Blackhole)}: what fixed cost does the
+ *   <li>{@link #driverDecodeRaw(CapturedResponseState, Blackhole)} vs {@link
+ *       #driverDecodeScheduled(CapturedResponseState, Blackhole)}: what fixed cost does the
  *       production decoder scheduling boundary add for a tiny in-memory response?
- *   <li>{@link #nativeDecodeScheduled(CapturedResponseState, Blackhole)} vs {@link
- *       #fullR2dbcNative(FullR2dbcNativeState, Blackhole)}: after accounting for the fact that one
- *       case is in-memory and the other is a real request, is there enough remaining evidence to
- *       justify drilling into the public R2DBC connector/SPI path?
+ *   <li>{@link #driverDecodeScheduled(CapturedResponseState, Blackhole)} vs {@link
+ *       #fullR2dbc(FullR2dbcState, Blackhole)}: after accounting for the fact that one case is
+ *       in-memory and the other is a real request, is there enough remaining evidence to justify
+ *       drilling into the public R2DBC connector/SPI path?
  * </ol>
  *
  * <p>The decoder variants all consume the exact same captured, uncompressed one-row
  * RowBinaryWithNamesAndTypes body. The two live raw-response variants use the same literal SQL and
- * matched physical pool size. The full R2DBC variant uses the production public SPI path with
- * {@code rowDecoder=native}.
+ * matched physical pool size. The full R2DBC variant uses the production public SPI path.
  *
  * <p>This is a diagnostic benchmark. It must not be used to justify removing {@link
  * RowDecodingScheduler}: {@link RowBinaryDecoder#decodeRows} is safe here only because its source
@@ -175,8 +173,7 @@ public class PointQueryPipelineIsolationBenchmark {
 
       scheduler = RowDecodingScheduler.withWorkerCount(POOL_SIZE);
 
-      // Fail setup immediately if the captured shape unexpectedly stops being native-decodable.
-      consumeRawNative(responseBytes);
+      consumeRaw(responseBytes);
     }
 
     @TearDown(Level.Trial)
@@ -185,9 +182,9 @@ public class PointQueryPipelineIsolationBenchmark {
     }
   }
 
-  /** Full public R2DBC path with rowDecoder=native and matched poolSize=8. */
+  /** Full public R2DBC path with matched poolSize=8. */
   @State(Scope.Benchmark)
-  public static class FullR2dbcNativeState {
+  public static class FullR2dbcState {
 
     private OurDriverPointQueryClient client;
 
@@ -195,8 +192,7 @@ public class PointQueryPipelineIsolationBenchmark {
     public void setUpTrial() {
       BenchmarkEnvironment.start();
       PointQueryTable.seed(ROWS);
-      client =
-          new OurDriverPointQueryClient(new OurDriverPointQueryClient.NativeDecoder(POOL_SIZE));
+      client = new OurDriverPointQueryClient(POOL_SIZE);
 
       // Validate the public path outside the measured region; JMH warmup handles performance
       // warmup.
@@ -229,33 +225,21 @@ public class PointQueryPipelineIsolationBenchmark {
     blackhole.consume(drainOurTransport(state.transport));
   }
 
-  /**
-   * NATIVE reader over already-in-memory bytes. Includes FluxInputStreamBridge +
-   * NativeRowBinaryReader + Flux.generate, but deliberately no RowDecodingScheduler hop.
-   */
+  /** Production reader over already-in-memory bytes, deliberately without a scheduler hop. */
   @Benchmark
-  public void nativeDecodeRaw(final CapturedResponseState state, final Blackhole blackhole) {
-    blackhole.consume(consumeRawNative(state.responseBytes));
+  public void driverDecodeRaw(final CapturedResponseState state, final Blackhole blackhole) {
+    blackhole.consume(consumeRaw(state.responseBytes));
   }
 
-  /** NATIVE production decode API over the exact same captured bytes, including scheduler hop. */
+  /** Production decode API over the exact same captured bytes, including scheduler hop. */
   @Benchmark
-  public void nativeDecodeScheduled(final CapturedResponseState state, final Blackhole blackhole) {
-    blackhole.consume(
-        consumeScheduled(state.responseBytes, state.scheduler, RowBinaryDecoderMode.NATIVE));
+  public void driverDecodeScheduled(final CapturedResponseState state, final Blackhole blackhole) {
+    blackhole.consume(consumeScheduled(state.responseBytes, state.scheduler));
   }
 
-  /** CLICKHOUSE-mode scheduled control over the exact same captured bytes. */
+  /** Production public R2DBC SPI path. */
   @Benchmark
-  public void clickHouseDecodeScheduled(
-      final CapturedResponseState state, final Blackhole blackhole) {
-    blackhole.consume(
-        consumeScheduled(state.responseBytes, state.scheduler, RowBinaryDecoderMode.CLICKHOUSE));
-  }
-
-  /** Production public R2DBC SPI path with rowDecoder=native. */
-  @Benchmark
-  public void fullR2dbcNative(final FullR2dbcNativeState state, final Blackhole blackhole) {
+  public void fullR2dbc(final FullR2dbcState state, final Blackhole blackhole) {
     final PointResult result = state.client.query(POINT_ID).block(TIMEOUT);
     if (result == null) {
       throw new IllegalStateException("full R2DBC native point query returned null");
@@ -284,30 +268,23 @@ public class PointQueryPipelineIsolationBenchmark {
         .block(TIMEOUT);
   }
 
-  private static long consumeRawNative(final byte[] responseBytes) {
+  private static long consumeRaw(final byte[] responseBytes) {
     final DecodedRow row =
         RowBinaryDecoder.decodeRows(
-                Flux.just(ByteBuffer.wrap(responseBytes)),
-                ResponseCompression.NONE,
-                RowBinaryDecoderMode.NATIVE)
+                Flux.just(ByteBuffer.wrap(responseBytes)), ResponseCompression.NONE)
             .single()
             .block(TIMEOUT);
     if (row == null) {
-      throw new IllegalStateException("native raw decode returned null");
+      throw new IllegalStateException("raw decode returned null");
     }
     return checksum(row);
   }
 
   private static long consumeScheduled(
-      final byte[] responseBytes,
-      final RowDecodingScheduler scheduler,
-      final RowBinaryDecoderMode mode) {
+      final byte[] responseBytes, final RowDecodingScheduler scheduler) {
     final DecodedResult result =
         RowBinaryDecoder.decode(
-                Flux.just(ByteBuffer.wrap(responseBytes)),
-                scheduler,
-                ResponseCompression.NONE,
-                mode)
+                Flux.just(ByteBuffer.wrap(responseBytes)), scheduler, ResponseCompression.NONE)
             .block(TIMEOUT);
     if (result == null) {
       throw new IllegalStateException("scheduled decode returned null result");

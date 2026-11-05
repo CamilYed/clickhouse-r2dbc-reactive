@@ -1041,7 +1041,10 @@ here, none implemented yet — do not reopen without new evidence, per the doc's
     is not an additive model and that remainder must not be labeled SPI overhead by subtraction.
     The scheduler boundary is nevertheless only ~2.4% of the full ~2.17ms request. **Final PR #99
     decision: merge the diagnostic benchmark and documentation, make no production change, keep
-    `NATIVE` opt-in, and stop this optimization line.** Do not remove `RowDecodingScheduler` or move
+    `NATIVE` opt-in, and stop this optimization line.** Superseded on 2026-11-05: the native decoder
+    and its `rowDecoder` option were removed because the negligible end-to-end effect did not
+    justify maintaining a duplicate wire-format implementation. Do not remove
+    `RowDecodingScheduler` or move
     the current InputStream-backed reader onto the Netty event loop. A direct incremental
     `ByteBuffer` parser remains a separate future project requiring new workload evidence, not the
     next step from this result.
