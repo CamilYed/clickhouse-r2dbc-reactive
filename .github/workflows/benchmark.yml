@@ -249,7 +249,7 @@ jobs:
         # this sandbox's outbound access couldn't resolve the exact commit for the `v4` tag to
         # verify one. Pin it to a SHA the same way if/when that's convenient to check.
         id: clickhouse-image-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/clickhouse-image-cache/image.tar
           key: clickhouse-docker-image-${{ steps.clickhouse-image.outputs.tag }}
