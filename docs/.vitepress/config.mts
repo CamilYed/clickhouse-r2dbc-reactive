@@ -81,6 +81,7 @@ export default withMermaid(defineConfig({
         text: "Reference",
         items: [
           { text: "Connection configuration", link: "/reference/configuration" },
+          { text: "Type support", link: "/reference/type-support" },
           { text: "Known limitations", link: "/reference/known-limitations" },
           { text: "R2DBC SPI compatibility", link: "/reference/r2dbc-compatibility" },
         ],

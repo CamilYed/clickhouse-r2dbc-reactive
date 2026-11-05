@@ -118,11 +118,18 @@ public final class ClickHouseConnection implements Connection {
     return Mono.error(new UnsupportedOperationException("ClickHouse does not support savepoints"));
   }
 
-  // sql is declared non-null under this module's @NullMarked contract, but this overrides a
-  // plain io.r2dbc.spi.Connection method — external callers of the public R2DBC SPI aren't bound
-  // by that static guarantee, so failing fast here beats a confusing NPE deeper in the call chain.
+  /**
+   * {@inheritDoc}
+   *
+   * <p>The covariant {@link ClickHouseStatement} return type exposes ClickHouse-specific server
+   * settings while remaining fully compatible with the standard R2DBC {@link Statement} contract.
+   */
   @Override
-  public Statement createStatement(final String sql) {
+  public ClickHouseStatement createStatement(final String sql) {
+    // sql is declared non-null under this module's @NullMarked contract, but this overrides a
+    // plain io.r2dbc.spi.Connection method — external callers of the public R2DBC SPI aren't bound
+    // by that static guarantee, so failing fast here beats a confusing NPE deeper in the call
+    // chain.
     if (sql == null) { // NOSONAR - see defensive-null-check note above
       throw new IllegalArgumentException("sql must not be null");
     }

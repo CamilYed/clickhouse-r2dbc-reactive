@@ -28,6 +28,7 @@ Legend: ✅ fixed/verified safe · ⚠️ safe limitation, documented, fails lou
 | Large/batch `INSERT`s sent entirely via URL query string | ✅ | `ClickHouseConnection.insertStreaming(String, Publisher<ByteBuffer>)` streams the body instead; deliberately never retried once any bytes may have reached the server. |
 | `Statement.add()` bound-parameter batching | ✅ | Snapshots each complete binding set and executes the sets sequentially, emitting one `Result` per set. It does not coalesce them into one wire-level multi-row `INSERT`. |
 | `JSON` type support | ✅ | Decodes as a plain `String`, zero extra configuration; GA since ClickHouse 25.3. |
+| Arbitrary per-statement ClickHouse settings | ✅ | `ClickHouseStatement.setClickHouseSetting(...)` exposes safe server settings such as `wait_end_of_query`; transport-owned request parameters remain reserved. |
 
 ## Known, documented, safe limitations (not fixed — deliberate)
 
@@ -42,8 +43,7 @@ Legend: ✅ fixed/verified safe · ⚠️ safe limitation, documented, fails lou
 | Finding | Verdict | Notes |
 | --- | --- | --- |
 | Retryable server errors not exposed through R2DBC `Statement` | ❌ | Core/transport implement safe per-query opt-in through `ClickHouseQuery.withServerErrorRetryEnabled()`, but the connector has no R2DBC-facing vendor extension for enabling it. Standard R2DBC queries therefore retain pre-send-only retry behavior. |
-| Arbitrary per-statement ClickHouse settings not exposed through R2DBC | ❌ | Core supports `ClickHouseQuery.withSettings(...)`; the connector currently uses it only for `setStatementTimeout`/`max_execution_time`. Settings such as `wait_end_of_query` need a vendor extension. |
-| `Dynamic`/`Variant` types | 🧪 | Untested — newer, less settled experimental ClickHouse types than `JSON`. |
+| Unverified ClickHouse data types | 🧪 | `Time`/`Time64`, `BFloat16`, geo types including client-v2 0.11.0's `MultiPoint`, `QBit`, `Dynamic`/`Variant`, and aggregate-function state types need driver-owned real-server tests before they are claimed as supported. See the [type-support matrix](../reference/type-support.md). |
 
 ## See also
 

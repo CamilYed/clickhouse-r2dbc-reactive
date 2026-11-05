@@ -13,12 +13,22 @@ Source: `ClickHouse/clickhouse-java`, commit `601ade16364d667b71a4982bbabf60ed2d
 Re-verify if client-v2 moves past this commit before we build the corresponding feature — this is
 a snapshot, not a live contract.
 
+> [!NOTE]
+> **0.11.0 follow-up (2026-11-05).** The dependency was audited again against its
+> [official 0.11.0 migration guide](https://github.com/ClickHouse/clickhouse-java/blob/main/docs/releases/0_11_0.md).
+> Its Apache HTTP socket-buffer defaults do not apply to this Reactor Netty
+> transport. Two changes do cross our boundary: error 159 (`TIMEOUT_EXCEEDED`) is no longer
+> classified by client-v2's `ServerException.isRetryable()` as a normal retryable server error, and
+> ClickHouse 26.8+ gives `X-ClickHouse-Format` priority over a SQL `FORMAT` clause. Both are now
+> explicit driver contracts below and in named tests/user documentation.
+
 ## Contents
 
 - [Compression — two independent layers](#compression--two-independent-layers)
 - [Authentication](#authentication)
 - [Headers set on every request](#headers-set-on-every-request)
 - [Query parameters (settings, query_id, roles, statement params)](#query-parameters-settings-query_id-roles-statement-params)
+- [Format selection across server versions](#format-selection-across-server-versions)
 - [Response handling and error semantics](#response-handling-and-error-semantics)
 - [The mid-stream error caveat, concretely](#the-mid-stream-error-caveat-concretely)
 - [TLS / mTLS](#tls--mtls)
@@ -120,6 +130,21 @@ to imitate defensively by also sending the query parameter unless a future findi
 fields) matches how ClickHouse itself treats settings — mirrors what Phase 2's "core: query
 request/settings/query_id representation" already says, just confirms the shape.
 
+The R2DBC connector now exposes that map through the public
+`ClickHouseStatement.setClickHouseSetting(name, value)` vendor extension. It deliberately rejects
+transport-owned parameters such as `query_id`, `compress`, response-format controls, and every
+`param_*` name: those are protocol invariants rather than ClickHouse execution settings.
+
+## Format selection across server versions
+
+Normal driver queries always send `X-ClickHouse-Format: RowBinaryWithNamesAndTypes`; the decoder
+requires the names-and-types header. The 0.11.0 migration guide records a server-side precedence
+change: before ClickHouse 26.8 an explicit SQL `FORMAT` clause won, while 26.8+ gives the request
+header priority. Therefore normal R2DBC statements must not mix an explicit SQL output format with
+the driver's header. The setting extension reserves `format` and `default_format` so callers cannot
+silently break that decoder contract. `insertStreaming(...)` remains separate: its SQL intentionally
+declares an input format for the bytes supplied as the request body.
+
 ## Response handling and error semantics
 
 `executeRequest` (line 688 onward):
@@ -197,6 +222,12 @@ the non-blocking equivalent to design against.
 is not," unless that's been revisited) — noted here so a future retry feature doesn't reinvent
 "which errors are safe to retry" from scratch; ClickHouse's own retryable-error-code list is the
 right source of truth to mirror, not a guess.
+
+That future feature now exists as the core-only per-query opt-in. The transport still delegates the
+classification to `ServerException.isRetryable()`, so client-v2 0.11.0 changes its behavior even
+though no client-v2 HTTP code is used: error 159 (`TIMEOUT_EXCEEDED`) is no longer retried by this
+opt-in. `ClickHouseHttpTransportTest.shouldNotAllowRetryingAnExecutionTimeoutEvenWhenOptedIn`
+characterizes the boundary explicitly.
 
 ## Explicitly out of scope for this audit
 

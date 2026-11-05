@@ -12,6 +12,16 @@ was given and fails before building or publishing if it can't find one. See
 
 ## [Unreleased]
 
+### Added
+
+- **Public per-statement ClickHouse server settings.** `ClickHouseConnection.createStatement(...)`
+  now returns the public `ClickHouseStatement` extension, whose
+  `setClickHouseSetting(name, value)` method forwards settings such as `max_threads`,
+  `wait_end_of_query`, and `log_comment` through the existing bounded reactive pipeline. Driver-
+  owned request parameters (query text/id, bound parameters, compression, database, and response
+  format) remain reserved and fail fast. A statement-level `max_execution_time` overrides a timeout
+  inherited from `Connection.setStatementTimeout(...)`.
+
 ### Removed
 
 - **The experimental native RowBinary decoder and `rowDecoder` connection option.** All results
@@ -29,6 +39,10 @@ was given and fails before building or publishing if it can't find one. See
   `compress=1` block reader selects LZ4 (`0x82`) or ZSTD (`0x90`) from every block's method byte,
   preserving compatibility with older servers while accepting the new ZSTD default. The stream
   remains bounded to one compressed and one decompressed block at a time.
+- **client-v2 0.11.0 retry semantics are now explicit.** ClickHouse error 159
+  (`TIMEOUT_EXCEEDED`) is not retried by this driver's opt-in server-error retry path because that
+  path intentionally follows client-v2's `ServerException.isRetryable()` classification. A named
+  transport test prevents an accidental return to retrying deterministic execution timeouts.
 
 ## [0.2.2] — 2026-08-28
 

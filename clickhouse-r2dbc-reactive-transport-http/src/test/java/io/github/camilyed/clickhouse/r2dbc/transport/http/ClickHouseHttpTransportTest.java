@@ -1118,7 +1118,7 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
   @Test
   void shouldAllowRetryingARetryableServerErrorWhenOptedInAndNoBytesEmittedYet() {
     // given - error code 202 (TOO_MANY_SIMULTANEOUS_QUERIES) is one of the codes client-v2's
-    // ServerException.discoverIsRetryable classifies as retryable (v0.9.8 source, not assumed)
+    // ServerException.discoverIsRetryable classifies as retryable (v0.11.0 source, not assumed)
     final ServerException retryableError =
         new ServerException(202, "too many simultaneous queries", 500, "q1");
     final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
@@ -1131,9 +1131,25 @@ class ClickHouseHttpTransportTest implements ToByteArrayAbility, NettyLeakDetect
   }
 
   @Test
+  void shouldNotAllowRetryingAnExecutionTimeoutEvenWhenOptedIn() {
+    // given - client-v2 0.11.0 deliberately removed error 159 (TIMEOUT_EXCEEDED) from
+    // ServerException's retryable set because rerunning it is unsafe or predictably futile
+    final ServerException executionTimeout =
+        new ServerException(ServerException.EXECUTION_TIMEOUT, "timeout exceeded", 500, "q1");
+    final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
+
+    // when
+    final boolean canRetry =
+        ClickHouseHttpTransport.canRetry(executionTimeout, optedIn, true, false);
+
+    // then
+    assertThat(canRetry).isFalse();
+  }
+
+  @Test
   void shouldNotAllowRetryingANonRetryableServerErrorEvenWhenOptedIn() {
     // given - error code 60 (TABLE_NOT_FOUND) is not in client-v2's ServerException.
-    // discoverIsRetryable list (v0.9.8 source, not assumed) - retrying would just fail identically
+    // discoverIsRetryable list (v0.11.0 source, not assumed) - retrying would just fail identically
     final ServerException nonRetryableError = new ServerException(60, "not found", 500, "q1");
     final ClickHouseQuery optedIn = ClickHouseQuery.of("SELECT 1").withServerErrorRetryEnabled();
 

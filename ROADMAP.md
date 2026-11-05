@@ -36,14 +36,17 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   build, real-ClickHouse integration suite, cancellation and ByteBuf leak tests, and JMH compilation
   pass. That validation also caught ClickHouse 26.9's new ZSTD default for native `compress=1`
   response blocks: the driver's block reader now dispatches on the wire method byte, retaining LZ4
-  compatibility with older servers while decoding ZSTD from 26.9+. The release's socket-buffer and
-  server-error-159 retry changes affect client-v2's own HTTP client, not this driver's Reactor Netty
-  transport; they do
-  mean that historical client-v2 benchmark numbers remain tied to the version recorded with each
-  run and must not be relabelled as 0.11.0 results without a fresh measurement. Still open: Phase 8
-  P2 doc/policy items (TLS scope, minimum ClickHouse version, multi-host contract, compound
-  statements), and a public vendor extension for per-statement
-  ClickHouse settings. Full detail:
+  compatibility with older servers while decoding ZSTD from 26.9+. The socket-buffer change is
+  confined to client-v2's own HTTP stack and does not apply to this driver's Reactor Netty
+  transport. The server-error-159 change does apply: the opt-in server-error retry path delegates
+  classification to client-v2's `ServerException.isRetryable()`, so `TIMEOUT_EXCEEDED`
+  is no longer retried even after that opt-in. A named transport test fixes this as an explicit
+  contract. Historical client-v2 benchmark numbers remain tied to the version recorded with each
+  run and must not be relabelled as 0.11.0 results without a fresh measurement. The public
+  `ClickHouseStatement.setClickHouseSetting(...)` extension now exposes arbitrary safe
+  per-statement server settings without exposing transport-owned request parameters. Still open:
+  Phase 8 P2 doc/policy items (TLS scope, minimum ClickHouse version, multi-host contract, compound
+  statements). Full detail:
   [roadmap-archive.md's Phase 8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ## Next (not started, plan written)
