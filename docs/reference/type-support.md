@@ -16,6 +16,7 @@ decoder:
 | --- | --- |
 | `Int8`…`Int256`, `UInt8`…`UInt256` | matching boxed primitive where possible; `BigInteger` for values wider than signed `long` |
 | `Float32`, `Float64` | `Float`, `Double` |
+| `BFloat16` | `Float` |
 | `Decimal`, including 128/256-bit tiers | `BigDecimal` |
 | `Bool` | `Boolean` |
 | `String`, `FixedString` | `String` |
@@ -43,7 +44,6 @@ supported:
 | Types | Status |
 | --- | --- |
 | `Time`, `Time64` | Recognized by client-v2, but not verified through this driver. |
-| `BFloat16` | Added to client-v2 in 0.11.0; driver integration test still required. |
 | `Point`, `Ring`, `Polygon`, `MultiPolygon`, `LineString`, `MultiLineString`, `Geometry`, `MultiPoint` | Geo boundary representations are not verified. `MultiPoint` also requires ClickHouse 26.8+, newer than the pinned 26.7 compatibility reference. |
 | `QBit` | Added to client-v2 in 0.11.0 and experimental on the server; driver integration test still required. |
 | `Dynamic`, `Variant` | No driver-owned compatibility contract yet. |
