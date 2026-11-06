@@ -257,12 +257,12 @@ public final class ClickHouseStatement implements Statement {
 
   private Mono<ClickHouseResult> executeOneBindingSet(final Map<String, Object> parameters) {
     ClickHouseQuery query = ClickHouseQuery.of(sql).withParameters(parameters);
-    final Map<String, String> settings = new LinkedHashMap<>();
-    if (statementTimeout != null) {
-      settings.put(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout));
-    }
-    settings.putAll(clickHouseSettings);
-    if (!settings.isEmpty()) {
+    if (statementTimeout != null || !clickHouseSettings.isEmpty()) {
+      final Map<String, String> settings = new LinkedHashMap<>();
+      if (statementTimeout != null) {
+        settings.put(MAX_EXECUTION_TIME_SETTING, formatSeconds(statementTimeout));
+      }
+      settings.putAll(clickHouseSettings);
       query = query.withSettings(Map.copyOf(settings));
     }
     final QueryObservation observation =
