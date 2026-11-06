@@ -37,9 +37,10 @@ import org.junit.jupiter.api.Test;
  * <ul>
  *   <li><b>Numeric</b> — covered ({@link #shouldDecodeNumericTypes()}): all {@code
  *       Int8..256}/{@code UInt8..256} widths, {@code Float32}/{@code Float64}, {@code Decimal},
- *       {@code Bool}. {@code Decimal128}/{@code Decimal256} (the {@code BigInteger}-backed wide
- *       tiers, precision above 18) additionally covered by {@link #shouldDecodeLargeDecimalTypes()}
- *       — see that test's Javadoc for why.
+ *       {@code Bool}. {@code BFloat16} is covered separately by {@link
+ *       #shouldDecodeBFloat16AsAFloat()} and decodes as {@link Float}. {@code Decimal128}/{@code
+ *       Decimal256} (the {@code BigInteger}-backed wide tiers, precision above 18) additionally
+ *       covered by {@link #shouldDecodeLargeDecimalTypes()} — see that test's Javadoc for why.
  *   <li><b>String</b> — covered ({@link #shouldDecodeStringTypes()}): {@code String}, {@code
  *       FixedString}.
  *   <li><b>Date and time</b> — partially covered ({@link #shouldDecodeDateAndTimeTypes()}): {@code
@@ -85,10 +86,9 @@ import org.junit.jupiter.api.Test;
  *       at the driver boundary the same way it already does for {@code Array}/{@code Nested} (see
  *       that class's Javadoc), so a caller can ask for {@code String.class} directly instead of
  *       {@code Object.class} plus a {@code toString()} call. Geo types, vector-search types ({@code
- *       QBit}), {@code BFloat16}, and domains not attempted yet. client-v2 0.11.0 added support for
- *       {@code BFloat16}, {@code QBit}, and {@code MultiPoint}, but this driver does not claim them
- *       until its own real-server tests prove their values survive this reader and the public row
- *       boundary.
+ *       QBit}), and domains not attempted yet. client-v2 0.11.0 added support for {@code QBit} and
+ *       {@code MultiPoint}, but this driver does not claim them until its own real-server tests
+ *       prove their values survive this reader and the public row boundary.
  *   <li><b>Aggregate function</b> ({@code AggregateFunction}/{@code SimpleAggregateFunction}) — not
  *       attempted; these store intermediate aggregation state, not plain literal-insertable values,
  *       so proving them needs a different test shape (insert via an aggregate query, not a
@@ -197,6 +197,30 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
         .hasBigInteger(
             "uint256_val", "12345678901234567890123456789012345678901234567890123456789012345678")
         .hasFloatCloseTo("float32_val", 3.14f, Offset.offset(0.001f));
+  }
+
+  @Test
+  void shouldDecodeBFloat16AsAFloat() {
+    // given
+    execute(
+        "CREATE TABLE bfloat16_type (id UInt32, value BFloat16) "
+            + "ENGINE = MergeTree ORDER BY id");
+    execute(
+        "INSERT INTO bfloat16_type VALUES "
+            + "(1, CAST(1.25, 'BFloat16')), "
+            + "(2, CAST(-33.25, 'BFloat16'))");
+
+    // when
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM bfloat16_type ORDER BY id");
+
+    // then
+    assertThat(rows).hasSize(2);
+    assertThatRow(rows.get(0))
+        .hasValue("id", 1L)
+        .hasFloatCloseTo("value", 1.25f, Offset.offset(0.001f));
+    assertThatRow(rows.get(1))
+        .hasValue("id", 2L)
+        .hasFloatCloseTo("value", -33.25f, Offset.offset(0.001f));
   }
 
   /**

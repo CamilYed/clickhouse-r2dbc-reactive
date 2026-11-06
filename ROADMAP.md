@@ -44,9 +44,10 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   contract. Historical client-v2 benchmark numbers remain tied to the version recorded with each
   run and must not be relabelled as 0.11.0 results without a fresh measurement. The public
   `ClickHouseStatement.setClickHouseSetting(...)` extension now exposes arbitrary safe
-  per-statement server settings without exposing transport-owned request parameters. Still open:
-  Phase 8 P2 doc/policy items (TLS scope, minimum ClickHouse version, multi-host contract, compound
-  statements). Full detail:
+  per-statement server settings without exposing transport-owned request parameters. The
+  client-v2-backed path's new `BFloat16` support is now also verified against a real server and
+  exposed as `Float`, with no driver decoding change required. Still open: Phase 8 P2 doc/policy
+  items (TLS scope, minimum ClickHouse version, multi-host contract, compound statements). Full detail:
   [roadmap-archive.md's Phase 8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ## Next (not started, plan written)
