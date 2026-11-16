@@ -46,8 +46,12 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   `ClickHouseStatement.setClickHouseSetting(...)` extension now exposes arbitrary safe
   per-statement server settings without exposing transport-owned request parameters. The
   client-v2-backed path's new `BFloat16` support is now also verified against a real server and
-  exposed as `Float`, with no driver decoding change required. Still open: Phase 8 P2 doc/policy
-  items (TLS scope, minimum ClickHouse version, multi-host contract, compound statements). Full detail:
+  exposed as `Float`, with no driver decoding change required. **client-v2 patched 0.11.0 →
+  0.11.2** (2026-11-16): the 0.11.2 `BinaryStreamReader`/`NativeFormatReader` array fixes compile
+  and pass the full driver suite; 0.11.1's compressed-request fix is confined to client-v2's own
+  HTTP stack and does not affect the Reactor Netty transport. Still open: Phase 8 P2 doc/policy
+  items (TLS scope, minimum ClickHouse version, multi-host contract, compound statements). Full
+  detail:
   [roadmap-archive.md's Phase 8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ## Next (not started, plan written)
