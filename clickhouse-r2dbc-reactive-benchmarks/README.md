@@ -1,19 +1,35 @@
 # clickhouse-r2dbc-reactive-benchmarks
 
-JMH benchmarks comparing this driver against `client-v2`, at multiple levels — what each class
-measures and the latest results: [docs/performance/](../docs/performance/index.md).
+JMH benchmarks comparing this driver with client-v2 at the public API, transport, decoder,
+streaming, concurrency, and cancellation boundaries.
 
-Not published, not part of `./gradlew build`/`check`. Requires Docker and JDK 21.
+The documentation website is the source of truth:
 
-## Running
+- [Performance status](../docs/performance/index.md) — what can currently be claimed.
+- [Methodology](../docs/performance/methodology.md) — what each benchmark measures.
+- [Running the benchmarks](../docs/performance/running-benchmarks.md) — local and cloud commands.
+- [Historical results](../docs/performance/results.md) — older versioned measurements.
 
-Against a Testcontainers-managed server (default — one container per JMH fork):
+The module is not published and is not part of `./gradlew build` or `./gradlew check`. Local runs
+require Docker and JDK 21.
+
+## Local quick start
+
+Run one sanity-check fork against a Testcontainers-managed server:
 
 ```
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh
 ```
 
-Against a long-lived external server instead (faster iteration — no container startup per fork):
+Run one benchmark class:
+
+```
+./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh \
+  -Pjmh.includes=PublicApiMatchedPoolThroughputBenchmark
+```
+
+Use a long-lived local ClickHouse process when container startup per fork would add avoidable
+noise:
 
 ```
 ./scripts/start-benchmark-clickhouse.sh
@@ -24,41 +40,14 @@ export BENCH_CLICKHOUSE_PASSWORD=
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh
 ```
 
-Results are written under `build/results/jmh/` (JSON format). Not committed to git — inspect
-locally or upload as a CI artifact.
+Local defaults are suitable for compilation and smoke checks, not for a public performance claim.
+Raw JSON is written below `build/results/jmh/` and is not committed.
 
-To run one benchmark class only:
+## Trustworthy comparisons
 
-```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=PointQueryBenchmark
-```
+Use the repository's `benchmark.yml` GitHub Actions workflow. It runs both implementations in the
+same job and VM against the same ClickHouse process. Choose `trusted-clean` for latency or
+throughput comparisons and retain the workflow URL and artifact with any published result.
 
-To run with a JMH profiler (e.g. the GC profiler for allocation numbers):
-
-```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
-```
-
-To run multiple forks (needed before trusting a result — see docs/PERFORMANCE.md's confidence
-warning; the plain `jmh` task defaults to 1 fork/1 warmup iteration, a sanity check, not a
-trustworthy number):
-
-```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.forks=3 -Pjmh.warmupIterations=3
-```
-
-Flags compose freely, e.g.:
-
-```
-./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=BoundedPoolConcurrencyBenchmark -Pjmh.forks=3 -Pjmh.warmupIterations=3
-```
-
-For a long unattended run (the full suite, or any 3-fork run), wrap with `caffeinate -d -i` on
-macOS to prevent the machine sleeping mid-run.
-
-## Machine
-
-All numbers currently recorded in docs/PERFORMANCE.md were measured on a single MacBook Pro
-14-inch (Nov 2023, Apple M3 Pro, 36 GB RAM) — a shared consumer laptop, not an isolated
-benchmarking rig. Treat absolute numbers as specific to that machine; the driver-vs-driver
-comparisons (same hardware/JVM/data on both sides) are the portable part.
+The current build uses client-v2 `0.11.2`. Historical result pages were measured before that
+upgrade and must not be relabelled as current numbers without a fresh run.

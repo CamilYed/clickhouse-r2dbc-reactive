@@ -44,9 +44,10 @@ difference is what the concurrency benchmarks above are actually measuring, not 
   platform thread from that executor is, for the duration of each query.
 
 Concretely: this driver needs zero platform threads per in-flight query; client-v2's async mode
-still needs one blocked executor thread per in-flight query, just not the JMH caller's thread. Item
-5's resource-model measurement (thread count, CPU, RSS) is the planned follow-up to quantify what
-that difference actually costs — see [results.md's Open follow-ups](results.md#open-follow-ups).
+still needs one blocked executor thread per in-flight query, just not the JMH caller's thread. The
+historical cloud pipeline captured coarse whole-run RSS and thread samples for this question; it
+did not establish a stable per-driver resource-cost number. See the
+[historical results](results.md#open-follow-ups) for that limitation.
 
 ## Rapid-refresh cancellation — the "user hits refresh" scenario
 

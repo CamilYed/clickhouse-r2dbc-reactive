@@ -1,36 +1,28 @@
 <script setup lang="ts">
 import { withBase } from "vitepress";
-import allocationChart from "../../../images/2026-08-23-cloud-matched-pool-allocation.png";
 </script>
 
 <template>
   <section class="chr-section">
     <h2 class="chr-heading">Performance</h2>
     <p class="chr-lede">
-      Allocation per query through the public R2DBC SPI, an 8-connection pool matched on both
-      sides, this driver vs. client-v2's own public async API — cloud-verified on GitHub Actions,
-      two independent runs.
+      The benchmark suite compares public APIs, transport boundaries, decoding, streaming, and
+      cancellation under one repeatable cloud pipeline. Results are published only with their
+      dependency versions and confidence limits.
     </p>
 
-    <div class="chr-chart-card">
-      <img
-        :src="allocationChart"
-        width="720"
-        alt="Allocation per query through the public R2DBC SPI, matched 8-connection pool, this driver vs client-v2"
-      />
-      <div class="chr-chart-caption">
-        <strong>2.7&ndash;2.9x less allocation per query</strong>, and the gap widens as concurrency
-        rises — the win that holds up under a fair, cloud-verified comparison. Throughput and
-        latency currently favor client-v2 in this same scenario; see the full page for the honest
-        breakdown, including a retracted earlier claim.
-      </div>
+    <div class="chr-status-card">
+      <strong>Current status: a fresh baseline is required.</strong>
+      <p>
+        Published comparison runs used client-v2 0.9.8. The current driver uses 0.11.2 and no
+        longer contains the experimental native decoder measured by the last investigation, so
+        the old charts are retained as historical evidence rather than presented as current wins.
+      </p>
     </div>
 
     <p class="chr-caveat">
-      GitHub Actions `ubuntu-latest`, JMH `trusted` profile (3 forks, 5 warmup iterations),
-      confirmed stable across two independent runs. See
-      <a :href="withBase('/performance/')">the full performance page</a>
-      for methodology, confidence caveats, and every other benchmark family.
+      See <a :href="withBase('/performance/')">the performance status</a> for the completed
+      latency-path conclusion, the rerun contract, and links to the historical archive.
     </p>
   </section>
 </template>
@@ -56,32 +48,22 @@ import allocationChart from "../../../images/2026-08-23-cloud-matched-pool-alloc
   margin-bottom: 24px;
 }
 
-.chr-chart-card {
+.chr-status-card {
   border: 1px solid var(--vp-c-divider);
   border-radius: 12px;
   padding: 24px;
   background: var(--vp-c-bg-soft);
-  text-align: center;
+  line-height: 1.6;
 }
 
-.chr-chart-card img {
-  max-width: 100%;
-  height: auto;
-  border-radius: 6px;
+.chr-status-card strong {
+  color: var(--chr-accent-cyan);
 }
 
-.chr-chart-caption {
-  margin-top: 16px;
+.chr-status-card p {
+  margin: 10px 0 0;
   font-size: 14px;
   color: var(--vp-c-text-2);
-  max-width: 640px;
-  margin-left: auto;
-  margin-right: auto;
-  line-height: 1.55;
-}
-
-.chr-chart-caption strong {
-  color: var(--chr-accent-cyan);
 }
 
 .chr-caveat {

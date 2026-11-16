@@ -98,9 +98,16 @@ export default withMermaid(defineConfig({
         items: [
           { text: "Overview", link: "/performance/" },
           { text: "Methodology", link: "/performance/methodology" },
-          { text: "Results", link: "/performance/results" },
-          { text: "Latency-path isolation", link: "/performance/latency-path-isolation" },
           { text: "Running the benchmarks", link: "/performance/running-benchmarks" },
+        ],
+      },
+      {
+        text: "Benchmark archive",
+        collapsed: true,
+        items: [
+          { text: "Historical results", link: "/performance/results" },
+          { text: "Latency-path investigation", link: "/performance/latency-path-isolation" },
+          { text: "Retracted results", link: "/performance/archive" },
         ],
       },
       {
