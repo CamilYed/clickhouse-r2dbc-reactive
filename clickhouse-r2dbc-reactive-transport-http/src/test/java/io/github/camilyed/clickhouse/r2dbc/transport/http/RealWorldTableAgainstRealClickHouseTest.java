@@ -85,10 +85,12 @@ import org.junit.jupiter.api.Test;
  *       {@code EnumValue} — {@code core}'s {@code ListDecodingRowBinaryReader} normalizes it away
  *       at the driver boundary the same way it already does for {@code Array}/{@code Nested} (see
  *       that class's Javadoc), so a caller can ask for {@code String.class} directly instead of
- *       {@code Object.class} plus a {@code toString()} call. Geo types, vector-search types ({@code
- *       QBit}), and domains not attempted yet. client-v2 0.11.0 added support for {@code QBit} and
- *       {@code MultiPoint}, but this driver does not claim them until its own real-server tests
- *       prove their values survive this reader and the public row boundary.
+ *       {@code Object.class} plus a {@code toString()} call. A top-level {@code QBit(Float32, N)}
+ *       vector is covered by {@link #shouldDecodeQBitFloat32AsAPrimitiveFloatArray()} and exposed
+ *       as {@code float[]} rather than client-v2's internal array holder. Other {@code QBit}
+ *       element types and shapes, geo types, and domains are not attempted yet. client-v2 0.11.0
+ *       also added {@code MultiPoint}, but this driver does not claim it until its own real-server
+ *       tests prove the value survives this reader and the public row boundary.
  *   <li><b>Aggregate function</b> ({@code AggregateFunction}/{@code SimpleAggregateFunction}) — not
  *       attempted; these store intermediate aggregation state, not plain literal-insertable values,
  *       so proving them needs a different test shape (insert via an aggregate query, not a
@@ -221,6 +223,24 @@ class RealWorldTableAgainstRealClickHouseTest extends BaseClickHouseIntegrationT
     assertThatRow(rows.get(1))
         .hasValue("id", 2L)
         .hasFloatCloseTo("value", -33.25f, Offset.offset(0.001f));
+  }
+
+  @Test
+  void shouldDecodeQBitFloat32AsAPrimitiveFloatArray() {
+    // given
+    execute(
+        "CREATE TABLE qbit_type (id UInt32, embedding QBit(Float32, 4)) "
+            + "ENGINE = MergeTree ORDER BY id");
+    execute("INSERT INTO qbit_type VALUES (1, [1.25, -2.5, 0.0, 42.0])");
+
+    // when
+    final List<Map<String, Object>> rows = queryRows("SELECT * FROM qbit_type");
+
+    // then
+    assertThat(rows).hasSize(1);
+    assertThatRow(rows.get(0))
+        .hasValue("id", 1L)
+        .hasFloatArray("embedding", 1.25f, -2.5f, 0.0f, 42.0f);
   }
 
   /**

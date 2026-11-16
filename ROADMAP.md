@@ -49,9 +49,11 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
   exposed as `Float`, with no driver decoding change required. **client-v2 patched 0.11.0 →
   0.11.2** (2026-11-16): the 0.11.2 `BinaryStreamReader`/`NativeFormatReader` array fixes compile
   and pass the full driver suite; 0.11.1's compressed-request fix is confined to client-v2's own
-  HTTP stack and does not affect the Reactor Netty transport. Still open: Phase 8 P2 doc/policy
-  items (TLS scope, minimum ClickHouse version, multi-host contract, compound statements). Full
-  detail:
+  HTTP stack and does not affect the Reactor Netty transport. A top-level `QBit(Float32, N)` is now
+  also verified through the production RowBinary path and normalized to `float[]` at the driver
+  boundary rather than exposing client-v2's internal array holder. Still open: Phase 8 P2
+  doc/policy items (TLS scope, minimum ClickHouse version, multi-host contract, compound
+  statements). Full detail:
   [roadmap-archive.md's Phase 8](engineering/roadmap-archive.md#phase-8--post-020-hardening-021).
 
 ## Next (not started, plan written)

@@ -66,6 +66,36 @@ public final class RowBinaryFixtures {
   }
 
   /**
+   * One column named {@code "embedding"} of type {@code QBit(Float32, 4)}, one row containing
+   * {@code [1.25, -2.5, 0.0, 42.0]}. RowBinary transmits {@code QBit} as an array: a varint length
+   * followed by little-endian elements.
+   */
+  public static byte[] qBitFloat32RowBinaryWithNamesAndTypes() {
+    return rowBinaryWithNamesAndTypes(
+        new String[] {"embedding"},
+        new String[] {"QBit(Float32, 4)"},
+        new byte[] {
+          0x04, // vector length (varint)
+          0x00,
+          0x00,
+          (byte) 0xA0,
+          0x3F, // 1.25
+          0x00,
+          0x00,
+          0x20,
+          (byte) 0xC0, // -2.5
+          0x00,
+          0x00,
+          0x00,
+          0x00, // 0.0
+          0x00,
+          0x00,
+          0x28,
+          0x42 // 42.0
+        });
+  }
+
+  /**
    * One column named {@code "status"} of type {@code Enum8('a' = 1, 'b' = 2)}, one row selecting
    * member {@code 'b'} (ordinal {@code 2}) — the wire encoding for an {@code Enum8} value is a
    * single signed byte equal to its ordinal, same as a plain {@code Int8}.

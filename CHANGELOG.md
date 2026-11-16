@@ -17,6 +17,9 @@ was given and fails before building or publishing if it can't find one. See
 - **Verified `BFloat16` support.** A real-server test now proves that values survive the production
   transport and client-v2-backed RowBinary decoder and are exposed as `Float`; no additional
   production decoding path was required.
+- **Verified top-level `QBit(Float32, N)` support.** The production RowBinary path now exposes the
+  fixed-dimension vector as a primitive `float[]` instead of leaking client-v2's internal array
+  holder. Both a hermetic wire fixture and a real-server test pin the public representation.
 - **Public per-statement ClickHouse server settings.** `ClickHouseConnection.createStatement(...)`
   now returns the public `ClickHouseStatement` extension, whose
   `setClickHouseSetting(name, value)` method forwards settings such as `max_threads`,

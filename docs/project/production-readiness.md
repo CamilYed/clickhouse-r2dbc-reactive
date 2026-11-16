@@ -29,6 +29,7 @@ Legend: ✅ fixed/verified safe · ⚠️ safe limitation, documented, fails lou
 | `Statement.add()` bound-parameter batching | ✅ | Snapshots each complete binding set and executes the sets sequentially, emitting one `Result` per set. It does not coalesce them into one wire-level multi-row `INSERT`. |
 | `JSON` type support | ✅ | Decodes as a plain `String`, zero extra configuration; GA since ClickHouse 25.3. |
 | `BFloat16` type support | ✅ | Decodes as a `Float`; verified through the production transport and decoder against a real server. |
+| Top-level `QBit(Float32, N)` support | ✅ | Decodes as a primitive `float[]`; the driver boundary prevents client-v2's internal array holder from leaking through `Row`. |
 | Arbitrary per-statement ClickHouse settings | ✅ | `ClickHouseStatement.setClickHouseSetting(...)` exposes safe server settings such as `wait_end_of_query`; transport-owned request parameters remain reserved. |
 
 ## Known, documented, safe limitations (not fixed — deliberate)
@@ -44,7 +45,7 @@ Legend: ✅ fixed/verified safe · ⚠️ safe limitation, documented, fails lou
 | Finding | Verdict | Notes |
 | --- | --- | --- |
 | Retryable server errors not exposed through R2DBC `Statement` | ❌ | Core/transport implement safe per-query opt-in through `ClickHouseQuery.withServerErrorRetryEnabled()`, but the connector has no R2DBC-facing vendor extension for enabling it. Standard R2DBC queries therefore retain pre-send-only retry behavior. |
-| Unverified ClickHouse data types | 🧪 | `Time`/`Time64`, geo types including client-v2 0.11.0's `MultiPoint`, `QBit`, `Dynamic`/`Variant`, and aggregate-function state types need driver-owned real-server tests before they are claimed as supported. See the [type-support matrix](../reference/type-support.md). |
+| Unverified ClickHouse data types | 🧪 | `Time`/`Time64`, geo types including client-v2 0.11.0's `MultiPoint`, `QBit` forms beyond the verified top-level `Float32` vector, `Dynamic`/`Variant`, and aggregate-function state types need driver-owned real-server tests before they are claimed as supported. See the [type-support matrix](../reference/type-support.md). |
 
 ## See also
 
