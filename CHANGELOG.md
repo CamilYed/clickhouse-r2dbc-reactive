@@ -38,6 +38,11 @@ was given and fails before building or publishing if it can't find one. See
 
 ### Fixed
 
+- **client-v2 updated from 0.11.0 to 0.11.2.** The patch line fixes array decoding regressions in
+  `BinaryStreamReader`/`NativeFormatReader`; the driver-owned RowBinary path, real-server type
+  matrix, cancellation and leak tests, and benchmark compilation all pass unchanged. The 0.11.1
+  compressed-request fix belongs to client-v2's own HTTP transport and does not affect this
+  driver's Reactor Netty request path.
 - **Response compression now works across the ClickHouse 26.9 codec transition.** The native
   `compress=1` block reader selects LZ4 (`0x82`) or ZSTD (`0x90`) from every block's method byte,
   preserving compatibility with older servers while accepting the new ZSTD default. The stream
