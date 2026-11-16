@@ -89,7 +89,7 @@ import reactor.core.publisher.Mono;
  * {@code @Benchmark} method a given JMH fork was actually about to run. That's wasted setup cost by
  * itself, but it stops being just wasted cost once Phase 11 PR2's resource-model measurement
  * (thread count, process CPU, RSS) runs per fork: a fork profiling only {@link
- * #thisDriver(ThisDriverState)} would still have client-v2's connection pool and executor threads
+ * #aThisDriver(ThisDriverState)} would still have client-v2's connection pool and executor threads
  * alive in the same process, polluting exactly the numbers that measurement exists to capture.
  * Splitting the client/recorder state per driver means JMH only instantiates and {@code @Setup}s
  * the state a given fork's {@code @Benchmark} method actually declares as a parameter — see JMH's
@@ -99,6 +99,18 @@ import reactor.core.publisher.Mono;
  * rather than factored out to a shared one, since both are already idempotent/synchronized (see
  * their own Javadoc) and a shared state would reintroduce the same fork-pollution problem this
  * split exists to avoid.
+ *
+ * <h2>Why the benchmark method names are prefixed</h2>
+ *
+ * JMH 1.37 reads matching benchmarks into a sorted set and executes them in that order. The
+ * original method names therefore always ran {@code clientV2} before {@code thisDriver}. Two
+ * independent trusted-clean runs reproduced a worse p90-p99 for this driver, but could not rule out
+ * temporal drift on a shared runner because both used that same order. The {@code a}/{@code z}
+ * prefixes deliberately reverse only the execution order for the control run: this driver now runs
+ * first, while the client implementations, isolated states, workload, pool size, concurrency, and
+ * stable log/report labels remain unchanged. {@code scripts/benchmarks/analyze.py} normalizes both
+ * the historical and prefixed method names to the same {@code thisDriver}/{@code clientV2} labels,
+ * so old artifacts remain readable and reports remain directly comparable.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -256,14 +268,14 @@ public class PublicApiMatchedPoolThroughputBenchmark {
   /** This driver, through the public R2DBC SPI only - see {@link OurDriverPointQueryClient}. */
   @Benchmark
   @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
-  public long thisDriver(final ThisDriverState state) {
+  public long aThisDriver(final ThisDriverState state) {
     return runWorkload(state.client, state.latencyRecorder, state.concurrency, state::nextId);
   }
 
   /** client-v2, through its public async API only - see {@link ClientV2PointQueryClient}. */
   @Benchmark
   @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
-  public long clientV2(final ClientV2State state) {
+  public long zClientV2(final ClientV2State state) {
     return runWorkload(state.client, state.latencyRecorder, state.concurrency, state::nextId);
   }
 

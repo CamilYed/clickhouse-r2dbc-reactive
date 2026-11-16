@@ -51,6 +51,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from benchmark_names import driver_name
+
 # PublicApiMatchedPoolThroughputBenchmark.logLatencySummary's SLF4J log line, e.g.:
 #   thisDriver per-query latency (us, n=4096): mean=123.4, p50=100, p90=200, p95=250, p99=400, p99.9=600, max=1200
 # slf4j-simple prefixes it with "[thread] LEVEL logger - ", which this pattern ignores by
@@ -102,16 +104,11 @@ def load_json(path: Path) -> object:
         return json.load(f)
 
 
-def method_name(benchmark_fqn: str) -> str:
-    """'io.github...PublicApiMatchedPoolThroughputBenchmark.thisDriver' -> 'thisDriver'."""
-    return benchmark_fqn.rsplit(".", 1)[-1]
-
-
 def extract_throughput_rows(results: list[dict]) -> dict[int, dict[str, dict]]:
     """{concurrency: {driver: {"score", "error", "unit", "alloc_bytes_per_op"}}}."""
     rows: dict[int, dict[str, dict]] = {}
     for entry in results:
-        driver = method_name(entry["benchmark"])
+        driver = driver_name(entry["benchmark"])
         if driver not in DRIVER_LABELS:
             continue
         concurrency = int(entry["params"]["concurrency"])
@@ -166,7 +163,7 @@ def average_latency_per_concurrency(
     cursors = {"thisDriver": 0, "clientV2": 0}
     out: dict[int, dict[str, dict]] = {}
     for entry in results:
-        driver = method_name(entry["benchmark"])
+        driver = driver_name(entry["benchmark"])
         if driver not in DRIVER_LABELS:
             continue
         concurrency = int(entry["params"]["concurrency"])
@@ -222,7 +219,7 @@ def merged_latency_per_concurrency(
     cursors = {"thisDriver": 0, "clientV2": 0}
     out: dict[int, dict[str, dict]] = {}
     for entry in results:
-        driver = method_name(entry["benchmark"])
+        driver = driver_name(entry["benchmark"])
         if driver not in DRIVER_LABELS:
             continue
         concurrency = int(entry["params"]["concurrency"])
