@@ -1,10 +1,16 @@
-# Results (newest first — last updated 2026-08-27)
+# Historical benchmark results (newest first — last updated 2026-08-27)
 
-Sections below are ordered by when that result was last (re-)measured, newest first, not grouped
-by benchmark category — so the current, trustworthy numbers are always at the top and older/
-retracted/single-fork data sinks toward the bottom. See [index.md](index.md) for the confidence
-warning and environment these numbers were measured under, and [methodology.md](methodology.md)
-for what each benchmark class actually exercises.
+> [!WARNING]
+> These measurements describe older commits, not the current performance baseline. The comparison
+> runs on this page used client-v2 `0.9.8`; the current build uses `0.11.2`, and the experimental
+> native decoder discussed below was removed on 2026-11-05. Preserve these numbers for
+> reproducibility and engineering history, but do not present them as current driver-vs-client-v2
+> results. See the [performance status](index.md) before citing any section.
+
+Sections below are ordered by when that historical result was last (re-)measured, newest first,
+not grouped by benchmark category. Retracted and single-fork data sinks toward the bottom. See
+[index.md](index.md) for the current status and [methodology.md](methodology.md) for what each
+benchmark class actually exercises.
 
 > [!NOTE]
 > **2026-08-24 — the `ourDriver` benchmark label was renamed to `thisDriver`** (task #270; the

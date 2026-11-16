@@ -2,10 +2,10 @@
 import { withBase } from "vitepress";
 
 const rows = [
-  { mark: "✅", label: "Fixed & verified", count: 13, tone: "good" },
-  { mark: "⚠️", label: "Documented, safe limitations", count: 4, tone: "warn" },
-  { mark: "❌", label: "Open gaps, not yet addressed", count: 3, tone: "gap" },
-  { mark: "\u{1F9EA}", label: "Needs more testing", count: 1, tone: "test" },
+  { mark: "✅", label: "Verified contracts", tone: "good" },
+  { mark: "⚠️", label: "Documented limitations", tone: "warn" },
+  { mark: "❌", label: "Open gaps", tone: "gap" },
+  { mark: "\u{1F9EA}", label: "Compatibility evidence", tone: "test" },
 ];
 </script>
 
@@ -20,7 +20,6 @@ const rows = [
     <div class="chr-grid">
       <div v-for="r in rows" :key="r.label" class="chr-stat" :class="'chr-' + r.tone">
         <span class="chr-mark">{{ r.mark }}</span>
-        <span class="chr-count">{{ r.count }}</span>
         <span class="chr-label">{{ r.label }}</span>
       </div>
     </div>
@@ -81,14 +80,9 @@ const rows = [
   line-height: 1;
 }
 
-.chr-count {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--vp-c-text-1);
-}
-
 .chr-label {
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--vp-c-text-2);
   line-height: 1.4;
 }
@@ -97,7 +91,7 @@ const rows = [
   border-color: var(--vp-c-brand-1);
 }
 
-.chr-test .chr-count {
+.chr-test .chr-label {
   color: var(--chr-accent-cyan);
 }
 

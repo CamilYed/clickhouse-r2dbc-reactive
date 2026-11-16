@@ -1,7 +1,7 @@
 # Performance results archive
 
 > **Retracted/fully-superseded result sections, moved out of [results.md](results.md) to keep the
-> current page focused on numbers worth trusting today** — same spirit as
+> historical results page focused on measurements valid for their recorded version** — same spirit as
 > [engineering/roadmap-archive.md](../../engineering/roadmap-archive.md). Kept in full, unedited,
 > for the record: what was measured, why it turned out to be wrong or superseded, and what replaced
 > it. Nothing here should be cited as a current claim about this driver's performance.

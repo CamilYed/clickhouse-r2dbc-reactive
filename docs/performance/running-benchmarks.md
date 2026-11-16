@@ -2,11 +2,12 @@
 
 The benchmark suite lives in `clickhouse-r2dbc-reactive-benchmarks` — JMH benchmarks comparing this
 driver against client-v2, at multiple levels (see [methodology.md](methodology.md) for what each
-class measures). This page mirrors that module's own
-[README](../../clickhouse-r2dbc-reactive-benchmarks/README.md); that file is the source of truth if
-the two ever drift.
+class measures). This page is the source of truth for execution instructions; the module's
+[README](../../clickhouse-r2dbc-reactive-benchmarks/README.md) intentionally remains a short entry
+point.
 
-Not published, not part of `./gradlew build`/`check`. Requires Docker and JDK 21.
+Not published, not part of `./gradlew build`/`check`. Requires Docker and JDK 21. The dependency
+versions used by a run come from the checked-out commit; current `main` uses client-v2 `0.11.2`.
 
 ## Running
 
@@ -59,10 +60,28 @@ Flags compose freely, e.g.:
 For a long unattended run (the full suite, or any 3-fork run), wrap with `caffeinate -d -i` on
 macOS to prevent the machine sleeping mid-run.
 
-## Machine
+## Cloud workflow
 
-All numbers currently recorded in [results.md](results.md) were measured on a single MacBook Pro
-14-inch (Nov 2023, Apple M3 Pro, 36 GB RAM) — a shared consumer laptop, not an isolated
-benchmarking rig. Treat absolute numbers as specific to that machine; the driver-vs-driver
-comparisons (same hardware/JVM/data on both sides) are the portable part. A repeatable, off-laptop
-environment is planned — see [../../ROADMAP.md's Phase 10](../../ROADMAP.md#phase-10--cloud-benchmark-pipeline).
+The repeatable comparison environment is `.github/workflows/benchmark.yml`. Start it from the
+GitHub Actions UI or with the GitHub CLI:
+
+```
+gh workflow run benchmark.yml \
+  -f profile=trusted-clean \
+  -f benchmark=PublicApiMatchedPoolThroughputBenchmark
+```
+
+Use `fast` only as a build/sanity signal. Use `trusted` when GC/JFR diagnostics are the purpose of
+the run. Use `trusted-clean` for a latency or throughput claim: three forks, five warmups, five
+measurements, and no profiler or background sampler adding latency noise.
+
+Both implementations run in the same job, on the same VM, against the same ClickHouse process.
+The artifact contains the raw JMH JSON, stdout, environment metadata, and—where supported by the
+selected benchmark—an analyzed summary. Record the workflow URL with every published result.
+
+## Interpreting old results
+
+The [historical results](results.md) include local exploratory runs and later cloud runs. Absolute
+numbers are specific to the recorded machine, commit, JDK, ClickHouse image, client-v2 version,
+and profile. In particular, those pages have not yet been re-baselined after the move from
+client-v2 `0.9.8` to `0.11.2`; use them as investigation history, not as current release claims.
