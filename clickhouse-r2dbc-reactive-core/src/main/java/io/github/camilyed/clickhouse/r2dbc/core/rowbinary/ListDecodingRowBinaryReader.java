@@ -14,8 +14,9 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Decodes {@code Array}/{@code Nested} columns as a plain {@link List}, and {@code Enum8}/{@code
- * Enum16} columns as a plain {@link String}, instead of client-v2's {@code .internal} types.
+ * Decodes {@code Array}/{@code Nested} columns as a plain {@link List}, {@code QBit} columns as
+ * primitive arrays, and {@code Enum8}/{@code Enum16} columns as a plain {@link String}, instead of
+ * client-v2's {@code .internal} types.
  *
  * <p>client-v2's own row-reading path ({@code next()}/{@code readRecord()}) always calls {@code
  * BinaryStreamReader.readValue(column, null)} — a {@code null} type hint — so {@code Array}/{@code
@@ -41,13 +42,19 @@ import org.jspecify.annotations.Nullable;
  * .internal} type through {@code Row}" goal the {@code Array}/{@code Nested} handling above already
  * serves. A {@code null} value (a {@code Nullable(Enum8)} column with no row set) is left as {@code
  * null} rather than the literal string {@code "null"}.
+ *
+ * <p>{@code QBit} uses client-v2's same internal {@code ArrayValue} holder but represents a
+ * fixed-dimension primitive vector rather than a general ClickHouse {@code Array}. Passing any
+ * array-class type hint asks {@code BinaryStreamReader.convertArray} for that holder's backing
+ * primitive array, preserving the element-specific runtime type ({@code float[]} or {@code
+ * double[]}) without exposing the internal holder itself.
  */
 final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormatReader {
 
   // Both fixed for the lifetime of this reader once the header is parsed - see columns()/
-  // listHints()'s Javadoc for why caching them here, instead of recomputing per row, is safe.
+  // typeHints()'s Javadoc for why caching them here, instead of recomputing per row, is safe.
   private @Nullable List<ClickHouseColumn> cachedColumns;
-  private Class<?> @Nullable [] cachedListHints;
+  private Class<?> @Nullable [] cachedTypeHints;
   private boolean @Nullable [] cachedEnumColumns;
 
   ListDecodingRowBinaryReader(
@@ -63,11 +70,11 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
     if (columns.isEmpty()) {
       return false;
     }
-    final Class<?>[] listHints = listHints(columns);
+    final Class<?>[] typeHints = typeHints(columns);
     final boolean[] enumColumns = enumColumns(columns);
     for (int i = 0; i < columns.size(); i++) {
       try {
-        values[i] = binaryStreamReader.readValue(columns.get(i), listHints[i]);
+        values[i] = binaryStreamReader.readValue(columns.get(i), typeHints[i]);
       } catch (final EOFException e) {
         if (i == 0) {
           endReached();
@@ -119,33 +126,36 @@ final class ListDecodingRowBinaryReader extends RowBinaryWithNamesAndTypesFormat
   }
 
   /**
-   * One {@link #listHintFor(ClickHouseColumn)} result per column of {@code columns}, computed once
+   * One {@link #typeHintFor(ClickHouseColumn)} result per column of {@code columns}, computed once
    * for the whole result rather than re-evaluated for every row — same fixed-per-result reasoning
-   * as {@link #columns()}, turning the {@code R × C} repeated {@code Array}/{@code Nested} type
-   * checks {@link #readRecord} used to perform into a one-time {@code C}-sized precomputation.
+   * as {@link #columns()}, turning the {@code R × C} repeated type checks {@link #readRecord} used
+   * to perform into a one-time {@code C}-sized precomputation.
    */
-  private Class<?>[] listHints(final List<ClickHouseColumn> columns) {
-    Class<?>[] listHints = cachedListHints;
-    if (listHints == null) {
-      listHints = new Class<?>[columns.size()];
+  private Class<?>[] typeHints(final List<ClickHouseColumn> columns) {
+    Class<?>[] typeHints = cachedTypeHints;
+    if (typeHints == null) {
+      typeHints = new Class<?>[columns.size()];
       for (int i = 0; i < columns.size(); i++) {
-        listHints[i] = listHintFor(columns.get(i));
+        typeHints[i] = typeHintFor(columns.get(i));
       }
-      cachedListHints = listHints;
+      cachedTypeHints = typeHints;
     }
-    return listHints;
+    return typeHints;
   }
 
   /**
-   * Returns {@code null} for every column that isn't {@code Array}/{@code Nested} — the same "no
-   * hint" signal client-v2's own decode path always passes (see this class's own Javadoc) — so
-   * {@code null} here is a deliberate, meaningful value, not an oversight.
+   * Returns {@code null} for every column that isn't {@code Array}/{@code Nested}/{@code QBit} —
+   * the same "no hint" signal client-v2's own decode path always passes (see this class's own
+   * Javadoc) — so {@code null} here is a deliberate, meaningful value, not an oversight.
    */
-  private static @Nullable Class<?> listHintFor(final ClickHouseColumn column) {
+  private static @Nullable Class<?> typeHintFor(final ClickHouseColumn column) {
     final ClickHouseDataType dataType = column.getDataType();
     final boolean isListLike =
         dataType == ClickHouseDataType.Array || dataType == ClickHouseDataType.Nested;
-    return isListLike ? List.class : null;
+    if (isListLike) {
+      return List.class;
+    }
+    return dataType == ClickHouseDataType.QBit ? Object[].class : null;
   }
 
   /**

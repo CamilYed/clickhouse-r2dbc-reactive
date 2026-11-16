@@ -30,6 +30,7 @@ decoder:
 | `UUID` | `UUID` |
 | `Enum8`, `Enum16` | enum member name as `String` |
 | `JSON` | JSON text as `String` |
+| top-level `QBit(Float32, N)` | primitive `float[]` |
 
 The executable source of truth is
 [`RealWorldTableAgainstRealClickHouseTest`](../../clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/RealWorldTableAgainstRealClickHouseTest.java).
@@ -45,7 +46,7 @@ supported:
 | --- | --- |
 | `Time`, `Time64` | Recognized by client-v2, but not verified through this driver. |
 | `Point`, `Ring`, `Polygon`, `MultiPolygon`, `LineString`, `MultiLineString`, `Geometry`, `MultiPoint` | Geo boundary representations are not verified. `MultiPoint` also requires ClickHouse 26.8+, newer than the pinned 26.7 compatibility reference. |
-| `QBit` | Added to client-v2 in 0.11.0 and experimental on the server; driver integration test still required. |
+| Other `QBit` forms | `BFloat16`, `Float64`, `Int8`, strided, wrapped, and nested forms are not yet part of the driver-owned compatibility contract. |
 | `Dynamic`, `Variant` | No driver-owned compatibility contract yet. |
 | `AggregateFunction`, `SimpleAggregateFunction` states | Need a dedicated aggregate-state fixture rather than literal inserts. |
 

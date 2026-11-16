@@ -64,6 +64,22 @@ class RowBinaryDecoderTest {
   }
 
   @Test
+  void shouldDecodeQBitFloat32AsAPrimitiveFloatArray() {
+    // given
+    final Flux<ByteBuffer> source =
+        Flux.just(ByteBuffer.wrap(RowBinaryFixtures.qBitFloat32RowBinaryWithNamesAndTypes()));
+
+    // when
+    final DecodedRow row =
+        RowBinaryDecoder.decodeRows(source, ResponseCompression.NONE)
+            .blockFirst(Duration.ofSeconds(5));
+
+    // then
+    assertThat(row.valueAt(0)).isInstanceOf(float[].class);
+    assertThat((float[]) row.valueAt(0)).containsExactly(1.25f, -2.5f, 0.0f, 42.0f);
+  }
+
+  @Test
   void shouldDecodeAnEnum8ColumnAsAPlainString() {
     // given
     final Flux<ByteBuffer> source =

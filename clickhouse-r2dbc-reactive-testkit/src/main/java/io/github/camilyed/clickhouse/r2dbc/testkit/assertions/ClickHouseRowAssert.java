@@ -143,6 +143,16 @@ public final class ClickHouseRowAssert
     return this;
   }
 
+  /** Asserts {@code column} is a primitive {@code float[]} equal to {@code expected} in order. */
+  public ClickHouseRowAssert hasFloatArray(final String column, final float... expected) {
+    isNotNull();
+    assertThat(actual.get(column)).as(COLUMN_DESCRIPTION, column).isInstanceOf(float[].class);
+    assertThat((float[]) actual.get(column))
+        .as(COLUMN_DESCRIPTION, column)
+        .containsExactly(expected);
+    return this;
+  }
+
   /**
    * Asserts {@code column} is an {@link InetAddress} equal to {@code expected} (for {@code
    * IPv4}/{@code IPv6}).
