@@ -3,10 +3,15 @@ package io.github.camilyed.clickhouse.r2dbc.benchmarks;
 import com.clickhouse.client.api.Client;
 import com.clickhouse.client.api.query.QueryResponse;
 import io.github.camilyed.clickhouse.r2dbc.core.ClickHouseQuery;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowBinaryDecoder;
+import io.github.camilyed.clickhouse.r2dbc.core.rowbinary.RowDecodingScheduler;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.Authentication;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.ClickHouseHttpTransport;
 import io.github.camilyed.clickhouse.r2dbc.transport.http.TransportOptions;
 import java.io.InputStream;
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletionException;
@@ -14,7 +19,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongFunction;
 import org.HdrHistogram.Histogram;
-import org.HdrHistogram.Recorder;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
@@ -26,6 +30,8 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
+import org.openjdk.jmh.infra.IterationParams;
+import org.openjdk.jmh.runner.IterationType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
@@ -48,8 +54,11 @@ import reactor.core.publisher.Mono;
  *       acquiring matched-pool connections and fully draining raw response bodies, before this
  *       driver's row decoder and R2DBC SPI are involved?
  *   <li>{@link #aOurTransportRawResponse(OurTransportRawResponseState)} vs {@link
- *       #cFullR2dbc(FullR2dbcState)}: how much tail appears only after the raw Reactor Netty
- *       boundary?
+ *       #cScheduledDecode(ScheduledDecodeState)}: how much tail appears when the production
+ *       scheduler, bridge, decompressor, and row decoder are added to the same transport?
+ *   <li>{@link #cScheduledDecode(ScheduledDecodeState)} vs {@link #dFullR2dbc(FullR2dbcState)}: how
+ *       much tail remains attributable to the connector and R2DBC Statement/Result/Row path after
+ *       transport and decoding are already accounted for?
  * </ol>
  *
  * <p>Every benchmark method has its own state, client, pool, ID cursor, and latency recorder. JMH
@@ -71,6 +80,10 @@ import reactor.core.publisher.Mono;
  * minus 8 live connections = 120 pending) with a small margin. It prevents rejection without
  * introducing unbounded buffering and is part of this raw-boundary experiment, not a proposed
  * production default.
+ *
+ * <p>Per-query histograms are reset after every warmup iteration but only measurement iterations
+ * are merged into the trial summary. This distinction is explicit because JMH invokes {@link
+ * TearDown} at {@link Level#Iteration} for warmup and measurement alike.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -107,27 +120,19 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     public void setUpTrial() {
       BenchmarkEnvironment.start();
       PointQueryTable.seed(ROWS);
-      transport =
-          new ClickHouseHttpTransport(
-              BenchmarkEnvironment.httpUrl(),
-              TransportOptions.defaults()
-                  .withAuthentication(
-                      Authentication.basic(
-                          BenchmarkEnvironment.username(), BenchmarkEnvironment.password()))
-                  .withMaxConnections(POOL_SIZE)
-                  .withPendingAcquireMaxCount(RAW_TRANSPORT_PENDING_ACQUIRE_MAX_COUNT));
+      transport = newRawTransport();
       prewarmRaw(id -> queryOurTransport(transport, id), "our transport");
       measurement = new Measurement(concurrency);
     }
 
     @TearDown(Level.Iteration)
-    public void tearDownIteration() {
-      logLatencySummary("ourTransportRawResponse", measurement.finishIteration());
+    public void tearDownIteration(final IterationParams iterationParams) {
+      finishIteration("ourTransportRawResponse", measurement, iterationParams);
     }
 
     @TearDown(Level.Trial)
     public void tearDownTrial() {
-      logMergedLatencySummary("ourTransportRawResponse", measurement.mergedHistogram());
+      logMergedLatencySummary("ourTransportRawResponse", measurement.mergedMeasurementHistogram());
       transport.disposeLater().block(Duration.ofSeconds(10));
     }
   }
@@ -161,14 +166,48 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     }
 
     @TearDown(Level.Iteration)
-    public void tearDownIteration() {
-      logLatencySummary("clientV2RawResponse", measurement.finishIteration());
+    public void tearDownIteration(final IterationParams iterationParams) {
+      finishIteration("clientV2RawResponse", measurement, iterationParams);
     }
 
     @TearDown(Level.Trial)
     public void tearDownTrial() {
-      logMergedLatencySummary("clientV2RawResponse", measurement.mergedHistogram());
+      logMergedLatencySummary("clientV2RawResponse", measurement.mergedMeasurementHistogram());
       client.close();
+    }
+  }
+
+  /** This driver's transport plus its production off-event-loop row-decoding boundary. */
+  @State(Scope.Benchmark)
+  public static class ScheduledDecodeState {
+
+    @Param({"8", "32", "128"})
+    public int concurrency;
+
+    private ClickHouseHttpTransport transport;
+    private RowDecodingScheduler scheduler;
+    private Measurement measurement;
+
+    @Setup(Level.Trial)
+    public void setUpTrial() {
+      BenchmarkEnvironment.start();
+      PointQueryTable.seed(ROWS);
+      transport = newRawTransport();
+      scheduler = RowDecodingScheduler.withWorkerCount(POOL_SIZE);
+      prewarm(id -> queryScheduledDecode(transport, scheduler, id), "scheduled decoder");
+      measurement = new Measurement(concurrency);
+    }
+
+    @TearDown(Level.Iteration)
+    public void tearDownIteration(final IterationParams iterationParams) {
+      finishIteration("scheduledDecode", measurement, iterationParams);
+    }
+
+    @TearDown(Level.Trial)
+    public void tearDownTrial() {
+      logMergedLatencySummary("scheduledDecode", measurement.mergedMeasurementHistogram());
+      scheduler.dispose();
+      transport.disposeLater().block(Duration.ofSeconds(10));
     }
   }
 
@@ -192,13 +231,13 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     }
 
     @TearDown(Level.Iteration)
-    public void tearDownIteration() {
-      logLatencySummary("fullR2dbc", measurement.finishIteration());
+    public void tearDownIteration(final IterationParams iterationParams) {
+      finishIteration("fullR2dbc", measurement, iterationParams);
     }
 
     @TearDown(Level.Trial)
     public void tearDownTrial() {
-      logMergedLatencySummary("fullR2dbc", measurement.mergedHistogram());
+      logMergedLatencySummary("fullR2dbc", measurement.mergedMeasurementHistogram());
       client.close();
     }
   }
@@ -217,10 +256,17 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     return run(state.measurement, id -> queryClientV2RawResponse(state.client, id));
   }
 
+  /** Measures transport plus production scheduler, bridge, decompression, and row decoding. */
+  @Benchmark
+  @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
+  public long cScheduledDecode(final ScheduledDecodeState state) {
+    return run(state.measurement, id -> queryScheduledDecode(state.transport, state.scheduler, id));
+  }
+
   /** Measures the complete public R2DBC point-query path as the end-to-end control. */
   @Benchmark
   @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
-  public long cFullR2dbc(final FullR2dbcState state) {
+  public long dFullR2dbc(final FullR2dbcState state) {
     return run(state.measurement, id -> state.client.query(id).map(PointResult::checksum));
   }
 
@@ -232,11 +278,49 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     return checksum;
   }
 
+  private static ClickHouseHttpTransport newRawTransport() {
+    return new ClickHouseHttpTransport(
+        BenchmarkEnvironment.httpUrl(),
+        TransportOptions.defaults()
+            .withAuthentication(
+                Authentication.basic(
+                    BenchmarkEnvironment.username(), BenchmarkEnvironment.password()))
+            .withMaxConnections(POOL_SIZE)
+            .withPendingAcquireMaxCount(RAW_TRANSPORT_PENDING_ACQUIRE_MAX_COUNT));
+  }
+
+  private static void finishIteration(
+      final String label, final Measurement measurement, final IterationParams iterationParams) {
+    final Histogram interval =
+        iterationParams.getType() == IterationType.MEASUREMENT
+            ? measurement.finishMeasurementIteration()
+            : measurement.finishWarmupIteration();
+    logLatencySummary(label, interval);
+  }
+
   private static Mono<Long> queryOurTransport(
       final ClickHouseHttpTransport transport, final long id) {
     final ClickHouseQuery query =
         ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
     return transport.query(query).asByteArray().reduce(0L, (total, chunk) -> total + chunk.length);
+  }
+
+  private static Mono<Long> queryScheduledDecode(
+      final ClickHouseHttpTransport transport,
+      final RowDecodingScheduler scheduler,
+      final long id) {
+    final ClickHouseQuery query =
+        ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
+    return transport
+        .queryWithSummary(query)
+        .flatMap(
+            response ->
+                RowBinaryDecoder.decode(
+                    response.body().asByteArray().map(ByteBuffer::wrap),
+                    scheduler,
+                    transport.responseCompression()))
+        .flatMap(decoded -> decoded.rows().single())
+        .map(ConcurrentPointQueryPipelineIsolationBenchmark::checksum);
   }
 
   private static Mono<Long> queryClientV2RawResponse(final Client client, final long id) {
@@ -261,6 +345,12 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     } catch (final Exception e) {
       throw new CompletionException(e);
     }
+  }
+
+  private static long checksum(final DecodedRow row) {
+    final String label = (String) row.valueAt(0);
+    final BigDecimal amount = (BigDecimal) row.valueAt(1);
+    return 31L * label.hashCode() + amount.unscaledValue().longValue();
   }
 
   private static void prewarmRaw(final LongFunction<Mono<Long>> query, final String description) {
@@ -305,8 +395,8 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
       return;
     }
     LOG.info(
-        "{} TRUE MERGED per-query latency (µs, n={}): mean={}, p50={}, p90={}, p95={}, p99={},"
-            + " p99.9={}, max={}",
+        "{} TRUE MERGED MEASUREMENT-ONLY per-query latency (µs, n={}): mean={}, p50={}, p90={},"
+            + " p95={}, p99={}, p99.9={}, max={}",
         label,
         histogram.getTotalCount(),
         String.format("%.1f", histogram.getMean()),
@@ -322,10 +412,8 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
 
     private final long[] ids = PointQueryTable.deterministicIds(ROWS, ID_POOL_SIZE, ID_SEED);
     private final AtomicLong idCursor = new AtomicLong();
-    private final Recorder latencyRecorder =
-        new Recorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
-    private final Histogram mergedHistogram =
-        new Histogram(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS, 3);
+    private final IterationLatencyRecorder latencyRecorder =
+        new IterationLatencyRecorder(LATENCY_HIGHEST_TRACKABLE_VALUE_MICROS);
     private final SustainedPointQueryWorkload workload;
 
     private Measurement(final int concurrency) {
@@ -333,17 +421,19 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     }
 
     private Mono<Long> execute(final LongFunction<Mono<Long>> query) {
-      return workload.execute(this::nextId, query, latencyRecorder);
+      return workload.execute(this::nextId, query, latencyRecorder::record);
     }
 
-    private Histogram finishIteration() {
-      final Histogram interval = latencyRecorder.getIntervalHistogram();
-      mergedHistogram.add(interval);
-      return interval;
+    private Histogram finishWarmupIteration() {
+      return latencyRecorder.finishWarmupIteration();
     }
 
-    private Histogram mergedHistogram() {
-      return mergedHistogram;
+    private Histogram finishMeasurementIteration() {
+      return latencyRecorder.finishMeasurementIteration();
+    }
+
+    private Histogram mergedMeasurementHistogram() {
+      return latencyRecorder.mergedMeasurementHistogram();
     }
 
     private long nextId() {

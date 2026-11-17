@@ -1,8 +1,8 @@
 package io.github.camilyed.clickhouse.r2dbc.benchmarks;
 
+import java.util.function.LongConsumer;
 import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
-import org.HdrHistogram.Recorder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -20,7 +20,7 @@ final class SustainedPointQueryWorkload {
   Mono<Long> execute(
       final LongSupplier idSupplier,
       final LongFunction<Mono<Long>> query,
-      final Recorder latencyRecorder) {
+      final LongConsumer latencyRecorder) {
     return Flux.range(0, requestCount)
         .flatMap(ignored -> timedQuery(idSupplier, query, latencyRecorder), concurrency)
         .reduce(0L, Long::sum);
@@ -29,13 +29,13 @@ final class SustainedPointQueryWorkload {
   private Mono<Long> timedQuery(
       final LongSupplier idSupplier,
       final LongFunction<Mono<Long>> query,
-      final Recorder latencyRecorder) {
+      final LongConsumer latencyRecorder) {
     final long id = idSupplier.getAsLong();
     final long startNanos = System.nanoTime();
     return query
         .apply(id)
         .doOnNext(
             ignored ->
-                latencyRecorder.recordValue(Math.max((System.nanoTime() - startNanos) / 1000, 0)));
+                latencyRecorder.accept(Math.max((System.nanoTime() - startNanos) / 1000, 0)));
   }
 }
