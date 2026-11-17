@@ -169,6 +169,9 @@ jobs:
         # allowed form of this command.
         run: "pip install --only-binary :all: matplotlib==3.10.9"
 
+      - name: Test benchmark report tooling
+        run: python3 scripts/benchmarks/test_analyze.py
+
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
