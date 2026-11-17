@@ -38,7 +38,7 @@ class SustainedPointQueryWorkloadTest {
                           .doOnNext(ignored -> completedQueries.incrementAndGet())
                           .doOnTerminate(activeQueries::decrementAndGet);
                     }),
-            latencyRecorder);
+            latencyRecorder::recordValue);
 
     // then
     StepVerifier.withVirtualTime(() -> checksum)
