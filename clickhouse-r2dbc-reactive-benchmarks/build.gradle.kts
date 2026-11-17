@@ -38,6 +38,12 @@ dependencies {
 
     runtimeOnly(libs.slf4j.simple)
 
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.assertj.core)
+    testImplementation(libs.reactor.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
+
     // Silences (and actually fixes, not just hides) a macOS-only warning seen during benchmark runs:
     // "Unable to load io.netty.resolver.dns.macos.MacOSDnsServerAddressStreamProvider ...
     // UnsatisfiedLinkError". Reactor Netty's HttpClient uses Netty's async DNS resolver by default,
