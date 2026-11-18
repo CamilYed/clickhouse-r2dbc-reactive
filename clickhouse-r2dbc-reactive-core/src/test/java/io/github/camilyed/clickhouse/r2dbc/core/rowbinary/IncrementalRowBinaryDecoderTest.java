@@ -8,10 +8,16 @@ import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
@@ -223,5 +229,68 @@ class IncrementalRowBinaryDecoderTest {
               final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signal;
               assertThat(row.value().valueAt(0)).isEqualTo(7);
             });
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("scalarValues")
+  void shouldDecodeScalarValuesWithClientV2CompatibleJavaTypes(
+      final String scenario, final String type, final byte[] rowBytes, final Object expected) {
+    // given
+    final byte[] wireBytes =
+        RowBinaryFixtures.rowBinaryWithNamesAndTypes(
+            new String[] {"value"}, new String[] {type}, rowBytes);
+    final Flux<ByteBuffer> source =
+        Flux.range(0, wireBytes.length)
+            .map(index -> ByteBuffer.wrap(new byte[] {wireBytes[index]}));
+
+    // when
+    final List<RowBinaryDecodeSignal> signals =
+        IncrementalRowBinaryDecoder.decode(source).collectList().block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(signals).hasSize(2);
+    final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signals.get(1);
+    assertThat(row.value().valueAt(0)).isEqualTo(expected);
+  }
+
+  private static Stream<Arguments> scalarValues() {
+    return Stream.of(
+        Arguments.of("Int8", "Int8", new byte[] {-1}, (byte) -1),
+        Arguments.of("Int16", "Int16", new byte[] {-2, -1}, (short) -2),
+        Arguments.of("UInt16", "UInt16", new byte[] {-1, -1}, 65_535),
+        Arguments.of("Int32", "Int32", littleEndian(-3, Integer.BYTES), -3),
+        Arguments.of("UInt32", "UInt32", new byte[] {-1, -1, -1, -1}, 4_294_967_295L),
+        Arguments.of("Int64", "Int64", littleEndian(-4, Long.BYTES), -4L),
+        Arguments.of("Float32", "Float32", littleEndian(Float.floatToIntBits(1.25F), 4), 1.25F),
+        Arguments.of("Float64", "Float64", littleEndian(Double.doubleToLongBits(-2.5D), 8), -2.5D),
+        Arguments.of("Bool", "Bool", new byte[] {1}, true),
+        Arguments.of("Int128", "Int128", filled(16, (byte) -1), BigInteger.valueOf(-1)),
+        Arguments.of(
+            "UInt128",
+            "UInt128",
+            filled(16, (byte) -1),
+            new BigInteger("340282366920938463463374607431768211455")),
+        Arguments.of(
+            "FixedString", "FixedString(4)", "test".getBytes(StandardCharsets.UTF_8), "test"),
+        Arguments.of("Decimal32", "Decimal32(2)", littleEndian(1_234, 4), new BigDecimal("12.34")),
+        Arguments.of(
+            "Decimal128", "Decimal128(4)", littleEndian(123_456, 16), new BigDecimal("12.3456")));
+  }
+
+  private static byte[] littleEndian(final long value, final int width) {
+    final byte[] bytes = new byte[width];
+    final ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+    if (width >= Long.BYTES) {
+      buffer.putLong(value);
+    } else {
+      buffer.putInt((int) value);
+    }
+    return bytes;
+  }
+
+  private static byte[] filled(final int size, final byte value) {
+    final byte[] bytes = new byte[size];
+    java.util.Arrays.fill(bytes, value);
+    return bytes;
   }
 }

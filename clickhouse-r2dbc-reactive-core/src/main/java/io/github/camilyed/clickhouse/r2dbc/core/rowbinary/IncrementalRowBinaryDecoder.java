@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
@@ -148,16 +149,66 @@ final class IncrementalRowBinaryDecoder {
       if ("Int32".equals(type)) {
         return new Int32Decoder();
       }
-      if ("UInt8".equals(type)) {
-        return new UInt8Decoder();
-      }
-      if ("UInt64".equals(type)) {
-        return new UInt64Decoder();
-      }
-      if ("String".equals(type)) {
-        return new StringDecoder(MAX_VALUE_BYTES);
+      return switch (type) {
+        case "Int8" -> new FixedWidthDecoder(1, bytes -> bytes[0]);
+        case "UInt8" -> new UInt8Decoder();
+        case "Int16" -> new FixedWidthDecoder(2, bytes -> (short) readIntLE(bytes));
+        case "UInt16" -> new FixedWidthDecoder(2, bytes -> readIntLE(bytes) & 0xFFFF);
+        case "UInt32" -> new FixedWidthDecoder(4, bytes -> readIntLE(bytes) & 0xFFFFFFFFL);
+        case "Int64" -> new FixedWidthDecoder(8, Parser::readLongLE);
+        case "UInt64" -> new UInt64Decoder();
+        case "Int128", "Int256" ->
+            new FixedWidthDecoder(integerByteWidth(type), bytes -> new BigInteger(reverse(bytes)));
+        case "UInt128", "UInt256" ->
+            new FixedWidthDecoder(
+                integerByteWidth(type), bytes -> new BigInteger(1, reverse(bytes)));
+        case "Float32" -> new FixedWidthDecoder(4, bytes -> Float.intBitsToFloat(readIntLE(bytes)));
+        case "Float64" ->
+            new FixedWidthDecoder(8, bytes -> Double.longBitsToDouble(readLongLE(bytes)));
+        case "Bool" -> new FixedWidthDecoder(1, bytes -> bytes[0] == 1);
+        case "String" -> new StringDecoder(MAX_VALUE_BYTES);
+        default -> decoderForParameterizedType(type);
+      };
+    }
+
+    private static IncrementalValueDecoder decoderForParameterizedType(final String type) {
+      if (type.startsWith("FixedString(") && type.endsWith(")")) {
+        final int length =
+            Integer.parseInt(type.substring("FixedString(".length(), type.length() - 1));
+        if (length < 0 || length > MAX_VALUE_BYTES) {
+          throw new IllegalArgumentException("FixedString length exceeds limit: " + length);
+        }
+        return new FixedWidthDecoder(length, bytes -> new String(bytes, StandardCharsets.UTF_8));
       }
       return DecimalDecoder.forType(type);
+    }
+
+    private static int integerByteWidth(final String type) {
+      return type.endsWith("128") ? 16 : 32;
+    }
+
+    private static int readIntLE(final byte[] bytes) {
+      int value = 0;
+      for (int index = bytes.length - 1; index >= 0; index--) {
+        value = (value << 8) | (bytes[index] & 0xFF);
+      }
+      return value;
+    }
+
+    private static long readLongLE(final byte[] bytes) {
+      long value = 0;
+      for (int index = bytes.length - 1; index >= 0; index--) {
+        value = (value << 8) | (bytes[index] & 0xFFL);
+      }
+      return value;
+    }
+
+    private static byte[] reverse(final byte[] bytes) {
+      final byte[] reversed = new byte[bytes.length];
+      for (int index = 0; index < bytes.length; index++) {
+        reversed[index] = bytes[bytes.length - 1 - index];
+      }
+      return reversed;
     }
 
     private Flux<RowBinaryDecodeSignal> finish() {
@@ -255,6 +306,37 @@ final class IncrementalRowBinaryDecoder {
     }
   }
 
+  private static final class FixedWidthDecoder implements IncrementalValueDecoder {
+
+    private final byte[] bytes;
+    private final Function<byte[], Object> mapping;
+
+    private int offset;
+
+    private FixedWidthDecoder(final int width, final Function<byte[], Object> mapping) {
+      bytes = new byte[width];
+      this.mapping = mapping;
+    }
+
+    @Override
+    public DecodeProgress decode(final ByteBuffer source) {
+      final int copied = Math.min(source.remaining(), bytes.length - offset);
+      source.get(bytes, offset, copied);
+      offset += copied;
+      if (offset != bytes.length) {
+        return NeedMore.INSTANCE;
+      }
+      final Object value = mapping.apply(bytes);
+      offset = 0;
+      return new DecodedValue(value);
+    }
+
+    @Override
+    public boolean isIdle() {
+      return offset == 0;
+    }
+  }
+
   private static final class Int32Decoder implements IncrementalValueDecoder {
 
     private final byte[] bytes = new byte[Integer.BYTES];
@@ -325,6 +407,7 @@ final class IncrementalRowBinaryDecoder {
   private static final class DecimalDecoder implements IncrementalValueDecoder {
 
     private static final Pattern TYPE = Pattern.compile("Decimal\\((\\d+),\\s*(\\d+)\\)");
+    private static final Pattern NAMED_TYPE = Pattern.compile("Decimal(32|64|128|256)\\((\\d+)\\)");
 
     private final byte[] littleEndianBytes;
     private final int scale;
@@ -338,13 +421,19 @@ final class IncrementalRowBinaryDecoder {
 
     private static DecimalDecoder forType(final String type) {
       final Matcher matcher = TYPE.matcher(type);
-      if (!matcher.matches()) {
-        throw new UnsupportedOperationException(
-            "Incremental RowBinary decoder does not support type: " + type);
+      if (matcher.matches()) {
+        final int precision = Integer.parseInt(matcher.group(1));
+        final int scale = Integer.parseInt(matcher.group(2));
+        return new DecimalDecoder(byteWidthFor(precision), scale);
       }
-      final int precision = Integer.parseInt(matcher.group(1));
-      final int scale = Integer.parseInt(matcher.group(2));
-      return new DecimalDecoder(byteWidthFor(precision), scale);
+      final Matcher namedMatcher = NAMED_TYPE.matcher(type);
+      if (namedMatcher.matches()) {
+        final int width = Integer.parseInt(namedMatcher.group(1)) / Byte.SIZE;
+        final int scale = Integer.parseInt(namedMatcher.group(2));
+        return new DecimalDecoder(width, scale);
+      }
+      throw new UnsupportedOperationException(
+          "Incremental RowBinary decoder does not support type: " + type);
     }
 
     private static int byteWidthFor(final int precision) {
