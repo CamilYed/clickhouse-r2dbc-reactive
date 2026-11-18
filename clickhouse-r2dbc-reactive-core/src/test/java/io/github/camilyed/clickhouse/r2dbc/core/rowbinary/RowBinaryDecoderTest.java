@@ -7,8 +7,10 @@ import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import io.github.camilyed.clickhouse.r2dbc.core.ResponseCompression;
+import io.github.camilyed.clickhouse.r2dbc.core.fakes.ClickHouseCompressedFixtures;
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
@@ -45,6 +47,31 @@ class RowBinaryDecoderTest {
 
     // then
     assertThat(row.valueAt(0)).isEqualTo((short) 1);
+  }
+
+  @Test
+  void shouldExposeTheIncrementalCompressedDecodePathWithoutAScheduler() {
+    // given
+    final byte[] compressed =
+        ClickHouseCompressedFixtures.compressAsSingleBlock(
+            RowBinaryFixtures.stringAndDecimalRowBinaryWithNamesAndTypes());
+    final Flux<ByteBuffer> source =
+        Flux.range(0, compressed.length)
+            .map(index -> ByteBuffer.wrap(new byte[] {compressed[index]}));
+
+    // when
+    final DecodedResult result =
+        RowBinaryDecoder.decodeIncrementally(source, ResponseCompression.LZ4)
+            .block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(result.columns())
+        .containsExactly(
+            new ColumnDescriptor("label", "String"),
+            new ColumnDescriptor("amount", "Decimal(18, 4)"));
+    final DecodedRow row = result.rows().blockFirst(Duration.ofSeconds(5));
+    assertThat(row.valueAt(0)).isEqualTo("label-41");
+    assertThat(row.valueAt(1)).isEqualTo(new BigDecimal("42.1234"));
   }
 
   @Test

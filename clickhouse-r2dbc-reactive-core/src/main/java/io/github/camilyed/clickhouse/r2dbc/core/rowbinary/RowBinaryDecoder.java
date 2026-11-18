@@ -132,6 +132,30 @@ public final class RowBinaryDecoder {
                         .subscribeOn(reactorScheduler)));
   }
 
+  /**
+   * Decodes supported scalar {@code RowBinaryWithNamesAndTypes} responses directly from reactive
+   * byte buffers, without adapting them to an {@link InputStream} or moving work to a {@link
+   * RowDecodingScheduler}. Compressed responses are decompressed block-by-block and may contain
+   * either LZ4 or ZSTD blocks.
+   *
+   * <p>This path currently supports integer and floating-point scalar types, {@code Bool}, {@code
+   * String}, {@code FixedString}, {@code Decimal}, and {@code Nullable} wrappers. An unsupported
+   * type fails explicitly; callers that require the complete client-v2 type matrix must continue
+   * using {@link #decode} until the production fallback boundary is implemented.
+   *
+   * <p>The returned {@link Mono} consumes only the schema. Subscribing to {@link
+   * DecodedResult#rows()} resumes the same upstream subscription with downstream row demand; it
+   * neither replays nor aggregates the response body.
+   */
+  public static Mono<DecodedResult> decodeIncrementally(
+      final Flux<ByteBuffer> source, final ResponseCompression compression) {
+    final Flux<ByteBuffer> decompressed =
+        compression == ResponseCompression.LZ4
+            ? IncrementalClickHouseResponseDecompressor.decompress(source)
+            : source;
+    return IncrementalRowBinaryDecoder.decodeResult(decompressed);
+  }
+
   private static ListDecodingRowBinaryReader newReader(
       final Flux<ByteBuffer> source, final ResponseCompression compression) {
     final InputStream body = FluxInputStreamBridge.subscribeTo(source, RESPONSE_CHUNK_DEMAND);
