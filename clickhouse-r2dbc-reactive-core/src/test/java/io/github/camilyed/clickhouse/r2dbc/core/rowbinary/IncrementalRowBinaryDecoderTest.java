@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
+import io.github.camilyed.clickhouse.r2dbc.core.fakes.ClickHouseCompressedFixtures;
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -150,5 +151,40 @@ class IncrementalRowBinaryDecoderTest {
             new RowBinaryDecodeSignal.Schema(List.of(new ColumnDescriptor("label", "String"))))
         .expectErrorMessage("Truncated RowBinaryWithNamesAndTypes response")
         .verify(Duration.ofSeconds(5));
+  }
+
+  @Test
+  void shouldDecodeACompressedPointQueryResponseFragmentedAcrossEveryWireByte() {
+    // given
+    final byte[] compressed =
+        ClickHouseCompressedFixtures.compressAsSingleBlock(
+            RowBinaryFixtures.stringAndDecimalRowBinaryWithNamesAndTypes());
+    final Flux<ByteBuffer> source =
+        Flux.range(0, compressed.length)
+            .map(index -> ByteBuffer.wrap(new byte[] {compressed[index]}));
+
+    // when
+    final List<RowBinaryDecodeSignal> signals =
+        IncrementalRowBinaryDecoder.decode(
+                IncrementalClickHouseResponseDecompressor.decompress(source))
+            .collectList()
+            .block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(signals)
+        .satisfiesExactly(
+            signal ->
+                assertThat(signal)
+                    .isEqualTo(
+                        new RowBinaryDecodeSignal.Schema(
+                            List.of(
+                                new ColumnDescriptor("label", "String"),
+                                new ColumnDescriptor("amount", "Decimal(18, 4)")))),
+            signal -> {
+              assertThat(signal).isInstanceOf(RowBinaryDecodeSignal.Row.class);
+              final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signal;
+              assertThat(row.value().valueAt(0)).isEqualTo("label-41");
+              assertThat(row.value().valueAt(1)).isEqualTo(new BigDecimal("42.1234"));
+            });
   }
 }
