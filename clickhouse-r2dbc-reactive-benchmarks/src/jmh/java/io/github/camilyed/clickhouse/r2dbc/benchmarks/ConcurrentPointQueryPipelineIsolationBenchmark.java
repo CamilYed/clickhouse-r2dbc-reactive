@@ -56,9 +56,11 @@ import reactor.core.publisher.Mono;
  *   <li>{@link #aOurTransportRawResponse(OurTransportRawResponseState)} vs {@link
  *       #cScheduledDecode(ScheduledDecodeState)}: how much tail appears when the production
  *       scheduler, bridge, decompressor, and row decoder are added to the same transport?
- *   <li>{@link #cScheduledDecode(ScheduledDecodeState)} vs {@link #dFullR2dbc(FullR2dbcState)}: how
- *       much tail remains attributable to the connector and R2DBC Statement/Result/Row path after
- *       transport and decoding are already accounted for?
+ *   <li>{@link #cScheduledDecode(ScheduledDecodeState)} vs {@link
+ *       #dIncrementalDecode(IncrementalDecodeState)}: what changes when the blocking bridge and
+ *       decode-scheduler admission boundary are replaced by the incremental buffer parser?
+ *   <li>{@link #dIncrementalDecode(IncrementalDecodeState)} vs {@link #eFullR2dbc(FullR2dbcState)}:
+ *       the experimental path against the current full connector.
  * </ol>
  *
  * <p>Every benchmark method has its own state, client, pool, ID cursor, and latency recorder. JMH
@@ -211,6 +213,37 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     }
   }
 
+  /** This driver's transport plus the incremental, scheduler-free scalar decoder. */
+  @State(Scope.Benchmark)
+  public static class IncrementalDecodeState {
+
+    @Param({"8", "32", "128"})
+    public int concurrency;
+
+    private ClickHouseHttpTransport transport;
+    private Measurement measurement;
+
+    @Setup(Level.Trial)
+    public void setUpTrial() {
+      BenchmarkEnvironment.start();
+      PointQueryTable.seed(ROWS);
+      transport = newRawTransport();
+      prewarm(id -> queryIncrementalDecode(transport, id), "incremental decoder");
+      measurement = new Measurement(concurrency);
+    }
+
+    @TearDown(Level.Iteration)
+    public void tearDownIteration(final IterationParams iterationParams) {
+      finishIteration("incrementalDecode", measurement, iterationParams);
+    }
+
+    @TearDown(Level.Trial)
+    public void tearDownTrial() {
+      logMergedLatencySummary("incrementalDecode", measurement.mergedMeasurementHistogram());
+      transport.disposeLater().block(Duration.ofSeconds(10));
+    }
+  }
+
   /** Full public R2DBC path, retained as the concurrent end-to-end control. */
   @State(Scope.Benchmark)
   public static class FullR2dbcState {
@@ -263,10 +296,17 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
     return run(state.measurement, id -> queryScheduledDecode(state.transport, state.scheduler, id));
   }
 
+  /** Measures transport plus incremental decompression and RowBinary decoding, without a hop. */
+  @Benchmark
+  @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
+  public long dIncrementalDecode(final IncrementalDecodeState state) {
+    return run(state.measurement, id -> queryIncrementalDecode(state.transport, id));
+  }
+
   /** Measures the complete public R2DBC point-query path as the end-to-end control. */
   @Benchmark
   @OperationsPerInvocation(REQUESTS_PER_INVOCATION)
-  public long dFullR2dbc(final FullR2dbcState state) {
+  public long eFullR2dbc(final FullR2dbcState state) {
     return run(state.measurement, id -> state.client.query(id).map(PointResult::checksum));
   }
 
@@ -318,6 +358,21 @@ public class ConcurrentPointQueryPipelineIsolationBenchmark {
                 RowBinaryDecoder.decode(
                     response.body().asByteArray().map(ByteBuffer::wrap),
                     scheduler,
+                    transport.responseCompression()))
+        .flatMap(decoded -> decoded.rows().single())
+        .map(ConcurrentPointQueryPipelineIsolationBenchmark::checksum);
+  }
+
+  private static Mono<Long> queryIncrementalDecode(
+      final ClickHouseHttpTransport transport, final long id) {
+    final ClickHouseQuery query =
+        ClickHouseQuery.of(SELECT_BY_ID_SQL).withParameters(Map.of("id", id));
+    return transport
+        .queryWithSummary(query)
+        .flatMap(
+            response ->
+                RowBinaryDecoder.decodeIncrementally(
+                    response.body().asByteArray().map(ByteBuffer::wrap),
                     transport.responseCompression()))
         .flatMap(decoded -> decoded.rows().single())
         .map(ConcurrentPointQueryPipelineIsolationBenchmark::checksum);
