@@ -187,4 +187,41 @@ class IncrementalRowBinaryDecoderTest {
               assertThat(row.value().valueAt(1)).isEqualTo(new BigDecimal("42.1234"));
             });
   }
+
+  @Test
+  void shouldDistinguishANullValueFromAValueThatNeedsMoreWireBytes() {
+    // given
+    final byte[] wireBytes =
+        RowBinaryFixtures.rowBinaryWithNamesAndTypes(
+            new String[] {"value"},
+            new String[] {"Nullable(Int32)"},
+            new byte[] {0x01},
+            new byte[] {0x00, 0x07, 0x00, 0x00, 0x00});
+    final Flux<ByteBuffer> source =
+        Flux.range(0, wireBytes.length)
+            .map(index -> ByteBuffer.wrap(new byte[] {wireBytes[index]}));
+
+    // when
+    final List<RowBinaryDecodeSignal> signals =
+        IncrementalRowBinaryDecoder.decode(source).collectList().block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(signals)
+        .satisfiesExactly(
+            signal ->
+                assertThat(signal)
+                    .isEqualTo(
+                        new RowBinaryDecodeSignal.Schema(
+                            List.of(new ColumnDescriptor("value", "Nullable(Int32)")))),
+            signal -> {
+              assertThat(signal).isInstanceOf(RowBinaryDecodeSignal.Row.class);
+              final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signal;
+              assertThat(row.value().valueAt(0)).isNull();
+            },
+            signal -> {
+              assertThat(signal).isInstanceOf(RowBinaryDecodeSignal.Row.class);
+              final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signal;
+              assertThat(row.value().valueAt(0)).isEqualTo(7);
+            });
+  }
 }

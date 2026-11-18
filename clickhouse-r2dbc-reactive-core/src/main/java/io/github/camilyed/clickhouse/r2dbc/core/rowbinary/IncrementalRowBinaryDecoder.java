@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.jspecify.annotations.Nullable;
 import reactor.core.publisher.Flux;
 
 final class IncrementalRowBinaryDecoder {
@@ -124,11 +125,11 @@ final class IncrementalRowBinaryDecoder {
     }
 
     private Optional<RowBinaryDecodeSignal> decodeRow(final ByteBuffer source) {
-      final Optional<Object> decoded = columnDecoders[rowColumnIndex].decode(source);
-      if (decoded.isEmpty()) {
+      final DecodeProgress decoded = columnDecoders[rowColumnIndex].decode(source);
+      if (decoded == NeedMore.INSTANCE) {
         return Optional.empty();
       }
-      rowValues[rowColumnIndex] = decoded.get();
+      rowValues[rowColumnIndex] = ((DecodedValue) decoded).value();
       rowColumnIndex++;
       if (rowColumnIndex != columnCount) {
         return Optional.empty();
@@ -140,6 +141,13 @@ final class IncrementalRowBinaryDecoder {
     }
 
     private static IncrementalValueDecoder decoderFor(final String type) {
+      if (type.startsWith("Nullable(") && type.endsWith(")")) {
+        return new NullableDecoder(
+            decoderFor(type.substring("Nullable(".length(), type.length() - 1)));
+      }
+      if ("Int32".equals(type)) {
+        return new Int32Decoder();
+      }
       if ("UInt8".equals(type)) {
         return new UInt8Decoder();
       }
@@ -170,19 +178,27 @@ final class IncrementalRowBinaryDecoder {
 
   private interface IncrementalValueDecoder {
 
-    Optional<Object> decode(ByteBuffer source);
+    DecodeProgress decode(ByteBuffer source);
 
     boolean isIdle();
+  }
+
+  private sealed interface DecodeProgress permits DecodedValue, NeedMore {}
+
+  private record DecodedValue(@Nullable Object value) implements DecodeProgress {}
+
+  private enum NeedMore implements DecodeProgress {
+    INSTANCE
   }
 
   private static final class UInt8Decoder implements IncrementalValueDecoder {
 
     @Override
-    public Optional<Object> decode(final ByteBuffer source) {
+    public DecodeProgress decode(final ByteBuffer source) {
       if (!source.hasRemaining()) {
-        return Optional.empty();
+        return NeedMore.INSTANCE;
       }
-      return Optional.of((short) (source.get() & 0xFF));
+      return new DecodedValue((short) (source.get() & 0xFF));
     }
 
     @Override
@@ -200,8 +216,9 @@ final class IncrementalRowBinaryDecoder {
     }
 
     @Override
-    public Optional<Object> decode(final ByteBuffer source) {
-      return delegate.decode(source).map(value -> value);
+    public DecodeProgress decode(final ByteBuffer source) {
+      final Optional<String> decoded = delegate.decode(source);
+      return decoded.<DecodeProgress>map(DecodedValue::new).orElse(NeedMore.INSTANCE);
     }
 
     @Override
@@ -218,23 +235,90 @@ final class IncrementalRowBinaryDecoder {
     private int offset;
 
     @Override
-    public Optional<Object> decode(final ByteBuffer source) {
+    public DecodeProgress decode(final ByteBuffer source) {
       final int copied = Math.min(source.remaining(), littleEndianBytes.length - offset);
       source.get(littleEndianBytes, offset, copied);
       offset += copied;
       if (offset != littleEndianBytes.length) {
-        return Optional.empty();
+        return NeedMore.INSTANCE;
       }
       for (int index = 0; index < littleEndianBytes.length; index++) {
         bigEndianBytes[index] = littleEndianBytes[littleEndianBytes.length - 1 - index];
       }
       offset = 0;
-      return Optional.of(new BigInteger(1, bigEndianBytes));
+      return new DecodedValue(new BigInteger(1, bigEndianBytes));
     }
 
     @Override
     public boolean isIdle() {
       return offset == 0;
+    }
+  }
+
+  private static final class Int32Decoder implements IncrementalValueDecoder {
+
+    private final byte[] bytes = new byte[Integer.BYTES];
+
+    private int offset;
+
+    @Override
+    public DecodeProgress decode(final ByteBuffer source) {
+      final int copied = Math.min(source.remaining(), bytes.length - offset);
+      source.get(bytes, offset, copied);
+      offset += copied;
+      if (offset != bytes.length) {
+        return NeedMore.INSTANCE;
+      }
+      final int value =
+          (bytes[0] & 0xFF)
+              | ((bytes[1] & 0xFF) << 8)
+              | ((bytes[2] & 0xFF) << 16)
+              | ((bytes[3] & 0xFF) << 24);
+      offset = 0;
+      return new DecodedValue(value);
+    }
+
+    @Override
+    public boolean isIdle() {
+      return offset == 0;
+    }
+  }
+
+  private static final class NullableDecoder implements IncrementalValueDecoder {
+
+    private final IncrementalValueDecoder delegate;
+
+    private boolean valueFollows;
+
+    private NullableDecoder(final IncrementalValueDecoder delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public DecodeProgress decode(final ByteBuffer source) {
+      if (!valueFollows) {
+        if (!source.hasRemaining()) {
+          return NeedMore.INSTANCE;
+        }
+        final int marker = source.get() & 0xFF;
+        if (marker == 1) {
+          return new DecodedValue(null);
+        }
+        if (marker != 0) {
+          throw new IllegalArgumentException("Invalid RowBinary Nullable marker: " + marker);
+        }
+        valueFollows = true;
+      }
+      final DecodeProgress decoded = delegate.decode(source);
+      if (decoded instanceof DecodedValue) {
+        valueFollows = false;
+      }
+      return decoded;
+    }
+
+    @Override
+    public boolean isIdle() {
+      return !valueFollows && delegate.isIdle();
     }
   }
 
@@ -281,19 +365,19 @@ final class IncrementalRowBinaryDecoder {
     }
 
     @Override
-    public Optional<Object> decode(final ByteBuffer source) {
+    public DecodeProgress decode(final ByteBuffer source) {
       final int copied = Math.min(source.remaining(), littleEndianBytes.length - offset);
       source.get(littleEndianBytes, offset, copied);
       offset += copied;
       if (offset != littleEndianBytes.length) {
-        return Optional.empty();
+        return NeedMore.INSTANCE;
       }
       final byte[] bigEndianBytes = new byte[littleEndianBytes.length];
       for (int index = 0; index < littleEndianBytes.length; index++) {
         bigEndianBytes[index] = littleEndianBytes[littleEndianBytes.length - 1 - index];
       }
       offset = 0;
-      return Optional.of(new BigDecimal(new BigInteger(bigEndianBytes), scale));
+      return new DecodedValue(new BigDecimal(new BigInteger(bigEndianBytes), scale));
     }
 
     @Override
