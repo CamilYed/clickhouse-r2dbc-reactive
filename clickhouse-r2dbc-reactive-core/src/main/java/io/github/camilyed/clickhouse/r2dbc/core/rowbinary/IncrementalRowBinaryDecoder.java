@@ -1,6 +1,7 @@
 package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -10,11 +11,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.jspecify.annotations.Nullable;
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoSink;
 
 final class IncrementalRowBinaryDecoder {
 
@@ -26,6 +33,132 @@ final class IncrementalRowBinaryDecoder {
           final Parser parser = new Parser();
           return source.concatMap(parser::decode, 1).concatWith(Flux.defer(parser::finish));
         });
+  }
+
+  static Mono<DecodedResult> decodeResult(final Flux<ByteBuffer> source) {
+    return Mono.create(
+        sink -> {
+          final DecodedResultHandoff handoff = new DecodedResultHandoff(sink);
+          sink.onCancel(handoff::cancel);
+          decode(source).subscribe(handoff);
+        });
+  }
+
+  private static final class DecodedResultHandoff
+      implements Subscriber<RowBinaryDecodeSignal>, Publisher<DecodedRow>, Subscription {
+
+    private final MonoSink<DecodedResult> resultSink;
+    private final AtomicBoolean rowsSubscribed = new AtomicBoolean();
+
+    private volatile @Nullable Subscription upstream;
+    private volatile @Nullable Subscriber<? super DecodedRow> rowsDownstream;
+    private volatile boolean schemaReceived;
+    private volatile boolean cancelled;
+
+    private DecodedResultHandoff(final MonoSink<DecodedResult> resultSink) {
+      this.resultSink = resultSink;
+    }
+
+    @Override
+    public void onSubscribe(final Subscription subscription) {
+      if (upstream != null) {
+        subscription.cancel();
+        return;
+      }
+      upstream = subscription;
+      if (cancelled) {
+        subscription.cancel();
+      } else {
+        subscription.request(1);
+      }
+    }
+
+    @Override
+    public void onNext(final RowBinaryDecodeSignal signal) {
+      if (!schemaReceived && signal instanceof RowBinaryDecodeSignal.Schema schema) {
+        schemaReceived = true;
+        resultSink.success(new DecodedResult(schema.columns(), Flux.from(this)));
+        return;
+      }
+      if (signal instanceof RowBinaryDecodeSignal.Row row) {
+        final Subscriber<? super DecodedRow> downstream = rowsDownstream;
+        if (downstream == null) {
+          cancel();
+          resultSink.error(new IllegalStateException("Row arrived before rows were subscribed"));
+        } else {
+          downstream.onNext(row.value());
+        }
+        return;
+      }
+      cancel();
+      resultSink.error(new IllegalStateException("RowBinary schema was emitted more than once"));
+    }
+
+    @Override
+    public void onError(final Throwable failure) {
+      final Subscriber<? super DecodedRow> downstream = rowsDownstream;
+      if (!schemaReceived || downstream == null) {
+        resultSink.error(failure);
+      } else {
+        downstream.onError(failure);
+      }
+    }
+
+    @Override
+    public void onComplete() {
+      final Subscriber<? super DecodedRow> downstream = rowsDownstream;
+      if (!schemaReceived) {
+        resultSink.success(new DecodedResult(List.of(), Flux.empty()));
+      } else if (downstream != null) {
+        downstream.onComplete();
+      }
+    }
+
+    @Override
+    public void subscribe(final Subscriber<? super DecodedRow> subscriber) {
+      if (!rowsSubscribed.compareAndSet(false, true)) {
+        subscriber.onSubscribe(EmptySubscription.INSTANCE);
+        subscriber.onError(new IllegalStateException("Decoded rows can only be consumed once"));
+        return;
+      }
+      rowsDownstream = subscriber;
+      subscriber.onSubscribe(this);
+    }
+
+    @Override
+    public void request(final long demand) {
+      if (demand <= 0) {
+        cancel();
+        final Subscriber<? super DecodedRow> downstream = rowsDownstream;
+        if (downstream != null) {
+          downstream.onError(new IllegalArgumentException("Demand must be positive"));
+        }
+        return;
+      }
+      final Subscription subscription = upstream;
+      if (subscription != null) {
+        subscription.request(demand);
+      }
+    }
+
+    @Override
+    public void cancel() {
+      cancelled = true;
+      final Subscription subscription = upstream;
+      if (subscription != null) {
+        subscription.cancel();
+      }
+    }
+  }
+
+  private enum EmptySubscription implements Subscription {
+    INSTANCE;
+
+    @Override
+    public void request(final long demand) {}
+
+    @Override
+    public void cancel() {}
   }
 
   private enum Stage {

@@ -3,6 +3,7 @@ package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
+import io.github.camilyed.clickhouse.r2dbc.core.DecodedResult;
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.ClickHouseCompressedFixtures;
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
 import java.math.BigDecimal;
@@ -251,6 +252,31 @@ class IncrementalRowBinaryDecoderTest {
     assertThat(signals).hasSize(2);
     final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signals.get(1);
     assertThat(row.value().valueAt(0)).isEqualTo(expected);
+  }
+
+  @Test
+  void shouldPauseTheSameSourceSubscriptionBetweenSchemaAndRowConsumption() {
+    // given
+    final AtomicBoolean sourceCancelled = new AtomicBoolean();
+    final ByteBuffer body =
+        ByteBuffer.wrap(RowBinaryFixtures.twoRowsOfUInt8RowBinaryWithNamesAndTypes());
+    final Flux<ByteBuffer> source =
+        Flux.just(body).concatWith(Flux.never()).doOnCancel(() -> sourceCancelled.set(true));
+
+    // when
+    final DecodedResult result =
+        IncrementalRowBinaryDecoder.decodeResult(source).block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(result.columns()).containsExactly(new ColumnDescriptor("1", "UInt8"));
+    assertThat(body.remaining()).isEqualTo(2);
+    // and - one row request resumes the same source, while cancellation leaves row two unread
+    StepVerifier.create(result.rows(), 1)
+        .assertNext(row -> assertThat(row.valueAt(0)).isEqualTo((short) 1))
+        .thenCancel()
+        .verify(Duration.ofSeconds(5));
+    assertThat(sourceCancelled).isTrue();
+    assertThat(body.remaining()).isEqualTo(1);
   }
 
   private static Stream<Arguments> scalarValues() {
