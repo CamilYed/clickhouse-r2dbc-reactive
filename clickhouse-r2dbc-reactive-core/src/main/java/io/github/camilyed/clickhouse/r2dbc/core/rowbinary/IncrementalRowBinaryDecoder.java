@@ -2,12 +2,16 @@ package io.github.camilyed.clickhouse.r2dbc.core.rowbinary;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import io.github.camilyed.clickhouse.r2dbc.core.DecodedRow;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import reactor.core.publisher.Flux;
 
 final class IncrementalRowBinaryDecoder {
@@ -33,6 +37,7 @@ final class IncrementalRowBinaryDecoder {
 
     private static final int MAX_COLUMN_COUNT = 65_536;
     private static final int MAX_HEADER_STRING_BYTES = 1024 * 1024;
+    private static final int MAX_VALUE_BYTES = 16 * 1024 * 1024;
 
     private final VarUIntDecoder varUInt = new VarUIntDecoder();
     private final LengthPrefixedStringDecoder string =
@@ -44,6 +49,7 @@ final class IncrementalRowBinaryDecoder {
     private int columnCount;
     private int rowColumnIndex;
     private Object[] rowValues = new Object[0];
+    private IncrementalValueDecoder[] columnDecoders = new IncrementalValueDecoder[0];
 
     private Flux<RowBinaryDecodeSignal> decode(final ByteBuffer chunk) {
       return Flux.generate(
@@ -84,6 +90,7 @@ final class IncrementalRowBinaryDecoder {
       }
       columnCount = (int) value;
       rowValues = new Object[columnCount];
+      columnDecoders = new IncrementalValueDecoder[columnCount];
       stage = columnCount == 0 ? Stage.ROWS : Stage.COLUMN_NAMES;
       if (columnCount == 0) {
         return Optional.of(new RowBinaryDecodeSignal.Schema(List.of()));
@@ -109,10 +116,7 @@ final class IncrementalRowBinaryDecoder {
       final List<ColumnDescriptor> columns = new ArrayList<>(columnCount);
       for (int index = 0; index < columnCount; index++) {
         final String type = columnTypes.get(index);
-        if (!"UInt8".equals(type)) {
-          throw new UnsupportedOperationException(
-              "Incremental RowBinary decoder does not support type: " + type);
-        }
+        columnDecoders[index] = decoderFor(type);
         columns.add(new ColumnDescriptor(columnNames.get(index), type));
       }
       stage = Stage.ROWS;
@@ -120,7 +124,11 @@ final class IncrementalRowBinaryDecoder {
     }
 
     private Optional<RowBinaryDecodeSignal> decodeRow(final ByteBuffer source) {
-      rowValues[rowColumnIndex] = (short) (source.get() & 0xFF);
+      final Optional<Object> decoded = columnDecoders[rowColumnIndex].decode(source);
+      if (decoded.isEmpty()) {
+        return Optional.empty();
+      }
+      rowValues[rowColumnIndex] = decoded.get();
       rowColumnIndex++;
       if (rowColumnIndex != columnCount) {
         return Optional.empty();
@@ -131,15 +139,166 @@ final class IncrementalRowBinaryDecoder {
       return Optional.of(new RowBinaryDecodeSignal.Row(row));
     }
 
+    private static IncrementalValueDecoder decoderFor(final String type) {
+      if ("UInt8".equals(type)) {
+        return new UInt8Decoder();
+      }
+      if ("UInt64".equals(type)) {
+        return new UInt64Decoder();
+      }
+      if ("String".equals(type)) {
+        return new StringDecoder(MAX_VALUE_BYTES);
+      }
+      return DecimalDecoder.forType(type);
+    }
+
     private Flux<RowBinaryDecodeSignal> finish() {
-      if (stage == Stage.COLUMN_COUNT && columnNames.isEmpty() && columnTypes.isEmpty()) {
+      if (stage == Stage.COLUMN_COUNT && varUInt.isIdle()) {
         return Flux.empty();
       }
-      if (stage != Stage.ROWS || rowColumnIndex != 0) {
+      if (stage != Stage.ROWS || rowColumnIndex != 0 || currentColumnHasPartialValue()) {
         return Flux.error(
             new IllegalArgumentException("Truncated RowBinaryWithNamesAndTypes response"));
       }
       return Flux.empty();
+    }
+
+    private boolean currentColumnHasPartialValue() {
+      return columnCount > 0 && !columnDecoders[rowColumnIndex].isIdle();
+    }
+  }
+
+  private interface IncrementalValueDecoder {
+
+    Optional<Object> decode(ByteBuffer source);
+
+    boolean isIdle();
+  }
+
+  private static final class UInt8Decoder implements IncrementalValueDecoder {
+
+    @Override
+    public Optional<Object> decode(final ByteBuffer source) {
+      if (!source.hasRemaining()) {
+        return Optional.empty();
+      }
+      return Optional.of((short) (source.get() & 0xFF));
+    }
+
+    @Override
+    public boolean isIdle() {
+      return true;
+    }
+  }
+
+  private static final class StringDecoder implements IncrementalValueDecoder {
+
+    private final LengthPrefixedStringDecoder delegate;
+
+    private StringDecoder(final int maximumBytes) {
+      delegate = new LengthPrefixedStringDecoder(maximumBytes);
+    }
+
+    @Override
+    public Optional<Object> decode(final ByteBuffer source) {
+      return delegate.decode(source).map(value -> value);
+    }
+
+    @Override
+    public boolean isIdle() {
+      return delegate.isIdle();
+    }
+  }
+
+  private static final class UInt64Decoder implements IncrementalValueDecoder {
+
+    private final byte[] littleEndianBytes = new byte[Long.BYTES];
+    private final byte[] bigEndianBytes = new byte[Long.BYTES];
+
+    private int offset;
+
+    @Override
+    public Optional<Object> decode(final ByteBuffer source) {
+      final int copied = Math.min(source.remaining(), littleEndianBytes.length - offset);
+      source.get(littleEndianBytes, offset, copied);
+      offset += copied;
+      if (offset != littleEndianBytes.length) {
+        return Optional.empty();
+      }
+      for (int index = 0; index < littleEndianBytes.length; index++) {
+        bigEndianBytes[index] = littleEndianBytes[littleEndianBytes.length - 1 - index];
+      }
+      offset = 0;
+      return Optional.of(new BigInteger(1, bigEndianBytes));
+    }
+
+    @Override
+    public boolean isIdle() {
+      return offset == 0;
+    }
+  }
+
+  private static final class DecimalDecoder implements IncrementalValueDecoder {
+
+    private static final Pattern TYPE = Pattern.compile("Decimal\\((\\d+),\\s*(\\d+)\\)");
+
+    private final byte[] littleEndianBytes;
+    private final int scale;
+
+    private int offset;
+
+    private DecimalDecoder(final int byteWidth, final int scale) {
+      littleEndianBytes = new byte[byteWidth];
+      this.scale = scale;
+    }
+
+    private static DecimalDecoder forType(final String type) {
+      final Matcher matcher = TYPE.matcher(type);
+      if (!matcher.matches()) {
+        throw new UnsupportedOperationException(
+            "Incremental RowBinary decoder does not support type: " + type);
+      }
+      final int precision = Integer.parseInt(matcher.group(1));
+      final int scale = Integer.parseInt(matcher.group(2));
+      return new DecimalDecoder(byteWidthFor(precision), scale);
+    }
+
+    private static int byteWidthFor(final int precision) {
+      if (precision <= 9) {
+        return Integer.BYTES;
+      }
+      if (precision <= 18) {
+        return Long.BYTES;
+      }
+      if (precision <= 38) {
+        return 16;
+      }
+      if (precision <= 76) {
+        return 32;
+      }
+      throw new UnsupportedOperationException(
+          "Incremental RowBinary decoder does not support Decimal precision: " + precision);
+    }
+
+    @Override
+    public Optional<Object> decode(final ByteBuffer source) {
+      final int copied = Math.min(source.remaining(), littleEndianBytes.length - offset);
+      source.get(littleEndianBytes, offset, copied);
+      offset += copied;
+      if (offset != littleEndianBytes.length) {
+        return Optional.empty();
+      }
+      final byte[] bigEndianBytes = new byte[littleEndianBytes.length];
+      for (int index = 0; index < littleEndianBytes.length; index++) {
+        bigEndianBytes[index] = littleEndianBytes[littleEndianBytes.length - 1 - index];
+      }
+      offset = 0;
+      return Optional.of(new BigDecimal(new BigInteger(bigEndianBytes), scale));
+    }
+
+    @Override
+    public boolean isIdle() {
+      return offset == 0;
     }
   }
 
@@ -164,6 +323,10 @@ final class IncrementalRowBinaryDecoder {
         }
       }
       return OptionalLong.empty();
+    }
+
+    private boolean isIdle() {
+      return shift == 0;
     }
   }
 
@@ -204,6 +367,10 @@ final class IncrementalRowBinaryDecoder {
       offset = 0;
       lengthDecoded = false;
       return Optional.of(decoded);
+    }
+
+    private boolean isIdle() {
+      return !lengthDecoded && length.isIdle();
     }
   }
 }

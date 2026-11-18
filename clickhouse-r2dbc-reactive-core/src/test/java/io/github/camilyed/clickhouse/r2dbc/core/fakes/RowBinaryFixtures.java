@@ -3,6 +3,8 @@ package io.github.camilyed.clickhouse.r2dbc.core.fakes;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -38,6 +40,42 @@ public final class RowBinaryFixtures {
   public static byte[] twoRowsOfUInt8RowBinaryWithNamesAndTypes() {
     return rowBinaryWithNamesAndTypes(
         new String[] {"1"}, new String[] {"UInt8"}, new byte[] {0x01, 0x02});
+  }
+
+  /** One point-query-shaped row: {@code label String, amount Decimal(18,4)}. */
+  public static byte[] stringAndDecimalRowBinaryWithNamesAndTypes() {
+    final ByteArrayOutputStream row = new ByteArrayOutputStream();
+    try {
+      writeString(row, "label-41");
+      row.write(
+          ByteBuffer.allocate(Long.BYTES).order(ByteOrder.LITTLE_ENDIAN).putLong(421_234L).array());
+    } catch (final IOException e) {
+      throw new UncheckedIOException(e);
+    }
+    return rowBinaryWithNamesAndTypes(
+        new String[] {"label", "amount"},
+        new String[] {"String", "Decimal(18, 4)"},
+        row.toByteArray());
+  }
+
+  /** One scan-shaped row: {@code id UInt64, label String, amount Decimal(18,4)}. */
+  public static byte[] uint64StringAndDecimalRowBinaryWithNamesAndTypes() {
+    final ByteArrayOutputStream row = new ByteArrayOutputStream();
+    try {
+      row.write(new byte[] {-1, -1, -1, -1, -1, -1, -1, -1});
+      writeString(row, "label-max");
+      row.write(
+          ByteBuffer.allocate(Long.BYTES)
+              .order(ByteOrder.LITTLE_ENDIAN)
+              .putLong(-123_456L)
+              .array());
+    } catch (final IOException e) {
+      throw new UncheckedIOException(e);
+    }
+    return rowBinaryWithNamesAndTypes(
+        new String[] {"id", "label", "amount"},
+        new String[] {"UInt64", "String", "Decimal(18, 4)"},
+        row.toByteArray());
   }
 
   /**

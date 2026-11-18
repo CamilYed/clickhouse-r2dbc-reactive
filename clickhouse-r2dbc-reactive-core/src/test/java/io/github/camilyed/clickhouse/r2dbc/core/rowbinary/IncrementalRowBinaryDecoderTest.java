@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.camilyed.clickhouse.r2dbc.core.ColumnDescriptor;
 import io.github.camilyed.clickhouse.r2dbc.core.fakes.RowBinaryFixtures;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
@@ -71,5 +73,82 @@ class IncrementalRowBinaryDecoderTest {
     assertThat(sourceCancelled).isTrue();
     // and - the second row's byte remains unread in the current chunk
     assertThat(body.remaining()).isEqualTo(1);
+  }
+
+  @Test
+  void shouldDecodeAFragmentedPointQueryRowWithoutAnInputStream() {
+    // given
+    final byte[] wireBytes = RowBinaryFixtures.stringAndDecimalRowBinaryWithNamesAndTypes();
+    final Flux<ByteBuffer> source =
+        Flux.range(0, wireBytes.length)
+            .map(index -> ByteBuffer.wrap(new byte[] {wireBytes[index]}));
+
+    // when
+    final List<RowBinaryDecodeSignal> signals =
+        IncrementalRowBinaryDecoder.decode(source).collectList().block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(signals)
+        .satisfiesExactly(
+            signal ->
+                assertThat(signal)
+                    .isEqualTo(
+                        new RowBinaryDecodeSignal.Schema(
+                            List.of(
+                                new ColumnDescriptor("label", "String"),
+                                new ColumnDescriptor("amount", "Decimal(18, 4)")))),
+            signal -> {
+              assertThat(signal).isInstanceOf(RowBinaryDecodeSignal.Row.class);
+              final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signal;
+              assertThat(row.value().valueAt(0)).isEqualTo("label-41");
+              assertThat(row.value().valueAt(1)).isEqualTo(new BigDecimal("42.1234"));
+            });
+  }
+
+  @Test
+  void shouldDecodeUnsigned64BitValuesWithoutNarrowingThemToSignedLong() {
+    // given
+    final byte[] wireBytes = RowBinaryFixtures.uint64StringAndDecimalRowBinaryWithNamesAndTypes();
+    final Flux<ByteBuffer> source =
+        Flux.range(0, wireBytes.length)
+            .map(index -> ByteBuffer.wrap(new byte[] {wireBytes[index]}));
+
+    // when
+    final List<RowBinaryDecodeSignal> signals =
+        IncrementalRowBinaryDecoder.decode(source).collectList().block(Duration.ofSeconds(5));
+
+    // then
+    assertThat(signals)
+        .satisfiesExactly(
+            signal ->
+                assertThat(signal)
+                    .isEqualTo(
+                        new RowBinaryDecodeSignal.Schema(
+                            List.of(
+                                new ColumnDescriptor("id", "UInt64"),
+                                new ColumnDescriptor("label", "String"),
+                                new ColumnDescriptor("amount", "Decimal(18, 4)")))),
+            signal -> {
+              assertThat(signal).isInstanceOf(RowBinaryDecodeSignal.Row.class);
+              final RowBinaryDecodeSignal.Row row = (RowBinaryDecodeSignal.Row) signal;
+              assertThat(row.value().valueAt(0)).isEqualTo(new BigInteger("18446744073709551615"));
+              assertThat(row.value().valueAt(1)).isEqualTo("label-max");
+              assertThat(row.value().valueAt(2)).isEqualTo(new BigDecimal("-12.3456"));
+            });
+  }
+
+  @Test
+  void shouldRejectAResponseTruncatedInsideItsFirstColumnValue() {
+    // given
+    final byte[] wireBytes =
+        RowBinaryFixtures.rowBinaryWithNamesAndTypes(
+            new String[] {"label"}, new String[] {"String"}, new byte[] {0x03, 'a'});
+
+    // when / then
+    StepVerifier.create(IncrementalRowBinaryDecoder.decode(Flux.just(ByteBuffer.wrap(wireBytes))))
+        .expectNext(
+            new RowBinaryDecodeSignal.Schema(List.of(new ColumnDescriptor("label", "String"))))
+        .expectErrorMessage("Truncated RowBinaryWithNamesAndTypes response")
+        .verify(Duration.ofSeconds(5));
   }
 }
