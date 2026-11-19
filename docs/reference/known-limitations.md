@@ -7,18 +7,6 @@ review](../../engineering/roadmap-archive.md#production-readiness-review) — th
 source of truth, kept up to date as things are found and fixed; this page is a readable summary of
 the parts a caller is most likely to hit.
 
-> [!NOTE]
-> **Full-table-scan performance at very large result sets (1M+ rows) is not settled — treat it as a
-> range, not a number.** Repeated 3-fork benchmark runs of the identical code and configuration
-> produced results anywhere from tied with `client-v2` to ~30% slower, run to run, at the 1M-row
-> tier specifically (10k/100k rows do not show this instability). GC pauses and per-fork
-> Testcontainers instances were tested and ruled out as the cause; the leading remaining suspects —
-> JVM JIT/compilation timing or OS-level thread scheduling differences across separate JVM launches
-> — need local profiling tools (`async-profiler`, JFR, `powermetrics`) this investigation didn't have
-> available. See [../performance/results.md](../performance/results.md#why-the-1m-number-wont-sit-still) for the
-> full breakdown. This is a benchmarking-methodology gap, not a known driver defect — but it means
-> the "1M rows" figures on that page should not be read as settled the way the 10k/100k ones are.
-
 > [!IMPORTANT]
 > **Cancelling a subscription stops the query on the ClickHouse server via a best-effort `KILL
 > QUERY` this driver sends itself — not via ClickHouse's own connection-close detection, which

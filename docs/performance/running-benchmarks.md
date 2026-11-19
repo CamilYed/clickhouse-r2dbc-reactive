@@ -43,9 +43,8 @@ To run with a JMH profiler (e.g. the GC profiler for allocation numbers):
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.includes=DecoderOnlyBenchmark -Pjmh.profilers=gc
 ```
 
-To run multiple forks (needed before trusting a result — see [index.md's confidence
-warning](index.md); the plain `jmh` task defaults to 1 fork/1 warmup iteration, a sanity check, not
-a trustworthy number):
+To run multiple forks, which are required before treating a result as trustworthy (the plain
+`jmh` task defaults to one fork and one warmup iteration and is only a sanity check):
 
 ```
 ./gradlew :clickhouse-r2dbc-reactive-benchmarks:jmh -Pjmh.forks=3 -Pjmh.warmupIterations=3
@@ -79,9 +78,9 @@ Both implementations run in the same job, on the same VM, against the same Click
 The artifact contains the raw JMH JSON, stdout, environment metadata, and—where supported by the
 selected benchmark—an analyzed summary. Record the workflow URL with every published result.
 
-## Interpreting old results
+## Interpreting results
 
-The [historical results](results.md) include local exploratory runs and later cloud runs. Absolute
-numbers are specific to the recorded machine, commit, JDK, ClickHouse image, client-v2 version,
-and profile. In particular, those pages have not yet been re-baselined after the move from
-client-v2 `0.9.8` to `0.11.2`; use them as investigation history, not as current release claims.
+Treat absolute numbers as specific to the recorded machine, commit, JDK, ClickHouse image,
+client-v2 version, and benchmark profile. Compare implementations within the same run, report
+confidence intervals, and treat overlapping intervals as a tie. A single-fork local run is useful
+for detecting failures, not for publishing a performance claim.

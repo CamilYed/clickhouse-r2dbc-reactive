@@ -1,8 +1,7 @@
 # Benchmark methodology
 
-What each benchmark class actually exercises. Grouped by the question it answers, not by build
-order. See [index.md](index.md) for the confidence warning and environment this applies to, and
-[results.md](results.md) for what each of these actually found.
+What each benchmark class actually exercises, grouped by the question it answers rather than by
+build order. Use this page to choose the smallest benchmark boundary that can answer a question.
 
 ## Protocol floor — single row, no streaming
 
@@ -18,7 +17,7 @@ order. See [index.md](index.md) for the confidence warning and environment this 
 | --- | --- |
 | `StreamingScanBenchmark` | Full table scan (`SELECT * FROM t`, no `WHERE`) at 10k/100k/1M-row tiers, through this driver's real production path — `RowBinaryDecoder.decode(source, RowDecodingScheduler)`, the same call the shipped connector makes, not a benchmark-only shortcut. Also records time-to-first-row separately (logged at trial teardown, not in JMH's own result). |
 | `TransportOnlyStreamingBenchmark` | The same query, same row tiers, but only sums response bytes — no row decoding on either side. Isolates transport cost alone. |
-| `DecoderOnlyBenchmark` | Decodes one already-captured response payload from memory, repeatedly, at the same three tiers — no network at all. Isolates decode cost alone. `thisDriver` here safely uses `RowBinaryDecoder.decodeRows` (the scheduler-free shortcut) because the source is in-memory, not a live Netty response — see [index.md's "How to use this driver well"](index.md#how-to-use-this-driver-well) for why that distinction matters. The extra `thisDriverWithoutMapCopy`/`thisDriverCompactRow`/`compactRowDirectLoop`/`compactRowFluxNoBridge` methods are retained diagnostic variants from an earlier redesign investigation, not benchmarks of shipped behavior. |
+| `DecoderOnlyBenchmark` | Decodes one already-captured response payload from memory, repeatedly, at the same three tiers — no network at all. Isolates decode cost alone. The scheduler-free path is safe here because the complete source is already in memory; it must not be used for a live response that can wait for later network chunks. Diagnostic methods in this class are not benchmarks of shipped behavior. |
 | `AggregationBenchmark` | `GROUP BY` + `count()`/`avg()`/`quantile()` — ClickHouse's actual core use case. Unlike the scan benchmarks, the result set is always ~100 rows regardless of the row-count tier; what scales is server-side aggregation work, not client-side decode volume. |
 
 ## Concurrency — blocking vs. non-blocking calling style
@@ -29,7 +28,7 @@ order. See [index.md](index.md) for the confidence warning and environment this 
 | `MatchedPoolThreadsConcurrencyBenchmark` | Identical to the above, except both sides get the same explicit 8-connection pool. Isolates whether a `ConcurrencyBenchmark` gap comes from pool mismatch or from the blocking calling style itself. |
 | `BoundedPoolConcurrencyBenchmark` | The scenario this driver is actually built for: a deliberately small, **matched** 8-connection pool, driven **non-blocking** — `Flux.flatMap(..., concurrency)` on this driver's side, `CompletableFuture`-returning async calls on client-v2's — at 8/32/128 logical concurrent queries. No JMH calling thread is blocked per in-flight query on either side; the physical pool budget is shared, and each side's own execution model differs (see the note below). |
 | `PublicApiMatchedPoolThroughputBenchmark` | The same idea, through the public R2DBC SPI end to end (not `ClickHouseHttpTransport` directly), reporting real **throughput** (queries/sec) and a separate `HdrHistogram`-based per-query latency log, at the same matched 8-connection pool and 8/32/128 concurrency levels. This is the headline "how many real queries per second" number. |
-| `DefaultPoolSlowQueryThroughputBenchmark` | The non-blocking, public-SPI analog of `ConcurrencyBenchmark`'s "own default pool" idea: each side left at its **own out-of-the-box** pool size (this driver's Reactor Netty default, ≥16; client-v2's fixed default of 10) rather than matched. Every query holds server-side via `sleep(0.5)`/`sleep(1.0)` — real point queries finish too fast (low single-digit ms) for even a small default pool to visibly queue, so this class trades query realism for pool-contention visibility. `concurrency` sweeps only 8/32 (see the class's own Javadoc for why 128 is out of scope here). The first CI run (2026-08-23) turned out to be measuring a `RowDecodingScheduler` bug rather than the intended pool comparison (see [results.md's Open follow-ups](results.md#open-follow-ups) for the root cause and fix); the post-fix re-run is published in [results.md](results.md#default-pool-slow-query-this-drivers-larger-default-pool-wins-once-its-actually-used-2026-08-23). |
+| `DefaultPoolSlowQueryThroughputBenchmark` | The non-blocking, public-SPI analog of `ConcurrencyBenchmark`'s "own default pool" idea: each side uses its own out-of-the-box pool size rather than a matched pool. Server-side sleeps make pool contention visible. `concurrency` sweeps only 8/32; see the class Javadoc for the scope. |
 
 Both sides expose asynchronous completion to the benchmark harness — neither one makes the JMH
 calling thread block on a query — but their execution models underneath are not the same, and this
@@ -45,9 +44,8 @@ difference is what the concurrency benchmarks above are actually measuring, not 
 
 Concretely: this driver needs zero platform threads per in-flight query; client-v2's async mode
 still needs one blocked executor thread per in-flight query, just not the JMH caller's thread. The
-historical cloud pipeline captured coarse whole-run RSS and thread samples for this question; it
-did not establish a stable per-driver resource-cost number. See the
-[historical results](results.md#open-follow-ups) for that limitation.
+cloud pipeline can capture coarse whole-run RSS and thread samples for this question, but those
+samples do not establish a stable per-driver resource-cost number on their own.
 
 ## Rapid-refresh cancellation — the "user hits refresh" scenario
 
