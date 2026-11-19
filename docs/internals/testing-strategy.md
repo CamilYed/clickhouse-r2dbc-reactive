@@ -16,8 +16,9 @@
    transaction operations, repeat-subscription behaviour, cleanup after cancellation.
 5. **Performance and dependency impact**: throughput, p50/p95/p99 latency, time to first row,
    allocations/retained memory, cancellation latency, many-small-request workloads, large
-   streaming-result workloads, dependency size and startup impact. See
-   [../performance/index.md](../performance/index.md) for the actual measurements.
+   streaming-result workloads, dependency size and startup impact. See the
+   [benchmark methodology](../performance/methodology.md) and
+   [execution guide](../performance/running-benchmarks.md).
 
 See also [CLAUDE.md's Test types and tools](../../CLAUDE.md#test-types-and-tools) for the concrete
 tooling (JUnit 5, AssertJ, Testcontainers, no Mockito) and where each level of test lives.

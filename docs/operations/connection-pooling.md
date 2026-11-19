@@ -1,253 +1,98 @@
 # Connection pooling
 
-This driver owns one physical connection pool — a Reactor Netty `ConnectionProvider` inside
-`ClickHouseHttpTransport` — shared by every `ClickHouseConnection` a factory produces. R2DBC
-`Connection` objects handed out by this driver are cheap, disposable logical handles over that
-shared pool, not separate physical resources. **Most applications don't need to add anything else
-on top of it** — no `io.r2dbc:r2dbc-pool` dependency, no `pool:` URL prefix, no `spring.r2dbc.pool.*`
-block. That's the setup shown in the [Spring Boot guide](../guide/spring-boot.md).
+The driver already owns a Reactor Netty connection pool. Every R2DBC `Connection` created by one
+`ClickHouseConnectionFactory` is a lightweight logical handle over that shared transport pool.
+Most applications should use it directly and should not add `io.r2dbc.pool`.
 
 ```mermaid
 flowchart LR
-    APP["Your code<br/>(Mono/Flux, DatabaseClient...)"] --> CONN["ClickHouseConnection<br/>thin, disposable, no real resource"]
-    CONN --> TRANSPORT["ClickHouseHttpTransport<br/>one instance, shared by every Connection"]
-    TRANSPORT --> NETTY["ConnectionProvider<br/>pools the real TCP connections"]
-    NETTY --> CH[("ClickHouse server<br/>HTTP interface")]
+    APP[Application] --> CONN[R2DBC Connection]
+    CONN --> TRANSPORT[Shared HTTP transport]
+    TRANSPORT --> POOL[Reactor Netty connection pool]
+    POOL --> CH[(ClickHouse)]
 ```
 
-If you specifically need `io.r2dbc.pool`'s `ConnectionPool` on top of this — its
-`validate(ValidationDepth)`/eviction behavior, or a framework that expects to manage R2DBC-SPI-level
-pooling itself — see [optional-r2dbc-pool.md](optional-r2dbc-pool.md). It's a genuinely optional,
-advanced layer, not the primary story; read it only once you know you need it.
+## Default setup
 
-## The transport-level pool (always on)
+For Spring Boot, configure the normal R2DBC URL and leave `spring.r2dbc.pool.enabled=false`:
 
-`ClickHouseHttpTransport`'s own Reactor Netty `ConnectionProvider` pools the actual TCP
-connections. This is the pool this project's non-blocking architecture is actually built around.
-Confirmed (not assumed) to correctly reuse one TCP connection across sequential queries — for both
-a `.next()`-style single-row consumption pattern and a fully-drained stream — in
-[`ClickHouseHttpTransportConnectionReuseTest`](../../clickhouse-r2dbc-reactive-transport-http/src/test/java/io/github/camilyed/clickhouse/r2dbc/transport/http/ClickHouseHttpTransportConnectionReuseTest.java),
-including against Reactor Netty's own debug-level pool logging (`Channel acquired`/`Releasing
-channel`/`Channel cleaned` against the same channel ID across requests) as independent
-confirmation — an earlier draft of that investigation suspected a bug here and was wrong; see the
-test's own Javadoc for why the first diagnostic signal was misleading.
+```yaml
+spring:
+  r2dbc:
+    url: r2dbc:clickhouse://localhost:8123/default
+    username: default
+    password: ""
+    pool:
+      enabled: false
+```
 
-### Configuring it
+The transport reuses physical HTTP connections automatically. Creating and closing an R2DBC
+`Connection` does not create and close a TCP connection for every query.
 
-Five `transport...` R2DBC connection options — deliberately not `pool...`, so they're never
-confused with `spring.r2dbc.pool.*`, which configures the *other*, optional R2DBC-SPI-level pool —
-map directly onto Reactor Netty's own `ConnectionProvider.Builder`:
+## Transport pool options
 
-| R2DBC option | Reactor Netty `ConnectionProvider.Builder` method | Meaning |
-| --- | --- | --- |
-| `transportMaxConnections` | `maxConnections` | Physical TCP connections open to ClickHouse at once, per remote host |
-| `transportPendingAcquireMaxCount` | `pendingAcquireMaxCount` | How many acquire requests queue once `transportMaxConnections` is saturated, before new ones fail fast |
-| `transportPendingAcquireTimeout` | `pendingAcquireTimeout` | How long a queued acquire waits before failing with a pool-timeout error |
-| `transportMaxIdleTime` | `maxIdleTime` | How long an idle pooled connection sits before it's closed and evicted |
-| `transportMaxLifeTime` | `maxLifeTime` | Max total lifetime of a pooled connection, regardless of idle activity |
+Set these options only after observing pool saturation or connection-lifecycle requirements in
+your own workload.
 
-All five default to Reactor Netty's own default (see the table below) when not set — this driver
-never invents a default of its own. Available both via `ConnectionFactoryOptions` (typed values,
-e.g. `.option(ClickHouseConnectionFactoryProvider.TRANSPORT_MAX_CONNECTIONS, 8)`) and via the
-R2DBC URL query string (e.g. `r2dbc:clickhouse://host?transportMaxConnections=8`, Duration values
-as ISO-8601 text, e.g. `transportPendingAcquireTimeout=PT2S`) — so a Spring Boot app configuring
-`spring.r2dbc.url=r2dbc:clickhouse://...` (the path almost everyone actually uses) can size this
-pool the same way it configures everything else, no separate Java-only path needed. An invalid
-value (e.g. a negative duration, a non-positive connection count) fails fast at factory creation,
-never silently falling back to a default. Every construction path through `ClickHouseHttpTransport`
-routes through one `TransportOptions` config object internally, so these five options and every
-other transport-level setting (`responseTimeout`, a custom trusted certificate, `RetryPolicy`, ...)
-compose freely instead of each needing its own constructor overload.
+| R2DBC URL option | Meaning |
+| --- | --- |
+| `transportMaxConnections` | Maximum physical connections to one ClickHouse host |
+| `transportPendingAcquireMaxCount` | Maximum queued acquisitions after the pool is full |
+| `transportPendingAcquireTimeout` | Maximum wait for a pooled connection, as an ISO-8601 duration |
+| `transportMaxIdleTime` | Maximum idle time before eviction |
+| `transportMaxLifeTime` | Maximum total lifetime of a pooled connection |
 
-### Reactor Netty's own defaults
+Example:
 
-Since nothing here is required reading to use this driver — this is what `ConnectionProvider.create(name)`
-gives you when nothing above is set:
+```text
+r2dbc:clickhouse://localhost:8123/default?transportMaxConnections=16&transportPendingAcquireTimeout=PT2S
+```
 
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `maxConnections` | `max(availableProcessors, 8) * 2` (at least 16) | Physical TCP connections open to ClickHouse at once, per remote host |
-| `pendingAcquireMaxCount` | `500` | How many acquire requests queue once `maxConnections` is saturated, before new ones fail fast |
-| `pendingAcquireTimeout` | `45s` | How long a queued acquire waits before failing with a pool-timeout error |
-| `maxIdleTime` / `maxLifeTime` | unset (no eviction) | An idle or long-lived pooled connection is never proactively closed by the pool itself — it's held until the server closes it or the app shuts down |
-| Leasing strategy | `fifo` | Idle connections are handed out oldest-released-first |
+When omitted, these settings follow Reactor Netty's defaults:
 
-### The decode-worker pool tracks this pool's size, not the CPU core count
+| Setting | Default |
+| --- | --- |
+| Maximum connections | `max(availableProcessors, 8) * 2` |
+| Pending acquisitions | `500` |
+| Acquisition timeout | `45s` |
+| Idle and lifetime eviction | Disabled |
 
-Row decoding runs on a separate, dedicated worker pool (`RowDecodingScheduler`) — see
-[fully-reactive.md](../concepts/fully-reactive.md) for why this exists at all: client-v2's own
-RowBinary reader is a blocking call, so it needs somewhere to run that isn't the Reactor Netty
-event-loop thread that delivered the response. Until 2026-08-23 this pool defaulted to one worker
-per CPU core, entirely independent of `transportMaxConnections` — on a machine with fewer cores
-than physical connections (common on CI runners; a real, small-core-count GitHub Actions runner is
-what surfaced this), the decoder became a smaller, silent concurrency ceiling *underneath* the
-connection pool, regardless of how large `transportMaxConnections` was set. A query could acquire a
-physical connection immediately and still queue waiting for a free decode worker.
+Increasing the pool is not automatically faster. It also increases the number of queries that can
+execute concurrently on ClickHouse. Measure server load, pending acquisitions, and application
+latency together before changing it.
 
-Fixed: `ClickHouseConnectionFactory` now sizes `RowDecodingScheduler` to exactly the resolved
-connection pool size — the explicit `transportMaxConnections` value when set, or this same
-`max(availableProcessors, 8) * 2` formula (mirrored, not read back from Reactor Netty, which
-doesn't expose it) when left at the default above. The decoder can no longer be a smaller ceiling
-than the pool a caller explicitly configured, or than the pool's own documented default.
+## Decoder workers
 
-### Widening the decode pool beyond the connection pool: `decoderWorkerCount`
+Row decoding runs outside the Reactor Netty event loop because the current RowBinary reader uses a
+blocking `InputStream`. By default, the number of decoder workers follows the physical connection
+limit. This keeps decode admission and transport capacity aligned.
 
-Phase 11 PR5 (see the root `ROADMAP.md`) added an explicit escape hatch from the 1:1 coupling just
-above: `decoderWorkerCount` (`ClickHouseConnectionFactoryProvider.DECODER_WORKER_COUNT`) sizes
-`RowDecodingScheduler` independently of `transportMaxConnections`, defaulting to `null` (meaning
-"stay coupled to the pool", unchanged from the behavior above) when not set. It exists because a
-trusted-profile benchmark run found this driver's p90-p99 per-query latency running 15-25% behind
-client-v2's at every tested concurrency, with p50 tied and GC time equal between drivers despite
-this driver allocating ~3.3x less per query — ruling out GC pauses and pointing at decode-worker
-queueing as the more likely tail-latency source: a query whose decode has to wait for a free worker
-pays that wait as pure added latency with no corresponding allocation cost, and the decoder pool is
-never wider than the connection pool by default. Setting `decoderWorkerCount` higher gives decode
-work more workers to spread across without also widening the physical connection pool itself (which
-would change a different, unrelated tradeoff — see "Is it worth setting `maxConnections` yourself?"
-below).
+Two advanced options exist:
 
-**Measured (trusted CI run, 2026-08-24) — do not widen this without also reconsidering
-`transportPendingAcquireMaxCount`.** `DecoderWorkerCountThroughputBenchmark` compared this driver
-against itself, `poolSize=8` fixed on both sides, only `decoderWorkerCount` differing (8 vs 32).
-At `concurrency=8` (matching the pool), widening did shrink the tail as hypothesized — p90/p99
-roughly 10-12% better, throughput and GC unchanged. But at `concurrency=32` and `concurrency=128`,
-the widened side produced **zero successful measurements** — every fork, every iteration failed
-with `PoolAcquirePendingLimitException: Pending acquire queue has reached its maximum size of 16`,
-while the coupled (default) side ran cleanly at the same concurrencies. Root cause: decode is
-subscribed via `RowBinaryDecoder.decode`'s `Mono.fromCallable(() ->
-newReader(source, compression)).subscribeOn(reactorScheduler)`, and that's the point where
-`source` — the transport response stream, including the connection acquisition and request send
-that produce it — first gets subscribed to. `RowDecodingScheduler`'s worker count is therefore not
-only a decode-throughput knob; it's incidentally this driver's real admission-control gate on how
-many queries can start touching the connection pool at once. Coupling it to `poolSize` (the
-default) keeps that number safely under Reactor Netty's own pending-acquire-queue limit
-(`2 × maxConnections` by default); widening it removes that incidental protection and, at
-concurrency above the pool size, exposes the pending-acquire-queue limit as a hard failure instead
-of just added latency. **The driver's default stays coupled because of this** — see the ROADMAP.md
-Phase 11 PR5 entry for the full result.
+- `decoderWorkerCount` changes the decoder concurrency limit;
+- `decoderUseVirtualThreads=true` uses bounded virtual-thread execution for decoding.
 
-**Follow-up, closed (trusted CI run, 2026-08-24):** `DecoderAndPendingAcquireWidenedThroughputBenchmark`
-widened `decoderWorkerCount` and `transportPendingAcquireMaxCount` together to test whether that
-recovers the `concurrency=8` win at 32/128 too, without the failures widening the decoder alone
-produced. It did prevent the failures — zero `PoolAcquirePendingLimitException`s this time — but
-the tail-latency win did **not** carry over: worse than the coupled default at `concurrency=128` on
-every percentile. JFR (`jdk.ThreadPark`) explained why: decode is I/O-wait-dominated, not
-CPU-bound — a decoder-scheduler thread spends the overwhelming majority of its time blocked reading
-network bytes, not doing decode work (~31 of 32 widened workers parked at any given moment at
-`concurrency=32`/`128`). The original "two queues in series, widening collapses them into one"
-framing was also arithmetically wrong: with `decoderWorkerCount` fixed at 32, at most ~32 requests
-can ever be admitted to the transport layer at once regardless of `concurrency` — the decoder-level
-queue was never actually removed, just the smaller pending-acquire queue's overflow was prevented.
-**Decision (confirmed twice): the driver's default stays coupled.** Widening either or both remains
-an opt-in escape hatch, not a default change — see the ROADMAP.md Phase 11 PR5 entry for the full
-result and the independently JFR-profiled analysis it's cross-checked against.
+Leave both at their defaults unless a workload-specific measurement justifies changing them.
+Widening decoder concurrency without also considering the pending-acquisition limit can move work
+from one bounded queue to another or cause acquisition failures.
 
-### An alternative fix for the same finding: `decoderUseVirtualThreads`
+## Optional R2DBC-level pool
 
-The JFR finding above — decode is I/O-wait-dominated — motivates a different fix than widening the
-platform-thread pool further: run decode tasks on JDK 21 virtual threads instead, which park/unpark
-cheaply and don't hold a platform thread while blocked. `decoderUseVirtualThreads`
-(`ClickHouseConnectionFactoryProvider.DECODER_USE_VIRTUAL_THREADS`) is an experimental, opt-in
-escape hatch that does exactly this — `RowDecodingScheduler.virtualThreads(maxConcurrency)` caps
-concurrent decode tasks at the same worker count the platform-thread scheduler would use (still
-coupled to `decoderWorkerCount`/`transportMaxConnections` the same way), just on virtual instead of
-platform threads. Defaults to `false` (today's platform-thread pool), unchanged.
+Add `io.r2dbc.pool` only when an integration explicitly requires SPI-level pooling, validation, or
+eviction of logical R2DBC connections. It does not replace the driver's transport pool and creates
+an additional lifecycle layer. See [Optional: io.r2dbc.pool](optional-r2dbc-pool.md).
 
-This does **not** raise the throughput ceiling — the physical connection pool remains the hard cap
-regardless of decoder thread type — it targets the resource cost of parked platform threads
-(`transportMaxConnections`/coupled decoder means one platform thread held, mostly idle, per
-in-flight query). Checked against client-v2's actual decode-path source (`BinaryStreamReader`/
-`RowBinaryWithNamesAndTypesFormatReader`, 2026-08-24) for virtual-thread pinning risk: the only
-`synchronized` method on the decode path, `BinaryStreamReader.ArrayValue#asList()`, is a pure
-in-memory list-view cache that never blocks on I/O while holding the monitor, and the actual
-blocking reads run directly against the caller-supplied stream with no `BufferedInputStream`/
-`DataInputStream` wrapping in between — so this driver's decode path is Loom-friendly today.
+## Shutdown
 
-**Trusted-run result (2026-08-24, `VirtualThreadDecoderThroughputBenchmark`, `poolSize=8`,
-`concurrency` 8/32/128, `-Djdk.tracePinnedThreads=full`): confirmed Loom-friendly, but not adopted
-as a default.** Zero `jdk.VirtualThreadPinned` events across all six recordings — the source review
-above holds up empirically, not just on inspection. Throughput was tied with the platform-thread
-decoder at every concurrency level (both variants admission-gated to the same `maxConcurrency`, so
-neither side's result moved much across the 8/32/128 sweep either). The measured cost: ~45–48% more
-allocation per operation (28.2–28.7 KB/op vs 19.2–19.4 KB/op) and correspondingly more GC activity,
-from `Executors.newThreadPerTaskExecutor` creating a fresh virtual thread per decode task rather
-than reusing a fixed platform-thread pool. Net result: safe, but a pure cost with no throughput
-benefit in this shape — stays opt-in, default remains `false`. See ROADMAP.md's Phase 11 entry for
-the full numbers.
+`ClickHouseConnectionFactory.dispose()` releases the shared transport pool and decoder scheduler.
+Call it when the application shuts down. In Spring, register the raw factory as a bean with
+`destroyMethod = "dispose"`.
 
-### Is it worth setting `maxConnections` yourself?
+If an outer `io.r2dbc.pool.ConnectionPool` is used, dispose both layers: first the outer pool, then
+the underlying `ClickHouseConnectionFactory`.
 
-Usually not, and that's the point of this project: because the pipeline is non-blocking end to
-end, many more *logical* concurrent queries can be in flight than there are physical connections —
-`Flux.flatMap(..., concurrency)` submits all of them immediately, and whichever don't fit under
-`maxConnections` simply queue inside Reactor Netty with no thread blocked waiting, up to
-`pendingAcquireMaxCount`/`pendingAcquireTimeout`. `BoundedPoolConcurrencyBenchmark` (see
-[../performance/results.md](../performance/results.md)) measures exactly this headroom at an artificially small
-8-connection pool against 8/32/128 concurrent queries and this driver still wins on latency — the
-default pool (≥16 connections) already has more headroom than that benchmark's deliberately tight
-one. Reach for a higher `maxConnections` only if you've measured real pending-acquire waits under
-your own load (Reactor Netty logs these at `DEBUG`), or you deliberately want more physical
-parallelism against ClickHouse itself (e.g. ClickHouse's own `max_concurrent_queries` server-side
-limit becomes the real ceiling before this pool would).
+## Related reference
 
-### Shutting it down
-
-`ClickHouseConnectionFactory.dispose()` releases both resources this factory owns and shares
-across every `Connection` it produces: this transport-level connection pool, and the dedicated
-worker pool `RowBinaryDecoder` runs client-v2's blocking calls on (`RowDecodingScheduler`).
-Fire-and-forget and idempotent, matching `ConnectionProvider`'s own `dispose()` contract;
-`isDisposed()` reports `true` only once both are actually torn down. Nothing calls this
-automatically — a Spring Boot app wrapping the factory in `io.r2dbc.pool`'s `ConnectionPool` still
-needs to dispose the underlying `ClickHouseConnectionFactory` itself separately at shutdown
-(confirmed directly against `ConnectionPool`'s own source: `ConnectionPool.dispose()`/
-`disposeLater()` only tear down the pooled `Connection` handles it manages, never the factory's
-own transport/scheduler underneath). The bundled demo proves this exact fix, real-server, not just
-in prose: register the raw factory as its own bean with `@Bean(destroyMethod = "dispose")`, let
-the outer `ConnectionPool` bean depend on it as a method parameter (so Spring destroys the pool
-first, then this factory), and a real integration test
-(`ConnectionFactoryShutdownDisposalAgainstRealClickHouseTest`) asserts a query against the raw
-factory fails once `applicationContext.close()` returns — see
-[../../engineering/roadmap-archive.md's Phase 8, item
-10](../../engineering/roadmap-archive.md#phase-8--post-020-hardening-021) for the full write-up,
-including why an earlier attempt at this same fix failed against a real build.
-
-## Why this is the point of the whole project, not an implementation detail
-
-client-v2's `Client`, run through its blocking default, needs *N* platform threads each blocked
-waiting on a connection to serve *N* logical concurrent queries. This driver's non-blocking
-pipeline lets many more logical queries than physical connections be *in flight* at once —
-`Flux.flatMap(..., concurrency)` subscribes to all of them immediately; whichever don't fit in the
-physical pool queue inside Reactor Netty itself, with no blocked thread paying for each one. That
-architectural difference is real, but an earlier version of this page overstated what it currently
-measures as: a "~4x throughput" / "3.5–4x" claim from `BoundedPoolConcurrencyBenchmark` turned out
-to be measured against a client-v2 benchmark-harness bug (it was running near-serially, not
-against its real 8-connection pool) — see
-[../performance/results.md's retraction](../performance/results.md#non-blocking-matched-pool-numbers-below-are-retracted-pending-re-run)
-for the full story.
-
-The honest, cloud-verified number (`PublicApiMatchedPoolThroughputBenchmark`, `trusted` profile,
-confirmed stable across two independent runs — see
-[../performance/results.md's cloud-verified section](../performance/results.md#cloud-verified-matched-pool-real-async-on-both-sides-2026-08-23)):
-with client-v2's own async dispatch correctly enabled on both sides, client-v2 is currently ahead
-on throughput (~5–9%) and per-query latency (~5–18%) in this exact matched-pool scenario. This
-driver's win that does hold up is **allocation per query — 2.7–2.9x less, widening as concurrency
-rises**. The latency gap is an open, unresolved investigation (see that page's Open follow-ups),
-not something to paper over with a bigger claim than the data currently supports.
-
-> [!IMPORTANT]
-> **Call this driver reactively (`Flux`/`Mono`/R2DBC), not wrapped in `.block()` per query.**
-> `ConcurrencyBenchmark` and `MatchedPoolThreadsConcurrencyBenchmark` (see
-> [../performance/results.md](../performance/results.md)) both drive this driver through `@Threads(N)`-blocking-
-> callers — one platform thread blocked on `.block()` per in-flight query, the shape you get if you
-> call this driver like a classic blocking JDBC driver. Both show this driver ~5–8% slower on mean
-> than client-v2 under that calling style, reproducible whether the connection pool is matched to
-> client-v2's or not — so it is not a pool-sizing problem and setting `transportMaxConnections` will
-> not fix it. Note this is now a *smaller* gap than the non-blocking, matched-pool comparison above
-> shows on latency — blocking-per-query is still the calling style to avoid (worse allocation
-> profile than the reactive shape, on top of the platform-thread cost), but it is not, on today's
-> evidence, the sole explanation for this driver's current latency deficit. If your application
-> calls this driver through `.block()`/`.toFuture().get()` under real concurrent load, don't expect
-> this driver's non-blocking design to pay off on latency — and per
-> [../internals/testing-strategy.md](../internals/testing-strategy.md)/
-> [../concepts/fully-reactive.md](../concepts/fully-reactive.md), that calling style is also the one
-> thing this whole project is built to avoid you doing.
+- [Connection configuration](../reference/configuration.md)
+- [Using with Spring Boot](../guide/spring-boot.md)
+- [What fully reactive means](../concepts/fully-reactive.md)

@@ -20,7 +20,15 @@ export default withMermaid(defineConfig({
   cleanUrls: true,
   lastUpdated: true,
 
-  srcExclude: ["**/perf-runs/**"],
+  // Keep detailed benchmark history in the repository as engineering evidence without publishing
+  // it as end-user documentation or indexing it in site search.
+  srcExclude: [
+    "**/perf-runs/**",
+    "performance/index.md",
+    "performance/results.md",
+    "performance/latency-path-isolation.md",
+    "performance/archive.md",
+  ],
 
   // Content pages legitimately link out to files VitePress doesn't render as site pages: root
   // project files (README.md, ROADMAP.md, CLAUDE.md), engineering/roadmap-archive.md, and Java
@@ -50,76 +58,65 @@ export default withMermaid(defineConfig({
     logo: "/favicon.svg",
 
     nav: [
-      { text: "Guide", link: "/guide/spring-boot" },
-      { text: "Reference", link: "/reference/configuration" },
-      { text: "Performance", link: "/performance/" },
-      { text: "Architecture", link: "/architecture/overview" },
+      { text: "Get started", link: "/guide/spring-boot" },
+      { text: "Configuration", link: "/reference/configuration" },
+      { text: "Operations", link: "/operations/connection-pooling" },
       {
-        text: "Project",
+        text: "Reference",
         items: [
-          { text: "Production readiness", link: "/project/production-readiness" },
-          { text: "Roadmap (GitHub)", link: "https://github.com/CamilYed/clickhouse-r2dbc-reactive/blob/main/ROADMAP.md" },
-          { text: "Changelog (GitHub)", link: "https://github.com/CamilYed/clickhouse-r2dbc-reactive/blob/main/CHANGELOG.md" },
+          { text: "Type support", link: "/reference/type-support" },
+          { text: "Known limitations", link: "/reference/known-limitations" },
+          { text: "R2DBC compatibility", link: "/reference/r2dbc-compatibility" },
         ],
       },
+      { text: "GitHub", link: "https://github.com/CamilYed/clickhouse-r2dbc-reactive" },
     ],
 
     sidebar: [
       {
-        text: "Concepts",
-        items: [{ text: "What \"fully reactive\" means", link: "/concepts/fully-reactive" }],
-      },
-      {
-        text: "Guide",
+        text: "Get started",
         items: [{ text: "Using with Spring Boot", link: "/guide/spring-boot" }],
       },
       {
-        text: "Architecture",
-        items: [{ text: "Architecture direction", link: "/architecture/overview" }],
-      },
-      {
-        text: "Reference",
+        text: "Understand the driver",
         items: [
-          { text: "Connection configuration", link: "/reference/configuration" },
-          { text: "Type support", link: "/reference/type-support" },
-          { text: "Known limitations", link: "/reference/known-limitations" },
-          { text: "R2DBC SPI compatibility", link: "/reference/r2dbc-compatibility" },
+          { text: "What fully reactive means", link: "/concepts/fully-reactive" },
+          { text: "Architecture", link: "/architecture/overview" },
         ],
       },
       {
-        text: "Operations",
+        text: "Configure and operate",
         items: [
+          { text: "Connection configuration", link: "/reference/configuration" },
           { text: "Connection pooling", link: "/operations/connection-pooling" },
           { text: "Optional: io.r2dbc.pool", link: "/operations/optional-r2dbc-pool" },
         ],
       },
       {
-        text: "Performance",
+        text: "Reference",
         items: [
-          { text: "Overview", link: "/performance/" },
-          { text: "Methodology", link: "/performance/methodology" },
-          { text: "Running the benchmarks", link: "/performance/running-benchmarks" },
+          { text: "Type support", link: "/reference/type-support" },
+          { text: "Known limitations", link: "/reference/known-limitations" },
+          { text: "R2DBC compatibility", link: "/reference/r2dbc-compatibility" },
         ],
       },
       {
-        text: "Benchmark archive",
+        text: "Development",
         collapsed: true,
         items: [
-          { text: "Historical results", link: "/performance/results" },
-          { text: "Latency-path investigation", link: "/performance/latency-path-isolation" },
-          { text: "Retracted results", link: "/performance/archive" },
-        ],
-      },
-      {
-        text: "Internals",
-        items: [
           { text: "Testing strategy", link: "/internals/testing-strategy" },
+          { text: "Benchmark methodology", link: "/performance/methodology" },
+          { text: "Running benchmarks", link: "/performance/running-benchmarks" },
           { text: "client-v2 HTTP reference", link: "/internals/client-v2-http-reference" },
         ],
       },
       {
         text: "Project",
-        items: [{ text: "Production readiness", link: "/project/production-readiness" }],
+        items: [
+          { text: "Production readiness", link: "/project/production-readiness" },
+          { text: "Roadmap", link: "https://github.com/CamilYed/clickhouse-r2dbc-reactive/blob/main/ROADMAP.md" },
+          { text: "Changelog", link: "https://github.com/CamilYed/clickhouse-r2dbc-reactive/blob/main/CHANGELOG.md" },
+        ],
       },
     ],
 
