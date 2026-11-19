@@ -12,6 +12,8 @@ was given and fails before building or publishing if it can't find one. See
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-11-19
+
 ### Added
 
 - **Verified `BFloat16` support.** A real-server test now proves that values survive the production
