@@ -85,7 +85,7 @@ a driver where those properties are explicit, tested, and owned by a single, wel
 
 ## Status
 
-Functional, `0.2.2` published to Maven Central. The full R2DBC SPI surface exists and is exercised
+Functional, `0.2.3` published to Maven Central. The full R2DBC SPI surface exists and is exercised
 against a real ClickHouse server (Testcontainers): connection lifecycle,
 `SELECT`/`INSERT`/parameterized statements, batches, row/column metadata, `getRowsUpdated()`, and
 R2DBC exception mapping for ClickHouse server errors. **The driver has not been run against a
@@ -121,7 +121,7 @@ version.
 
 ```kotlin
 dependencies {
-    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.2")
+    implementation("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.3")
 }
 ```
 

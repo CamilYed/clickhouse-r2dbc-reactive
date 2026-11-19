@@ -11,6 +11,7 @@ exactly what shipped in each release, see [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Date | Highlights |
 | --- | --- | --- |
+| [0.2.3](CHANGELOG.md#023--2026-11-19) | 2026-11-19 | Per-statement ClickHouse settings, ClickHouse 26.9 ZSTD response compatibility, client-v2 0.11.2, verified BFloat16/QBit support, and removal of the experimental native decoder. |
 | [0.2.2](CHANGELOG.md#022--2026-08-28) | 2026-08-28 | HTTP response compression, opt-in native RowBinary scalar decoder, decoder package isolation, and reliable Spring shutdown disposal. |
 | [0.2.1](CHANGELOG.md#021--2026-08-22) | 2026-08-22 | Post-0.2.0 hardening: Enum8/Enum16 normalized to `String`, connection-reuse fix, Netty leak-detection lane, parameter-binding type matrix, demo NDJSON streaming fix. |
 | [0.2.0](CHANGELOG.md#020--2026-08-20-phase-7-operational-control--r2dbc-correctness) | 2026-08-20 | Operational control & R2DBC correctness: driver observability SPI, R2DBC compatibility lane (TCK), transport pool options, statement timeout, release/documentation sync. |
