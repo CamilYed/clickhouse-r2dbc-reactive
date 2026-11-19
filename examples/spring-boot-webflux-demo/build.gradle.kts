@@ -43,7 +43,7 @@ dependencies {
     // keeps the runnable demo representative of the last published release. The test runtime below
     // substitutes the current connector project so the root build also catches integration
     // regressions before the next release. Bump this version alongside every release.
-    runtimeOnly("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.2")
+    runtimeOnly("io.github.camilyed:clickhouse-r2dbc-reactive-connector:0.2.3")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
         exclude(group = "org.junit.vintage", module = "junit-vintage-engine")

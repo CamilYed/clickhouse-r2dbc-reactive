@@ -139,7 +139,7 @@ cd clickhouse-r2dbc-reactive
 ```
 
 then depend on it with `mavenLocal()` in your `repositories { }` block and the version from
-`gradle.properties`/`-PreleaseVersion` (defaults to `0.2.3-SNAPSHOT`).
+`gradle.properties`/`-PreleaseVersion` (defaults to `0.2.4-SNAPSHOT`).
 
 ## Usage
 

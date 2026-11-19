@@ -23,7 +23,7 @@ plugins {
 allprojects {
     group = "io.github.camilyed"
     version = providers.gradleProperty("releaseVersion")
-        .orElse("0.2.3-SNAPSHOT")
+        .orElse("0.2.4-SNAPSHOT")
         .get()
 }
 
